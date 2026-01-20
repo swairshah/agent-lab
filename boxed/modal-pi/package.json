@@ -1,0 +1,18 @@
+{
+  "name": "modal-pi",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "npx tsx index.ts"
+  },
+  "dependencies": {
+    "@mariozechner/pi-agent-core": "^0.49.2",
+    "@mariozechner/pi-ai": "^0.49.2",
+    "@sinclair/typebox": "^0.34.33",
+    "modal": "^0.6.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "tsx": "^4.19.4"
+  }
+}
