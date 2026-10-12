@@ -7,6 +7,7 @@ session. Long work is delegated to background workers running stronger models.
 |---|---|---|
 | `npm run cli` | text, in the terminal | `openai/gpt-5.6-luna` (pi-durable runs it) |
 | `npm run web` | voice, in the browser (mic) | `gpt-realtime-2.1` over WebRTC, with a server-side sideband |
+| [`ios/`](ios/README.md) | voice, one-button iOS app (client of `npm run web`) | same as the web page |
 | workers | background pi-durable conversations | `anthropic/claude-opus-5-5` ("opus", default) or `openai/gpt-5.6-sol` ("sol") |
 
 Both frontends read and write the same root conversation in one SQLite file (`.data/session.sqlite`). Both use the
@@ -33,6 +34,8 @@ delegation, voice event bridging, the realtime seed, and handing a voice session
 | `FRONTDESK_DB` | `.data/session.sqlite` |
 | `FRONTDESK_WORKSPACE` | current directory (workers' `cwd`) |
 | `FRONTDESK_PORT` | `4318` |
+| `FRONTDESK_HOST` | `127.0.0.1`; set e.g. `0.0.0.0` for the iOS app on your LAN (requires a token) |
+| `FRONTDESK_TOKEN` | unset; when set, every request needs `Authorization: Bearer <token>` (browser: open `/?token=<token>` once) |
 | `FRONTDESK_TEXT_MODEL` / `FRONTDESK_VOICE_MODEL` | `gpt-5.6-luna` / `gpt-realtime-2.1` |
 | `FRONTDESK_OPUS_MODEL` / `FRONTDESK_SOL_MODEL` | `claude-opus-5-5` / `gpt-5.6-sol` |
 | `FRONTDESK_DEFAULT_WORKER` | `opus` |
@@ -121,6 +124,17 @@ delegate({ action: "result",  name })                    // the worker's latest 
 
 The CLI also has `/status`, `/stop <worker>`, `/abort` (stops the frontdesk's current run; workers keep going) and
 `/quit`.
+
+## Backlog
+
+- **Phone frontend (Twilio).** Answering calls: a Twilio Elastic SIP trunk sends calls to OpenAI's SIP endpoint;
+  `realtime.call.incoming` webhook → `calls.accept(call_id, sessionConfig())` → `OpenAIRealtimeWS({ callID })` →
+  `bridge.attach()`. Calling out: Twilio's voice API dials and bridges the call to the same SIP endpoint. Needs a caller
+  allowlist, a public HTTPS webhook URL and, for third-party calls, a dedicated "caller" worker. No 10DLC needed
+  (SMS only).
+- **Single `serve` process** with a frontend lease, so the CLI, web page, iOS app and phone can share one running
+  session at the same time.
+- **iOS:** push notifications for worker reports when no call is live, and a text mode.
 
 ## Notes
 

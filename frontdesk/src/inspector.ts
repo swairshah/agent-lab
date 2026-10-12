@@ -4,7 +4,8 @@ import { extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ConversationId } from "@earendil-works/pi-durable";
 import { LiveDoc } from "@earendil-works/pi-durable";
-import { dbPath, textFrontendModel, voiceModel, workerModels, workspace } from "./config.ts";
+import { timingSafeEqual } from "node:crypto";
+import { dbPath, host, textFrontendModel, token, voiceModel, workerModels, workspace } from "./config.ts";
 import { WorkersDoc } from "./delegation.ts";
 import { context, type Session } from "./harness.ts";
 
@@ -60,6 +61,40 @@ function throttled<T>(send: (value: T) => void, ms: number): (value: T) => void 
 	};
 }
 
+const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
+const COOKIE = "frontdesk_token";
+
+function matches(candidate: string | undefined): boolean {
+	if (candidate === undefined) return false;
+	const a = Buffer.from(candidate);
+	const b = Buffer.from(token);
+	return a.length === b.length && timingSafeEqual(a, b);
+}
+
+function presentedToken(req: IncomingMessage, url: URL): string | undefined {
+	const header = req.headers.authorization;
+	if (header?.startsWith("Bearer ")) return header.slice(7);
+	const cookie = req.headers.cookie
+		?.split(";")
+		.map((part) => part.trim().split("="))
+		.find(([name]) => name === COOKIE)?.[1];
+	return cookie !== undefined ? decodeURIComponent(cookie) : (url.searchParams.get("token") ?? undefined);
+}
+
+/** With FRONTDESK_TOKEN set, every request needs it: a bearer header (iOS), or a cookie set by opening /?token=… */
+function authorize(req: IncomingMessage, res: ServerResponse, url: URL): boolean {
+	if (token === "") return true;
+	const presented = presentedToken(req, url);
+	if (!matches(presented)) {
+		sendJson(res, 401, { error: "unauthorized" });
+		return false;
+	}
+	if (url.searchParams.has("token")) {
+		res.setHeader("set-cookie", `${COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/`);
+	}
+	return true;
+}
+
 async function listConversations(session: Session) {
 	const { harness, root } = session;
 	const state = await harness.snapshot(WorkersDoc, root.id, context);
@@ -81,11 +116,15 @@ async function listConversations(session: Session) {
 }
 
 export async function startInspector(options: InspectorOptions): Promise<Server> {
+	if (!LOOPBACK.has(host) && token === "") {
+		throw new Error(`FRONTDESK_HOST=${host} exposes the server beyond this machine; set FRONTDESK_TOKEN too`);
+	}
 	const { session, frontend } = options;
 	const { harness } = session;
 
 	const handle = async (req: IncomingMessage, res: ServerResponse) => {
 		const url = new URL(req.url ?? "/", "http://localhost");
+		if (!authorize(req, res, url)) return;
 		for (const route of options.routes ?? []) if (await route(req, res, url)) return;
 
 		if (url.pathname === "/api/info") {
@@ -148,6 +187,6 @@ export async function startInspector(options: InspectorOptions): Promise<Server>
 			else res.end();
 		});
 	});
-	await new Promise<void>((resolve) => server.listen(options.port, "127.0.0.1", resolve));
+	await new Promise<void>((resolve) => server.listen(options.port, host, resolve));
 	return server;
 }

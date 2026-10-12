@@ -1,0 +1,41 @@
+name: Frontdesk
+options:
+  bundleIdPrefix: dev.frontdesk
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+packages:
+  WebRTC:
+    url: https://github.com/stasel/WebRTC
+    from: 155.0.0
+targets:
+  Frontdesk:
+    type: application
+    platform: iOS
+    sources:
+      - Frontdesk
+    dependencies:
+      - package: WebRTC
+    info:
+      path: Frontdesk/Info.plist
+      properties:
+        CFBundleDisplayName: Frontdesk
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIBackgroundModes:
+          - audio
+        NSMicrophoneUsageDescription: Frontdesk needs the microphone so you can talk to your agents.
+        NSLocalNetworkUsageDescription: Frontdesk connects to the frontdesk server running on your computer.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.frontdesk.app
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        SWIFT_STRICT_CONCURRENCY: minimal
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO

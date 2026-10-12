@@ -13,6 +13,10 @@ export const workspace = resolve(env.FRONTDESK_WORKSPACE ?? process.cwd());
 
 export const port = Number(env.FRONTDESK_PORT ?? 4318);
 
+export const host = env.FRONTDESK_HOST ?? "127.0.0.1";
+
+export const token = env.FRONTDESK_TOKEN ?? "";
+
 const FAUX: ModelRef = { provider: "faux", modelId: "faux-1" };
 
 export const textFrontendModel: ModelRef = faux

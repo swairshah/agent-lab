@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { dbPath, port, voiceModel } from "./config.ts";
+import { dbPath, host, port, token, voiceModel } from "./config.ts";
 import { setReportSink } from "./delegation.ts";
 import { context, openSession } from "./harness.ts";
 import { openSse, readBody, type Route, sendJson, startInspector } from "./inspector.ts";
@@ -41,10 +41,11 @@ const voiceRoutes: Route = async (req, res, url) => {
 const server = await startInspector({ session, frontend: "voice", port, routes: [voiceRoutes] });
 session.harness.resume();
 
-const url = `http://localhost:${port}`;
+const url = `http://localhost:${port}/${token === "" ? "" : `?token=${encodeURIComponent(token)}`}`;
 console.log(`frontdesk · voice · ${voiceModel}`);
 console.log(`session ${dbPath}`);
 console.log(`open ${url}`);
+if (host !== "127.0.0.1") console.log(`listening on ${host}:${port} for the iOS app (bearer token required)`);
 if (process.env.FRONTDESK_NO_OPEN !== "1") {
 	const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
 	spawn(opener, [url], { stdio: "ignore", detached: true }).on("error", () => {}).unref();
