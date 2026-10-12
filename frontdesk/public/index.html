@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frontdesk Inspector</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">frontdesk <span id="mode" class="pill"></span></div>
+  <div id="models" class="muted"></div>
+  <div id="voice" class="voice" hidden>
+    <button id="mic" type="button">Start voice</button>
+    <span id="voice-status" class="muted">idle</span>
+  </div>
+</header>
+<div id="captions" class="captions" hidden></div>
+<main>
+  <nav>
+    <h2>Conversations</h2>
+    <ul id="conversations"></ul>
+    <h2>Live tasks</h2>
+    <ul id="tasks" class="tasks"></ul>
+    <h2>Usage</h2>
+    <div id="usage" class="muted small"></div>
+  </nav>
+  <section>
+    <div class="section-head">
+      <h1 id="title">—</h1>
+      <label class="small muted"><input id="show-system" type="checkbox"> system entries</label>
+    </div>
+    <div id="agent" class="agent small"></div>
+    <ol id="transcript" class="transcript"></ol>
+    <div id="live" class="live"></div>
+  </section>
+</main>
+<audio id="remote" autoplay></audio>
+<script src="app.js"></script>
+</body>
+</html>

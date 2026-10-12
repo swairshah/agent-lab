@@ -1,0 +1,29 @@
+{
+  "name": "frontdesk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "cli": "tsx src/cli.ts",
+    "web": "tsx src/web.ts",
+    "inspect": "tsx src/inspect.ts",
+    "typecheck": "tsc --noEmit",
+    "smoke": "FRONTDESK_FAUX=1 FRONTDESK_DB=.data/smoke.sqlite tsx src/smoke.ts"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "^1.1.0",
+    "@earendil-works/pi-ai": "^1.1.0",
+    "@earendil-works/pi-durable": "^1.1.0",
+    "openai": "^7.32.0",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/ws": "^8.18.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
