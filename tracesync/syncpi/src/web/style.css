@@ -29,8 +29,8 @@
   --panel: min(42vw, 580px);
   --panel-wide: min(62vw, 840px);
   --tree: 230px;
-  /* The thread's column: 760px, growing with a wide pane (to about 920px) so it doesn't sit in wide empty margins. */
-  --measure: clamp(760px, 80%, 920px);
+  /* The thread's column fills the pane, with only the scroller's padding beside it, up to 1100px on very wide screens. */
+  --measure: 1100px;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
