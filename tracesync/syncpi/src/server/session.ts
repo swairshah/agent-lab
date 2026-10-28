@@ -37,6 +37,7 @@ import { diff, Scanner } from "../shared/files.ts";
 import { ATTACHMENT_LIMITS, type Attachment, type BranchInfo, type ConvName, type EnvStatus, type FileHash, IMAGE_TYPES, type Where, COMMENT_LIMITS, type LineComment } from "../shared/protocol.ts";
 import { Thread, toolSummary } from "../shared/thread.ts";
 import type { Devices } from "./devices.ts";
+import { History } from "./history.ts";
 import type { StateFile, StoredMember } from "./state.ts";
 
 export const context: Context = BACKGROUND_CONTEXT;
@@ -202,6 +203,8 @@ export class Session {
 	setup!: Conversation;
 	readonly #listeners: SessionEvents;
 	readonly #scanner: Scanner;
+	/** The project before the shared thread's last turn. */
+	readonly history: History;
 	#files = new Map<string, string>();
 	#filesVersion = 0;
 	#scanTimer: NodeJS.Timeout | undefined;
@@ -223,6 +226,7 @@ export class Session {
 		this.devices = devices;
 		this.#listeners = listeners;
 		this.#scanner = new Scanner(state.value.workdir);
+		this.history = new History(stateDir, state.value.workdir);
 	}
 
 	get workdir(): string {
@@ -318,6 +322,9 @@ export class Session {
 		this.#mainWatch = await this.watch("main");
 		this.#mainWatch.start(async (events) => {
 			if (events.some((e) => e.type === "tool_execution_end")) this.scanSoon();
+			// A run is starting: keep the project as it is now, to show files as they were before this turn. The model
+			// answers before any tool runs, so the files are still the ones the turn started from.
+			if (events.some((e) => e.type === "run_start")) void this.history.snapshot([...this.#files.keys()]);
 		});
 	}
 

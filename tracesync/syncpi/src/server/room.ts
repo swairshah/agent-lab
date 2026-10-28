@@ -603,6 +603,14 @@ export class Room {
 			const rel = safePath(url.searchParams.get("path") ?? "");
 			if (rel === undefined) return json(res, 400, { error: "bad path" });
 			const full = join(session.workdir, rel);
+			// The file as it was before the shared thread's last turn, as in Delta's version picker. Read only.
+			if (req.method === "GET" && url.searchParams.get("at") === "before-last-turn") {
+				const bytes = await session.history.beforeLastTurn(rel);
+				if (bytes === undefined) return json(res, 404, { error: "no turn has run yet", reason: "no-turn" });
+				if (bytes === null) return json(res, 404, { error: "the file wasn't there before the last turn", reason: "absent" });
+				res.writeHead(200, { "content-type": "application/octet-stream", "x-hash": hashBytes(bytes) });
+				return void res.end(bytes);
+			}
 			if (req.method === "GET") {
 				try {
 					const bytes = await readFile(full);
