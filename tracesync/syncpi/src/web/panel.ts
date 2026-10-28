@@ -333,7 +333,9 @@ export class ArtifactPanel {
 		const mode = area !== undefined ? "edit" : (card.querySelector<HTMLElement>(".artifact-tabs [aria-selected='true']")?.dataset.view ?? "view");
 		const id = `${changes ? `change:${this.#selected}` : `file:${tab?.path}@${tab?.version}`}:${mode}`;
 		const label = changes ? (artifact?.title ?? "Change") : `${tab?.path ?? "File"}${tab?.version === "before" ? " · before the last turn" : ""}${area !== undefined ? " · editing" : ""}`;
-		const searchable = area !== undefined || body.querySelector(".pierre-host, .markdown-preview") !== null;
+		// The body is the code view's host itself, or holds the rendered Markdown.
+		const drawn = (selector: string) => body.matches(selector) || body.querySelector(selector) !== null;
+		const searchable = area !== undefined || drawn(".pierre-host, .markdown-preview");
 		let map: TextMap = { text: "", pieces: [], mapped: true };
 		let revision = 0;
 		const current = () => {
@@ -369,7 +371,7 @@ export class ArtifactPanel {
 			},
 			alive: () => current(),
 			restore: () => {},
-			pending: () => body.querySelector(".pierre-host") !== null && map.text === "",
+			pending: () => drawn(".pierre-host") && map.text === "",
 		};
 	}
 

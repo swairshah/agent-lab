@@ -88,6 +88,8 @@ async function search(page: Page, query: string, total: number): Promise<void> {
 		const p = await painted(page);
 		const texts = [...p.all, ...p.current];
 		return (await count(page))?.endsWith(`/${total}`) && texts.length === total && texts.every((t) => t.toLowerCase() === query.toLowerCase());
+	}).catch(async (error: Error) => {
+		throw new Error(`${error.message}; count ${await count(page)}, highlights ${JSON.stringify(await painted(page))}`);
 	});
 }
 
@@ -273,6 +275,111 @@ try {
 	check(await page.evaluate(() => document.activeElement?.id === "input"), "focus back in the composer");
 	await until("slept", () => page.evaluate(() => document.querySelector(".thread")!.textContent!.includes("slept")));
 	ok("Esc with Find open closes Find; the agent keeps working, and the composer has focus again");
+
+	// ---------- files in the panel ----------
+	const openFile = async (path: string) => {
+		await page.locator("#input").focus();
+		await page.keyboard.press(`${mod}+p`);
+		await page.keyboard.type(path);
+		await until(`${path} listed`, () => page.evaluate((p) => document.querySelector("#palette-list [aria-selected='true'] .palette-title")?.textContent === p.split("/").pop(), path));
+		await page.keyboard.press("Enter");
+		await until(`${path} open`, () => page.evaluate(() => !!document.querySelector("#panel-file .artifact .artifact-body")?.textContent || !!document.querySelector("#panel-file diffs-container")));
+		await page.waitForTimeout(400);
+	};
+	const findInPanel = async () => {
+		await page.locator("#panel-file .artifact-head").click();
+		await page.keyboard.press(`${mod}+f`);
+		await until("Find on the file", () => page.evaluate(() => document.querySelector("#find-bar")?.nextElementSibling?.id === "panel-file"));
+	};
+	await openFile("src/cart.ts");
+	await findInPanel();
+	check((await page.locator("#find-scope").textContent()) === "src/cart.ts", "the scope is the file");
+	check((await page.locator("#find-input").getAttribute("aria-label")) === "Find in file", "labelled Find in file");
+	await search(page, "cart total", 1);
+	const inShadow = await page.evaluate(() => [...(CSS.highlights.get("syncpi-find-current") ?? [])][0]?.startContainer.getRootNode() instanceof ShadowRoot);
+	check(inShadow, "the highlight is in the code view's shadow root");
+	await page.locator("#find-input").fill("3");
+	await until("not the gutter", async () => (await count(page)) === "0/0");
+	await search(page, "items", 2);
+	ok("in a code file, Find searches the code (highlighted in the code view), not its line numbers");
+
+	// Focus decides: back in the composer, ⌘F is the conversation's.
+	await page.locator("#input").focus();
+	await page.keyboard.press(`${mod}+f`);
+	await until("conversation again", async () => (await page.locator("#find-scope").textContent()) === "Conversation");
+	check((await page.locator("#find-input").inputValue()) === "alpha omega", "the conversation's own query came back");
+	await page.keyboard.press("Escape");
+	ok("⌘F from the composer is the conversation's Find again, with its own remembered query");
+
+	// Markdown: the rendered text in Preview, the source in Code.
+	await openFile("README.md");
+	await findInPanel();
+	await page.locator("#find-input").fill("`src/cart.ts`");
+	await until("no backticks in the rendered view", async () => (await count(page)) === "0/0");
+	await search(page, "src/cart.ts", 1);
+	await page.locator("#panel-file .artifact-tabs [data-view='code']").click();
+	await until("the source view", () => page.evaluate(() => document.querySelector("#find-scope")?.textContent === "README.md" && !document.querySelector("#panel-file .markdown-preview")));
+	await page.locator("#find-input").focus();
+	await search(page, "`src/cart.ts`", 1);
+	ok("Markdown: the preview is searched as rendered (no backticks), the source as written");
+	await page.keyboard.press("Escape");
+
+	// Text being edited: what's in the editor, unsaved; Find changes nothing.
+	await openFile("src/cart.ts");
+	await page.locator("#panel-file [data-edit]").click();
+	const area = page.locator("#panel-file textarea.file-editor");
+	await area.waitFor();
+	await until("the file's text in the editor", async () => (await area.inputValue()).includes("cartTotal"));
+	await area.press(`${mod}+End`);
+	await area.pressSequentially("// typed-but-unsaved");
+	const typed = await area.inputValue();
+	await page.keyboard.press(`${mod}+f`);
+	await until("Find on the editor", async () => (await page.locator("#find-scope").textContent())?.includes("editing"));
+	await page.locator("#find-input").fill("typed-but-unsaved");
+	await until("found in the editor", async () => (await count(page)) === "1/1");
+	await page.keyboard.press("Enter");
+	check(await area.evaluate((a: HTMLTextAreaElement) => a.value.slice(a.selectionStart, a.selectionEnd)) === "typed-but-unsaved", "the match is selected in the editor");
+	const after = await area.inputValue();
+	check(after === typed, `the text is unchanged: ${JSON.stringify(typed)} → ${JSON.stringify(after)}`);
+	check(await page.locator(".find-layer .find-box.current").count() === 1, "a box marks it");
+	await page.keyboard.press("Escape");
+	await page.locator("#panel-file .file-editor-bar .button").click();
+	ok("while a file is edited, Find searches the editor's text, selects the match in it and changes nothing");
+
+	// An older version: only what's shown.
+	await say(page, "edit src/cart.ts // cart total => // cart sum");
+	await openFile("src/cart.ts");
+	await page.locator("#panel-file .version-select").selectOption("before");
+	const shown = () => page.evaluate(() => document.querySelector("#panel-file diffs-container")?.shadowRoot?.querySelector("[data-content]")?.textContent ?? "");
+	await until("the older version", async () => (await shown()).includes("cart total"));
+	await findInPanel();
+	check((await page.locator("#find-scope").textContent())?.includes("before the last turn"), "says which version");
+	await search(page, "cart total", 1);
+	await page.locator("#panel-file .version-select").selectOption("latest");
+	await until("the current version", async () => (await shown()).includes("cart sum"));
+	await until("Find follows the version", async () => !(await page.locator("#find-scope").textContent())?.includes("before") && (await count(page)) === "0/0");
+	ok("an older version is searched as shown; switching to the current one searches that instead (0 matches there)");
+	await page.keyboard.press("Escape");
+
+	// A diff: the old and new lines, without the gutters.
+	await page.locator("#panel-tabs [data-tab='changes']").click();
+	if ((await page.locator("#panel-browse").getAttribute("aria-expanded")) === "false") await page.locator("#panel-browse").click();
+	await page.locator("#panel-list .panel-group").filter({ hasText: "src/cart.ts" }).locator("[data-artifact]").last().click();
+	await until("the diff", () => page.evaluate(() => !!document.querySelector("#panel-view diffs-container")?.shadowRoot?.querySelector("[data-line]")));
+	await page.locator("#panel-view .artifact-head").click();
+	await page.keyboard.press(`${mod}+f`);
+	await search(page, "cart total", 1);
+	await search(page, "cart sum", 1);
+	ok("in a diff, the removed and added lines are both searched");
+	await page.keyboard.press("Escape");
+
+	// A preview can't be searched, and says so.
+	await say(page, "write page.html <h1>Preview only</h1>");
+	await openFile("page.html");
+	await findInPanel();
+	await until("unavailable", async () => (await page.locator("#find-note").textContent()) === "Find isn't available for this view.");
+	ok("an HTML preview says Find isn't available for it");
+	await page.keyboard.press("Escape");
 
 	if (errors.length > 0) throw new Error(`page errors: ${errors.join("; ")}`);
 	console.log(`\n${checks} checks passed`);
