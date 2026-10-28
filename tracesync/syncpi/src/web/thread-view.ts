@@ -67,13 +67,25 @@ export class ThreadView {
 		const follow = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 160;
 		const items = this.#session.threads[this.#conv].state.items;
 		const units = displayUnits(items);
+		// Comments on messages, by the message they're on: they show there, inline, as in Delta.
+		const marks = new Map<string, { excerpt: string; text: string; name: string }[]>();
+		for (const item of items) {
+			if (item.kind !== "user") continue;
+			for (const c of item.comments ?? []) {
+				if (c.message === undefined) continue;
+				const name = this.#session.nameOf(item.memberId, item.author ?? "someone");
+				marks.set(c.message, [...(marks.get(c.message) ?? []), { excerpt: c.excerpt, text: c.text, name }]);
+			}
+		}
 		for (let i = 0; i < units.length; i++) {
 			const unit = units[i]!;
 			const have = this.#rendered[i];
-			if (have !== undefined && have.key === unit.key && have.sig === unit.sig) continue;
+			const sig = `${unit.sig}|${marks.get(unit.key)?.length ?? 0}`;
+			if (have !== undefined && have.key === unit.key && have.sig === sig) continue;
 			const node = unit.tools.length > 1 ? this.#agentRow(this.#group(unit.tools, unit.key), this.#modelBefore(items, unit.index), false) : this.#item(items[unit.index]!, items, unit.index);
 			// Messages can be commented on by selecting their text (quote-comments.ts).
 			if (unit.tools.length === 0) node.dataset.key = unit.key;
+			for (const mark of marks.get(unit.key) ?? []) this.#mark(node, mark);
 			// A folded row keeps its open/closed state across updates once its tool has finished.
 			const before = have?.el.querySelector<HTMLDetailsElement>(":scope .tool");
 			const after = node.querySelector<HTMLDetailsElement>(":scope .tool");
@@ -88,7 +100,7 @@ export class ThreadView {
 				disposeWithin(have.el);
 				have.el.replaceWith(node);
 			}
-			this.#rendered[i] = { key: unit.key, sig: unit.sig, el: node };
+			this.#rendered[i] = { key: unit.key, sig, el: node };
 		}
 		for (const extra of this.#rendered.splice(units.length)) {
 			disposeWithin(extra.el);
@@ -134,6 +146,51 @@ export class ThreadView {
 		}
 	}
 
+	/** A comment shown where it was made: the commented text tinted and underlined, the note under its paragraph. */
+	#mark(node: HTMLElement, mark: { excerpt: string; text: string; name: string }): void {
+		const body = node.querySelector<HTMLElement>(".msg-body");
+		if (body === null) return;
+		// The text nodes of the message, as one string with offsets back into them.
+		const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
+			acceptNode: (n) => (n.parentElement?.closest(".inline-comment, pre, .artifact, .viewer") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+		});
+		const nodes: { node: Text; start: number }[] = [];
+		let full = "";
+		for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) {
+			nodes.push({ node: n as Text, start: full.length });
+			full += n.textContent;
+		}
+		const squash = (s: string) => s.replace(/\s+/g, " ").trim();
+		const lines = mark.excerpt.split("\n").map(squash).filter(Boolean);
+		let block: Element | null = null;
+		for (const line of lines) {
+			const at = full.replace(/\s/g, " ").indexOf(line.slice(0, 200));
+			if (at < 0) continue;
+			const end = at + Math.min(line.length, 200);
+			// Wrap the matched range, text node by text node.
+			for (const { node: t, start } of nodes) {
+				const from = Math.max(at, start);
+				const to = Math.min(end, start + (t.textContent?.length ?? 0));
+				if (from >= to) continue;
+				const range = document.createRange();
+				range.setStart(t, from - start);
+				range.setEnd(t, to - start);
+				const tint = el("mark", "commented");
+				range.surroundContents(tint);
+				let b: Element = tint;
+				while (b.parentElement && b.parentElement !== body) b = b.parentElement;
+				block = b;
+				break;
+			}
+		}
+		const note = el("div", "inline-comment");
+		note.contentEditable = "false";
+		note.innerHTML = avatarHtml(mark.name);
+		note.append(el("span", "inline-comment-text", mark.text));
+		if (block !== null) block.after(note);
+		else body.append(note);
+	}
+
 	/** A comment on file lines, as Delta shows it: the file and lines (opening the file), the lines, the note. */
 	#comment(c: LineComment, name: string): HTMLElement {
 		const card = el("div", "comment-card");
@@ -177,7 +234,9 @@ export class ThreadView {
 			box.open = true;
 			box.innerHTML = `<summary>${comments.length === 1 ? "1 comment" : `${comments.length} comments`}</summary>`;
 			for (const c of comments) box.append(this.#comment(c, name));
-			node.querySelector(".msg-content")!.append(box);
+			// The comments first, then what was written with them, as Delta shows it.
+			if (body !== null) body.before(box);
+			else node.querySelector(".msg-content")!.append(box);
 		}
 		if (attachments.length > 0) {
 			const box = el("div", "attached");

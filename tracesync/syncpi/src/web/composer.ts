@@ -163,6 +163,15 @@ export class Composer {
 		return this.#input.value;
 	}
 
+	/** Takes what's written (it goes out with a comment), leaving the composer empty. */
+	takeText(): string {
+		const text = this.#input.value.trim();
+		this.#input.value = "";
+		this.#saveDraft();
+		this.#fit();
+		return text;
+	}
+
 	async addFiles(files: File[]): Promise<void> {
 		for (const file of files) {
 			if (this.#attachments.length >= ATTACHMENT_LIMITS.count) {

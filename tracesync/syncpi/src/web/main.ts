@@ -60,10 +60,11 @@ async function main(): Promise<void> {
 	// A comment on file lines goes to the thread as its own message, as in Delta.
 	// A comment on file lines goes to the thread as its own message, as in Delta.
 	let where: Where = embedded ? ((storage.get("syncpi-where") as Where | undefined) ?? "device") : "vm";
+	// A comment goes out at once, as in Delta, with whatever is written in the composer; it stays inline where it
+	// was made (thread-view.ts).
 	const sendComment = (comment: LineComment) => {
 		if (session.role === "viewer") return toast("Viewers can't comment; ask an admin to make you an editor.", "error");
-		session.submit("", "followUp", where, [], [comment]);
-		toast(comment.message !== undefined ? "Comment sent" : `Comment on ${comment.path}:${comment.start === comment.end ? comment.start : `${comment.start}-${comment.end}`} sent`);
+		session.submit(composer.takeText(), "followUp", where, [], [comment]);
 	};
 	const panel = new ArtifactPanel(session, loadImage, sendComment);
 	const quotes = new QuoteComments($("thread"), sendComment, () => composer.focus());
