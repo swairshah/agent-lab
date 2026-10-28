@@ -5,6 +5,7 @@ mod icons;
 mod keymap;
 mod message;
 mod palette;
+mod prose;
 mod sidebar;
 mod theme;
 mod transcript;

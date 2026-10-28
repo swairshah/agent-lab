@@ -11,6 +11,7 @@ use gpui_component::{
     input::Input,
 };
 use serde_json::{Value, json};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 const MEASURE: f32 = 760.;
 const AVATAR: f32 = 30.;
@@ -54,18 +55,42 @@ fn avatar_model(model: &str, p: &Palette) -> Div {
     }
 }
 
-/// One row of the thread: avatar column (or the space for it) and the content.
+/// The width of the thread's content column, in pixels, for this frame. Rows get explicit widths: with only
+/// percentages and a max width, GPUI measured wrapped text at one width and drew it at another, so long messages
+/// ran over the next ones (or came out one letter per line).
+static CONTENT: AtomicU32 = AtomicU32::new(716);
+
+pub(crate) fn content_width() -> f32 {
+    CONTENT.load(Ordering::Relaxed) as f32
+}
+
+/// The thread column for a window: up to MEASURE, less the sidebar, the side pane and the margins.
+fn column_width(window: &Window, sidebar: bool, pane: bool) -> f32 {
+    let available = f32::from(window.viewport_size().width)
+        - if sidebar { 252. } else { 0. }
+        - if pane { 440. } else { 0. }
+        - 56.;
+    available.clamp(320., MEASURE)
+}
+
+/// One row of the thread: avatar column (or the space for it) and the content, at the column's width.
 fn row(avatar: Option<Div>, content: impl IntoElement) -> Div {
+    let width = content_width();
     div()
-        .w_full()
-        .max_w(px(MEASURE))
-        .min_w_0()
+        .w(px(width + AVATAR + 14.))
         .flex_shrink_0()
         .flex()
         .items_start()
         .gap(px(14.))
         .child(avatar.unwrap_or_else(|| div().w(px(AVATAR)).flex_shrink_0()))
-        .child(div().flex_1().min_w_0().flex().flex_col().child(content))
+        .child(
+            div()
+                .w(px(width))
+                .flex_shrink_0()
+                .flex()
+                .flex_col()
+                .child(content),
+        )
 }
 
 /// Lines added and removed in a unified patch.
@@ -216,6 +241,8 @@ impl Desktop {
         if status == "provisioning" || status == "failed" {
             return self.preparing(&selected, &p, cx);
         }
+        let column = column_width(window, self.sidebar, !self.pane.is_empty());
+        CONTENT.store((column - AVATAR - 14.) as u32, Ordering::Relaxed);
         let state = self.native[&self.showing].clone();
         let items = array(&state, "items");
         let mut thread = div()
@@ -259,8 +286,7 @@ impl Desktop {
                 "tool" => Some(self.tool_row(item, &key, previous_agent, &model_of_turn, &p, cx)),
                 "notice" => Some(
                     div()
-                        .w_full()
-                        .max_w(px(MEASURE))
+                        .w(px(column))
                         .mt(px(22.))
                         .flex()
                         .items_center()

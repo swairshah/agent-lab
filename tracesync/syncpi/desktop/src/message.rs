@@ -1,6 +1,6 @@
 // Native message blocks grow to their content. Wide tables and code scroll inside their own bounds.
 use gpui::{prelude::FluentBuilder, *};
-use gpui_component::{ActiveTheme, text::TextView};
+use gpui_component::ActiveTheme;
 use markdown::{ParseOptions, mdast::Node};
 
 #[derive(Debug, PartialEq)]
@@ -118,20 +118,6 @@ pub fn blocks(source: &str) -> Vec<Block> {
     }
     result
 }
-fn markdown_text(id: String, source: String, window: &mut Window, cx: &mut App) -> TextView {
-    TextView::markdown(
-        SharedString::from(id),
-        crate::citations::rewrite(&source),
-        window,
-        cx,
-    )
-    .selectable(true)
-    .scrollable(false)
-    .w_full()
-    .h_auto()
-    .min_w_0()
-    .flex_shrink_0()
-}
 pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyElement {
     let border = cx.theme().border;
     let muted = cx.theme().muted_foreground;
@@ -147,7 +133,7 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
         let block_id = format!("{id}-block-{index}");
         match block {
             Block::Prose(source) => {
-                container = container.child(markdown_text(block_id, source, window, cx));
+                container = container.child(crate::prose::render(&block_id, &source, cx));
             }
             Block::List { start, items } => {
                 let mut list = div()
@@ -195,7 +181,12 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
                 container = container.child(list);
             }
             Block::Code { language, content } if language == "mermaid" => {
-                container = container.child(crate::diagram::view(&block_id, &content, 716., cx));
+                container = container.child(crate::diagram::view(
+                    &block_id,
+                    &content,
+                    crate::transcript::content_width(),
+                    cx,
+                ));
             }
             Block::Alert { kind, body } => {
                 let p = crate::theme::palette(cx);
@@ -334,10 +325,9 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
                                 .when(column + 1 < columns, |d| {
                                     d.border_r_1().border_color(border)
                                 })
-                                .child(markdown_text(
-                                    format!("{block_id}-row-{row_index}-cell-{column}"),
-                                    content,
-                                    window,
+                                .child(crate::prose::render(
+                                    &format!("{block_id}-row-{row_index}-cell-{column}"),
+                                    &content,
                                     cx,
                                 )),
                         );
