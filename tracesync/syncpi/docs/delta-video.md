@@ -41,22 +41,22 @@ Delta's own repository, pulls in a coworker, reviews and lands the change. Trans
 | In the video | syncpi |
 |---|---|
 | Inline comments on replies, sent together | Yes (comments go at once, one per message) |
-| Agent answers each comment under it | No: the reply is one message |
+| Agent answers each comment under it | Yes, when a message has several comments |
 | Links to code, highlighted code | Yes |
-| Agent shows the running app | **New today:** `record_browser` (a video of a browser on the VM) |
+| Agent shows the running app | `record_browser` (a video) and `screenshot_browser` (a picture the agent also sees) |
 | Collaborator presence, web and desktop share one link | Yes |
 | Live drafts / typing | Yes: keystrokes and cursors live, tag someone into a draft and write it together |
 | Group chat with the agent, tools run on the sender's machine | Yes |
 | Follow a collaborator | No |
-| Diff from the status bar; mark files seen; since main / last commit / last turn | Partly: Changes panel, git sheet, "Before last turn" for a file |
+| Diff from the status bar; mark files seen; since main / last commit / last turn | Mostly: "+N −M" opens the changes, "Seen" in the Changes panel and git sheet; not yet since main / last commit |
 | Comment on diff lines into the thread | Yes |
 | Review subthread, approve, pull changes | No (branches exist) |
 | Land button running a `/land` skill | No (pi skills load already) |
 | Subthreads under the thread | No (branches are in settings) |
-| Scrollbar map with turn summaries | No |
+| Scrollbar map with turn summaries | Yes, with bookmarks |
 | Mentions and an inbox | Yes |
 
-## Easy to add next (a day or less each)
+## Easy to add next (all done on 2026-10-28)
 
 1. **The scrollbar map.** Marks beside the thread for each message (yours, others', the agent's), click to jump, hover
    for the first line and who wrote it. All the data is in the thread state.
