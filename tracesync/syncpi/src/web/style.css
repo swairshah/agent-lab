@@ -224,6 +224,10 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .tool-group-list .tool .tool-verb { color: var(--muted); }
 .file-link { border: none; background: none; padding: 0; font: 12.5px var(--mono); color: var(--ink-2); text-decoration: underline; text-decoration-color: var(--rule-strong); text-underline-offset: 3px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .file-link:hover { color: var(--accent); text-decoration-color: var(--accent); }
+/* Citations: a file the agent links to, or a file name in backticks. */
+.prose .file-link.cite { font: inherit; color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.prose code.cite { cursor: pointer; text-decoration: underline; text-decoration-color: var(--rule-strong); text-underline-offset: 3px; }
+.prose code.cite:hover { color: var(--accent); }
 .tool-spinner { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--warn); border-top-color: transparent; animation: spin .8s linear infinite; }
 .tool-output { margin: 0; max-height: 300px; overflow: auto; background: var(--sunken); border-radius: 8px; padding: 9px 12px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .tool-note { color: var(--muted); font-size: 12px; }

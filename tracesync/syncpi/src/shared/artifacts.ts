@@ -20,6 +20,8 @@ export type Artifact = {
 	/** Where it came from: an edit or write by the agent, or a block in a reply. */
 	/** "file" is a project file someone opened, not something the agent produced. */
 	source: "edit" | "write" | "reply" | "file";
+	/** Lines to show selected, "12-16", when a project file is opened from a citation. */
+	lines?: string;
 };
 
 const EXTENSION_KIND: Record<string, ArtifactKind> = {

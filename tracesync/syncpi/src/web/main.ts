@@ -81,14 +81,14 @@ async function main(): Promise<void> {
 		updateComposer();
 	};
 
-	const openFile = async (path: string) => {
+	const openFile = async (path: string, lines?: string) => {
 		const res = await fetch(`api/file?path=${encodeURIComponent(path)}`, { headers: { authorization: `Bearer ${token}` } }).catch(() => undefined);
 		if (!res?.ok) return toast(`Couldn't open ${path}`, "error");
 		const kind = kindOfPath(path);
 		const content = kind === "image" ? "" : await res.text();
-		panel.openFile({ key: `file:${path}`, kind, title: path, path, content, lang: path.split(".").pop(), source: "file" });
+		panel.openFile({ key: `file:${path}`, kind, title: path, path, content, lang: path.split(".").pop(), source: "file", lines });
 	};
-	const threadView = new ThreadView($("thread"), $("scroller"), session, { onOpenArtifact: (a) => panel.open(a), onFork: fork, onOpenFile: (path) => void openFile(path), loadImage });
+	const threadView = new ThreadView($("thread"), $("scroller"), session, { onOpenArtifact: (a) => panel.open(a), onFork: fork, onOpenFile: (path, lines) => void openFile(path, lines), loadImage });
 	const settings = new Settings(session, {
 		onTheme: (theme) => {
 			applyTheme(theme as Theme);

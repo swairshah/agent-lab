@@ -30,7 +30,7 @@ export type CommentHandler = (comment: LineComment) => void;
  * Highlighted, read-only code. With `onComment` (a project file), lines can be selected and commented on, as in
  * Delta: a box opens under the selection, ⌘↩ sends the comment with those lines, Esc drops it.
  */
-export function renderCode(host: HTMLElement, name: string, contents: string, onComment?: CommentHandler): void {
+export function renderCode(host: HTMLElement, name: string, contents: string, onComment?: CommentHandler, lines?: string): void {
 	host.classList.add("pierre-host");
 	void loadPierre().then(({ File }) => {
 		const file = { name, contents };
@@ -81,6 +81,12 @@ export function renderCode(host: HTMLElement, name: string, contents: string, on
 				: {}),
 		});
 		draw();
+		// Opened from a citation: show those lines selected, in view.
+		const [start, end] = (lines ?? "").split("-").map(Number);
+		if (start) {
+			view.setSelectedLines({ start, end: end || start });
+			requestAnimationFrame(() => host.querySelector("diffs-container")?.shadowRoot?.querySelector(`[data-column-number="${start}"]`)?.scrollIntoView({ block: "center" }));
+		}
 		instances.set(host, view);
 	});
 }
@@ -147,7 +153,7 @@ function renderView(host: HTMLElement, artifact: Artifact, view: "preview" | "co
 	if (view === "diff") return renderDiff(host, artifact.content);
 	// Comments are on project files as they are now, so not on what the agent wrote earlier.
 	const commentable = artifact.source === "file" && artifact.path !== undefined ? onComment : undefined;
-	if (view === "code") return renderCode(host, artifact.path ?? `snippet.${artifact.lang || artifact.kind}`, artifact.content, commentable);
+	if (view === "code") return renderCode(host, artifact.path ?? `snippet.${artifact.lang || artifact.kind}`, artifact.content, commentable, artifact.lines);
 	if (artifact.kind === "markdown") {
 		host.innerHTML = `<div class="markdown-preview prose">${renderMarkdown(artifact.content)}</div>`;
 		return;
@@ -212,7 +218,7 @@ export function artifactCard(artifact: Artifact, options: CardOptions): HTMLElem
 		(entries) => {
 			if (!entries.some((e) => e.isIntersecting)) return;
 			observer.disconnect();
-			select(tabs[0]!);
+			select(artifact.lines !== undefined && tabs.includes("code") ? "code" : tabs[0]!);
 		},
 		{ rootMargin: "400px" },
 	);

@@ -16,7 +16,12 @@ marked.use({
 			return `<div class="alert alert-${kind.toLowerCase()}"><div class="alert-title">${ALERTS[kind]}</div><p>${body.slice(alert[0].length)}</div>`;
 		},
 		html: (token) => escapeHtml(token.text),
-		link: ({ href, text }) => (/^https?:|^mailto:/i.test(href) ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(text)}</a>` : escapeHtml(text)),
+		link: ({ href, text }) => {
+			if (/^https?:|^mailto:/i.test(href)) return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(text)}</a>`;
+			// A project file the agent cites, as Delta has it: `path`, `path#L10-L20` or `path#heading`. It opens in the panel.
+			const file = fileLink(href);
+			return file ? `<button type="button" class="file-link cite" data-path="${escapeHtml(file.path)}"${file.lines ? ` data-lines="${file.lines}"` : ""}>${escapeHtml(text)}</button>` : escapeHtml(text);
+		},
 		image: ({ text }) => escapeHtml(text),
 		code: ({ text, lang }) => {
 			const language = (lang ?? "").trim().split(/\s+/)[0]?.toLowerCase() ?? "";
@@ -25,6 +30,14 @@ marked.use({
 		},
 	},
 });
+
+/** A link to a project file: a relative path without a scheme or "..", with lines from a `#L10` or `#L10-L20` anchor. */
+export function fileLink(href: string): { path: string; lines?: string } | undefined {
+	const [path = "", anchor = ""] = href.trim().split("#");
+	if (path === "" || /^[a-z][a-z0-9+.-]*:|^\/\//i.test(path) || path.split("/").includes("..")) return undefined;
+	const lines = anchor.match(/^L(\d+)(?:-L?(\d+))?$/);
+	return { path: decodeURI(path.replace(/^\.\//, "").replace(/^\//, "")), lines: lines ? `${lines[1]}-${lines[2] ?? lines[1]}` : undefined };
+}
 
 export function renderMarkdown(text: string): string {
 	return marked.parse(text, { async: false });
