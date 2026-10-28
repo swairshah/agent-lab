@@ -8,7 +8,7 @@ import { isQuietTool, toolGroupSummary, toolSummary } from "../shared/thread.ts"
 import { artifactCard, type CommentHandler, disposeWithin, type ImageLoader, renderCode } from "./artifacts.ts";
 import { renderDiagram } from "./diagrams.ts";
 import { el, escapeHtml, initials, personColor } from "./dom.ts";
-import { modelAvatar } from "./icons.ts";
+import { modelAvatar, whereMark } from "./icons.ts";
 import { renderMarkdown } from "./markdown.ts";
 import type { SessionClient } from "./session.ts";
 
@@ -183,7 +183,7 @@ export class ThreadView {
 		switch (item.kind) {
 			case "user": {
 				const name = this.#session.nameOf(item.memberId, item.author ?? "someone");
-				const node = this.#user(name, item.text, item.attachments ?? [], undefined, item.comments);
+				const node = this.#user(name, item.text, item.attachments ?? [], undefined, item.comments, item.where);
 				if (this.#session.role === "admin" && this.#conv === "main" && /^\d+$/.test(item.key)) {
 					const fork = el("button", "msg-action", "Edit & fork");
 					fork.type = "button";
@@ -279,10 +279,10 @@ export class ThreadView {
 		return card;
 	}
 
-	#user(name: string, text: string, attachments: NonNullable<UserItem["attachments"]>, status?: string, comments: LineComment[] = []): HTMLElement {
+	#user(name: string, text: string, attachments: NonNullable<UserItem["attachments"]>, status?: string, comments: LineComment[] = [], where?: UserItem["where"]): HTMLElement {
 		const node = el("article", "msg msg-user");
 		node.style.setProperty("--person", personColor(name));
-		node.innerHTML = `${avatarHtml(name)}<div class="msg-content"><div class="msg-meta"><span class="author">${escapeHtml(name)}</span>${
+		node.innerHTML = `${avatarHtml(name)}${whereMark(where, name)}<div class="msg-content"><div class="msg-meta"><span class="author">${escapeHtml(name)}</span>${
 			status ? `<span>${escapeHtml(status)}</span>` : ""
 		}</div>${text ? `<div class="msg-body prose">${renderMarkdown(text, { breaks: true })}</div>` : ""}</div>`;
 		const body = node.querySelector<HTMLElement>(".msg-body");

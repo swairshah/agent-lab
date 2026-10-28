@@ -443,9 +443,11 @@ export class Session {
 
 	async submit(member: StoredMember, requestId: string, text: string, mode: "followUp" | "steer", where: Where, attachments: Attachment[] = [], comments: LineComment[] = []): Promise<void> {
 		const checked = checkComments(comments);
-		const { content, shown } = messageContent(`[${member.name}] ${text}${commentText(checked)}`, attachments);
 		// A request can only run on its sender's own machine, and only while it is connected.
 		const destination: Where = where === "device" && this.devices.online(member.id) !== undefined ? "device" : "vm";
+		// The model sees where each message runs, so it can tell people where their requests ran.
+		const place = destination === "device" ? `on ${this.devices.label(member.id) ?? "their own machine"}` : "on the session VM";
+		const { content, shown } = messageContent(`[${member.name}, running ${place}] ${text}${commentText(checked)}`, attachments);
 		// A steer joins the running run and its tools. Nobody steers a run that executes on someone else's machine;
 		// it waits for its own run instead.
 		if (mode === "steer") {
@@ -459,7 +461,7 @@ export class Session {
 				// The route is part of the request ID, so it is stored with the submission and survives restarts.
 				requestId: `${member.id}:${destination}:${requestId}`,
 				whenBusy: mode,
-				entry: { kind: "syncpi.message", data: { author: member.name, memberId: member.id, text, at: Date.now(), requestId, ...(shown.length > 0 ? { attachments: shown } : {}), ...(checked.length > 0 ? { comments: checked } : {}) } },
+				entry: { kind: "syncpi.message", data: { author: member.name, memberId: member.id, text, at: Date.now(), requestId, where: destination, ...(shown.length > 0 ? { attachments: shown } : {}), ...(checked.length > 0 ? { comments: checked } : {}) } },
 			},
 			context,
 		);
@@ -691,9 +693,9 @@ export class Session {
 function mainInstructions(name: string, workdir: string): string {
 	return `You are syncpi, a coding agent in a shared session for the project "${name}". The session's server and its copy of the project (${workdir}) are on a Linux VM (Ubuntu; sudo works without a password).
 
-Several people can be in this thread at once, from a terminal or a browser. Each user message starts with the sender's name in brackets, like "[Ada] fix the tests". Keep track of who asked for what, and use names when it helps. When two people ask for conflicting things, say so instead of picking silently.
+Several people can be in this thread at once, from the syncpi terminal app, the desktop app or a browser. Each user message starts with the sender's name and where that request runs, in brackets, like "[Ada, running on Ada's machine (ada-mbp, darwin arm64)] fix the tests" or "[Ada, running on the session VM] deploy it". Keep track of who asked for what, and use names when it helps. When two people ask for conflicting things, say so instead of picking silently.
 
-Your tools run where the person whose request you are working on is: on their own computer when they wrote from a terminal (in their copy of the project, with their toolchains, for example Xcode on a Mac), or on the session's Linux VM when they wrote from a browser. The syncpi section says which machine you are on right now, and its working directory is the project. Do not assume tools or files outside the project carry over between machines.
+Your tools run where the bracket says, which can differ from message to message and from person to person: on the sender's own computer when they wrote from the terminal app or the desktop app (in their copy of the project, with their toolchains, for example Xcode on a Mac), or on the session's Linux VM when they wrote from a browser, sent /remote, or switched to the VM. When asked where things ran, answer per message from those brackets; don't assume one person's requests ran where another's did. The syncpi section says which machine you are on right now, and its working directory is the project. Do not assume tools or files outside the project carry over between machines.
 
 Everyone has a synced copy of the project. Files you change show up in everyone's copy within seconds, wherever you changed them. Files under .syncpi/ and ignored files (build output, dependencies) are not synced, so each machine has its own.
 

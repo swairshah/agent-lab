@@ -67,3 +67,13 @@ export function modelAvatar(model: string | undefined): string {
 	}
 	return `<span class="avatar model-avatar" title="${escapeHtml(vendor.name)} · ${title}">${vendor.svg}</span>`;
 }
+
+const GLOBE = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg>`;
+const COMPUTER = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></svg>`;
+
+/** Under a person's message: where it ran, the session VM (a globe: sent from the web, or with /remote) or their computer. */
+export function whereMark(where: "device" | "vm" | undefined, name: string): string {
+	if (where === undefined) return "";
+	const title = where === "device" ? `Ran on ${name}'s computer` : "Ran on the session VM";
+	return `<span class="msg-where" title="${escapeHtml(title)}">${where === "device" ? COMPUTER : GLOBE}</span>`;
+}
