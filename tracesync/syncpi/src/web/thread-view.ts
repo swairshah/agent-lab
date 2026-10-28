@@ -3,7 +3,7 @@
 // Items are rendered once per revision and replaced in place when they change, so a long thread stays cheap.
 import { type Artifact, kindOfPath, patchStats, replyArtifacts, toolArtifacts } from "../shared/artifacts.ts";
 import type { Item, ToolItem, UserItem } from "../shared/thread.ts";
-import { toolSummary } from "../shared/thread.ts";
+import { isQuietTool, toolGroupSummary, toolSummary } from "../shared/thread.ts";
 import { artifactCard, disposeWithin, type ImageLoader, renderCode } from "./artifacts.ts";
 import { renderDiagram } from "./diagrams.ts";
 import { el, escapeHtml, initials, personColor } from "./dom.ts";
@@ -14,6 +14,8 @@ import type { SessionClient } from "./session.ts";
 export type ThreadViewOptions = {
 	onOpenArtifact: (artifact: Artifact) => void;
 	onFork: (key: string, text: string) => void;
+	/** Opens a project file in the side panel. */
+	onOpenFile: (path: string) => void;
 	loadImage: ImageLoader;
 };
 
@@ -28,7 +30,7 @@ export class ThreadView {
 	readonly #scroller: HTMLElement;
 	readonly #session: SessionClient;
 	readonly #options: ThreadViewOptions;
-	#rendered: { key: string; rev: number; el: HTMLElement }[] = [];
+	#rendered: { key: string; sig: string; el: HTMLElement }[] = [];
 	#conv: "main" | "setup" = "main";
 
 	constructor(box: HTMLElement, scroller: HTMLElement, session: SessionClient, options: ThreadViewOptions) {
@@ -56,15 +58,17 @@ export class ThreadView {
 		const scroller = this.#scroller;
 		const follow = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 160;
 		const items = this.#session.threads[this.#conv].state.items;
-		for (let i = 0; i < items.length; i++) {
-			const item = items[i]!;
+		const units = displayUnits(items);
+		for (let i = 0; i < units.length; i++) {
+			const unit = units[i]!;
 			const have = this.#rendered[i];
-			if (have !== undefined && have.key === item.key && have.rev === item.rev) continue;
-			const node = this.#item(item, items, i);
+			if (have !== undefined && have.key === unit.key && have.sig === unit.sig) continue;
+			const node = unit.tools.length > 1 ? this.#agentRow(this.#group(unit.tools, unit.key), this.#modelBefore(items, unit.index), false) : this.#item(items[unit.index]!, items, unit.index);
 			// A folded row keeps its open/closed state across updates once its tool has finished.
 			const before = have?.el.querySelector<HTMLDetailsElement>(":scope .tool");
 			const after = node.querySelector<HTMLDetailsElement>(":scope .tool");
-			if (before && after && have?.key === item.key && item.kind === "tool" && item.status !== "running") after.open = before.open;
+			const settled = unit.tools.every((t) => t.status !== "running" && t.status !== "pending");
+			if (before && after && have?.key === unit.key && unit.tools.length > 0 && settled) after.open = before.open;
 			if (have === undefined) {
 				// New items go above the messages still waiting to be sent.
 				const pending = box.querySelector(":scope > .pending");
@@ -74,9 +78,9 @@ export class ThreadView {
 				disposeWithin(have.el);
 				have.el.replaceWith(node);
 			}
-			this.#rendered[i] = { key: item.key, rev: item.rev, el: node };
+			this.#rendered[i] = { key: unit.key, sig: unit.sig, el: node };
 		}
-		for (const extra of this.#rendered.splice(items.length)) {
+		for (const extra of this.#rendered.splice(units.length)) {
 			disposeWithin(extra.el);
 			extra.el.remove();
 		}
@@ -197,6 +201,37 @@ export class ThreadView {
 		}
 	}
 
+	/** A run of quiet tool calls: one summary line ("Listed 6 directories, read 5 files"), opening to one line per
+	 *  call, with file names that open the file. */
+	#group(tools: ToolItem[], key: string): HTMLElement {
+		const content = el("div");
+		const node = el("details", "fold tool tool-group");
+		const running = tools.some((t) => t.status === "running" || t.status === "pending");
+		node.innerHTML = `<summary><span class="tool-verb">${escapeHtml(toolGroupSummary(tools))}</span>${running ? '<span class="tool-spinner"></span>' : ""}</summary>`;
+		const list = el("div", "tool-group-list");
+		for (const tool of tools) {
+			if (tool.name === "bash") {
+				list.append(this.#tool(tool));
+				continue;
+			}
+			const line = el("div", "tool-line");
+			const target = toolSummary(tool);
+			line.append(el("span", "tool-verb", tool.name === "read" ? "Read" : tool.name === "ls" ? "List directory" : tool.name === "find" ? "Find files" : "Search"));
+			const path = typeof tool.args.path === "string" ? tool.args.path : undefined;
+			if (tool.name === "read" && path !== undefined) {
+				const link = el("button", "file-link", path);
+				link.type = "button";
+				link.onclick = () => this.#options.onOpenFile(path);
+				line.append(link);
+			} else line.append(el("span", "tool-arg", target));
+			list.append(line);
+		}
+		node.append(list);
+		node.dataset.group = key;
+		content.append(node);
+		return content;
+	}
+
 	#tool(item: ToolItem): HTMLElement {
 		const content = el("div");
 		const node = el("details", `fold tool tool-${item.status}`);
@@ -225,4 +260,31 @@ export class ThreadView {
 		content.append(node);
 		return content;
 	}
+}
+
+/** What the thread shows, in order: each item on its own, except that a run of quiet tool calls (and the empty
+ *  tool-only turns between them) becomes one group. `sig` changes whenever anything in the unit does. */
+type Unit = { key: string; sig: string; index: number; tools: ToolItem[] };
+
+function displayUnits(items: readonly Item[]): Unit[] {
+	const units: Unit[] = [];
+	let group: Unit | undefined;
+	const silent = (item: Item) => item.kind === "assistant" && !item.text && !item.thinking && !item.error && !item.streaming;
+	items.forEach((item, index) => {
+		if (item.kind === "tool" && isQuietTool(item)) {
+			if (group === undefined) {
+				group = { key: `group:${item.key}`, sig: "", index, tools: [] };
+				units.push(group);
+			}
+			group.tools.push(item);
+			group.sig += `${item.key}.${item.rev};`;
+			return;
+		}
+		// An empty turn between quiet calls doesn't end the run.
+		if (group !== undefined && silent(item)) return;
+		group = undefined;
+		units.push({ key: item.key, sig: String(item.rev), index, tools: item.kind === "tool" ? [item] : [] });
+	});
+	// A run of one is shown as the call itself.
+	return units.map((u) => (u.tools.length === 1 && u.key.startsWith("group:") ? { ...u, key: u.tools[0]!.key, sig: String(u.tools[0]!.rev) } : u));
 }
