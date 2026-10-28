@@ -305,7 +305,10 @@ export function artifactCard(artifact: Artifact, options: CardOptions): HTMLElem
 	const tabs = views(artifact);
 	const stats = artifact.kind === "diff" ? patchStats(artifact.content) : undefined;
 	const head = el("header", "artifact-head");
-	head.innerHTML = `<span class="artifact-kind">${KIND_LABEL[artifact.kind]}</span><span class="artifact-title" title="${escapeHtml(artifact.title)}">${escapeHtml(artifact.title)}</span>${
+	// A project file shows where it is, as a breadcrumb: its folder quiet, its name plain.
+	const slash = artifact.source === "file" ? artifact.title.lastIndexOf("/") : -1;
+	const title = slash === -1 ? escapeHtml(artifact.title) : `<span class="muted">${escapeHtml(artifact.title.slice(0, slash + 1))}</span>${escapeHtml(artifact.title.slice(slash + 1))}`;
+	head.innerHTML = `<span class="artifact-kind">${KIND_LABEL[artifact.kind]}</span><span class="artifact-title" title="${escapeHtml(artifact.title)}">${title}</span>${
 		stats ? `<span class="diff-stats"><span class="added">+${stats.added}</span> <span class="removed">−${stats.removed}</span></span>` : ""
 	}`;
 	// Where comments are possible, say how, as long as there's room for it.

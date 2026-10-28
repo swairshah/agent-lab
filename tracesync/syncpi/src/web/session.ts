@@ -22,8 +22,10 @@ export class SessionClient {
 	invites: InviteInfo[] = [];
 	branches: BranchInfo[] = [];
 	currentBranch = 0;
-	/** Project files, for @ completion. */
+	/** Project files, for @ completion and the project tree. */
 	files: string[] = [];
+	/** Each project file's content hash, so an open file can tell it changed. */
+	readonly hashes = new Map<string, string>();
 	/** Where the current run's tools execute. */
 	target = "";
 	connection: "connecting" | "open" | "reconnecting" | "removed" = "connecting";
@@ -162,9 +164,15 @@ export class SessionClient {
 				return this.#emit("env");
 			case "files": {
 				const names = new Set(message.full ? [] : this.files);
+				if (message.full) this.hashes.clear();
 				for (const [path, hash] of Object.entries(message.changed)) {
-					if (hash === null) names.delete(path);
-					else names.add(path);
+					if (hash === null) {
+						names.delete(path);
+						this.hashes.delete(path);
+					} else {
+						names.add(path);
+						this.hashes.set(path, hash);
+					}
 				}
 				this.files = [...names].sort();
 				return this.#emit("files");

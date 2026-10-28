@@ -96,19 +96,38 @@
       </footer>
     </main>
 
-    <aside class="panel" aria-label="Changes">
-      <header class="panel-head">
-        <button id="panel-browse" type="button" class="panel-browse" aria-expanded="true">
-          <h2>Changes</h2>
-          <span id="panel-browse-count" class="muted"></span>
-          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg>
-        </button>
-        <button id="panel-close" type="button" class="icon-button small" aria-label="Close changes">
-          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg>
-        </button>
-      </header>
-      <div id="panel-list" class="panel-list"></div>
-      <div id="panel-view" class="panel-view"></div>
+    <aside class="panel" aria-label="Changes and files">
+      <section class="panel-main">
+        <header class="panel-head">
+          <div id="panel-tabs" class="panel-tabs" role="tablist" aria-label="Changes and open files"></div>
+          <button id="tree-toggle" type="button" class="icon-button small" aria-pressed="false" aria-label="Project files (⇧⌘E)" title="Project files (⇧⌘E)">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.5" y="3.5" width="5" height="4" rx="1"/><rect x="11.5" y="9" width="5" height="3.5" rx="1"/><rect x="11.5" y="14" width="5" height="3.5" rx="1"/><path d="M6 7.5v8.25h5.5M6 10.75h5.5"/></svg>
+          </button>
+          <button id="panel-close" type="button" class="icon-button small" aria-label="Close the panel">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg>
+          </button>
+        </header>
+        <div id="panel-changes" class="panel-changes">
+          <button id="panel-browse" type="button" class="panel-browse" aria-expanded="true">
+            <h2>Changes in this thread</h2>
+            <span id="panel-browse-count" class="muted"></span>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg>
+          </button>
+          <div id="panel-list" class="panel-list"></div>
+          <div id="panel-view" class="panel-view"></div>
+        </div>
+        <div id="panel-file" class="panel-view" hidden></div>
+      </section>
+      <section class="tree" aria-label="Project files">
+        <header class="tree-head">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 14.5V6a1.5 1.5 0 0 1 1.5-1.5h3.2l1.6 1.8h5.2A1.5 1.5 0 0 1 16 7.8V9"/><path d="M3 14.5 5 9.5h12.5l-2 5.3a1.5 1.5 0 0 1-1.4 1H4.5A1.5 1.5 0 0 1 3 14.5z"/></svg>
+          <span id="tree-name" class="tree-name"></span>
+          <button id="tree-changes" type="button" class="icon-button small" aria-pressed="false" aria-label="Only files changed in this thread" title="Only files changed in this thread">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.5v7M6.5 7h7M6.5 15.5h7"/></svg>
+          </button>
+        </header>
+        <div id="tree-rows" class="tree-rows"></div>
+      </section>
     </aside>
   </div>
 

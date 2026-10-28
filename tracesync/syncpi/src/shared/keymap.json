@@ -33,7 +33,7 @@
 
 	{ "id": "view.sidebar", "title": "Toggle sidebar", "group": "View", "keys": "cmd-b", "apps": ["desktop"] },
 	{ "id": "view.changes", "title": "Review changes", "group": "View", "keys": "cmd-shift-d", "apps": ["web", "desktop"] },
-	{ "id": "view.files", "title": "Show files", "group": "View", "keys": "cmd-shift-e", "apps": ["desktop"] },
+	{ "id": "view.files", "title": "Project files", "group": "View", "keys": "cmd-shift-e", "apps": ["web", "desktop"] },
 	{ "id": "view.people", "title": "People and invites", "group": "View", "apps": ["web", "desktop"] },
 	{ "id": "view.terminal", "title": "Toggle terminal", "group": "View", "keys": "ctrl-`", "apps": ["desktop"] },
 	{ "id": "file.comment", "title": "Comment on the selected lines", "group": "View", "keys": "cmd-alt-m", "apps": ["web", "desktop"] },

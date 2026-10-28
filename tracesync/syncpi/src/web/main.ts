@@ -5,7 +5,8 @@
 //   session.ts      the connection and the session's state, with change notifications
 //   thread-view.ts  the conversation, tool calls and inline artifacts
 //   artifacts.ts    diffs and code (Pierre), HTML/SVG previews, markdown, images
-//   panel.ts        the changes panel
+//   panel.ts        the side panel: Changes and open files in tabs
+//   files-tree.ts   the project tree beside it (⇧⌘E)
 //   composer.ts     writing, attachments, completion and slash commands
 //   settings.ts     settings (⌘,): you, people, branches, environment, session
 //   palette.ts      the command palette (⌘K, ⌘⇧P, ⌘P); commands and shortcuts are in src/shared/keymap.json
@@ -66,7 +67,15 @@ async function main(): Promise<void> {
 		if (session.role === "viewer") return toast("Viewers can't comment; ask an admin to make you an editor.", "error");
 		session.submit(composer.takeText(), "followUp", where, [], [comment]);
 	};
-	const panel = new ArtifactPanel(session, loadImage, sendComment);
+	// A project file as an artifact, for a tab in the panel.
+	const loadFile = async (path: string, lines?: string) => {
+		const res = await fetch(`api/file?path=${encodeURIComponent(path)}`, { headers: { authorization: `Bearer ${token}` } }).catch(() => undefined);
+		if (!res?.ok) return undefined;
+		const kind = kindOfPath(path);
+		const content = kind === "image" ? "" : await res.text();
+		return { key: `file:${path}`, kind, title: path, path, content, lang: path.split(".").pop(), source: "file" as const, lines, hash: res.headers.get("x-hash") ?? undefined };
+	};
+	const panel = new ArtifactPanel(session, loadImage, sendComment, loadFile);
 	const quotes = new QuoteComments($("thread"), sendComment, () => composer.focus());
 	// Up from the composer's first line moves the cursor into the thread, as in Delta.
 	$("input").addEventListener("keydown", (event) => {
@@ -118,11 +127,9 @@ async function main(): Promise<void> {
 	};
 
 	const openFile = async (path: string, lines?: string) => {
-		const res = await fetch(`api/file?path=${encodeURIComponent(path)}`, { headers: { authorization: `Bearer ${token}` } }).catch(() => undefined);
-		if (!res?.ok) return toast(`Couldn't open ${path}`, "error");
-		const kind = kindOfPath(path);
-		const content = kind === "image" ? "" : await res.text();
-		panel.openFile({ key: `file:${path}`, kind, title: path, path, content, lang: path.split(".").pop(), source: "file", lines, hash: res.headers.get("x-hash") ?? undefined });
+		const file = await loadFile(path, lines);
+		if (file === undefined) return toast(`Couldn't open ${path}`, "error");
+		panel.openFile(file);
 	};
 	const threadView = new ThreadView($("thread"), $("scroller"), session, { onOpenArtifact: (a) => panel.open(a), onFork: fork, onOpenFile: (path, lines) => void openFile(path, lines), loadImage, onComment: sendComment });
 	const settings = new Settings(session, {
@@ -216,6 +223,7 @@ async function main(): Promise<void> {
 	session.on("session", () => {
 		const info = session.info!;
 		document.title = `${info.name} · syncpi`;
+		panel.setSession(info.id, info.name);
 		$("session-name").textContent = info.name;
 		settings.renderInfo();
 		updateStatus();
@@ -292,6 +300,7 @@ async function main(): Promise<void> {
 			"agent.branches": () => settings.open("branches"),
 			"agent.setup": () => show(showing === "setup" ? "main" : "setup"),
 			"view.changes": () => panel.toggle(),
+			"view.files": () => panel.toggleTree(),
 			"view.people": () => settings.open("people"),
 			"file.comment": () => commentOnSelection() || toast("Select lines in a file or diff (click or drag their numbers) to comment on them."),
 		},
