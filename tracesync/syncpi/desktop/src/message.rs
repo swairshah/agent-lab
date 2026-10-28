@@ -249,7 +249,7 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
                                 .child(if language.is_empty() {
                                     "Code".into()
                                 } else {
-                                    language
+                                    language.clone()
                                 })
                                 .child(
                                     gpui_component::button::Button::new(SharedString::from(
@@ -276,15 +276,15 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
                                 .overflow_x_scroll()
                                 .px_3()
                                 .py_3()
-                                .font_family("Menlo")
-                                .text_size(px(12.))
+                                .font_family(crate::theme::MONO)
+                                .text_size(px(12.5))
                                 .line_height(relative(1.6))
                                 .child(
                                     div()
                                         .min_w_full()
                                         .flex_shrink_0()
                                         .whitespace_nowrap()
-                                        .child(content),
+                                        .child(highlighted(&language, content, cx)),
                                 ),
                         ),
                 );
@@ -409,4 +409,30 @@ mod tests {
         );
         assert_eq!(parsed[2], Block::Prose("Finished.".into()));
     }
+}
+
+/// Code with syntax colors (tree-sitter, through gpui-component), kept per block and theme since a frame may draw it
+/// many times. Unknown languages stay plain.
+fn highlighted(language: &str, code: String, cx: &App) -> StyledText {
+    use std::collections::HashMap;
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    use std::sync::{Mutex, OnceLock};
+    type Styles = Vec<(std::ops::Range<usize>, HighlightStyle)>;
+    static CACHE: OnceLock<Mutex<HashMap<u64, Styles>>> = OnceLock::new();
+    let theme = &cx.theme().highlight_theme;
+    let mut hasher = DefaultHasher::new();
+    (language, &code, cx.theme().is_dark()).hash(&mut hasher);
+    let key = hasher.finish();
+    let styles = CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .entry(key)
+        .or_insert_with(|| {
+            let mut highlighter = gpui_component::highlighter::SyntaxHighlighter::new(&language.to_lowercase());
+            highlighter.update(None, &gpui_component::input::Rope::from_str(&code));
+            highlighter.styles(&(0..code.len()), theme)
+        })
+        .clone();
+    StyledText::new(code).with_highlights(styles)
 }
