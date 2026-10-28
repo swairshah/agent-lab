@@ -362,7 +362,7 @@ function totalCost(usage: { models: Record<string, { cost?: { total?: number } }
 /** A one-line description of a tool call, e.g. `bash  npm test` or `edit  src/app.ts`. */
 export function toolSummary(tool: Pick<ToolItem, "name" | "args">): string {
 	const a = tool.args as Record<string, unknown>;
-	if (tool.name === "record_browser" && typeof a.title === "string") return a.title;
+	if ((tool.name === "record_browser" || tool.name === "screenshot_browser") && typeof a.title === "string") return a.title;
 	const pick = a.command ?? a.path ?? a.file_path ?? a.url ?? a.pattern;
 	const detail = typeof pick === "string" ? pick : Object.keys(a).length > 0 ? JSON.stringify(a) : "";
 	return detail.replace(/\s+/g, " ").trim();
@@ -379,6 +379,11 @@ const GROUP_PHRASES: Record<string, [string, string]> = {
 	find: ["looked for files {n} time", "looked for files {n} times"],
 	grep: ["searched {n} time", "searched {n} times"],
 	bash: ["ran {n} command", "ran {n} commands"],
+	edit: ["made {n} edit", "made {n} edits"],
+	write: ["wrote {n} file", "wrote {n} files"],
+	remote_bash: ["ran {n} command on the VM", "ran {n} commands on the VM"],
+	record_browser: ["recorded {n} video", "recorded {n} videos"],
+	screenshot_browser: ["took {n} screenshot", "took {n} screenshots"],
 };
 
 /** "Listed 6 directories, read 5 files": what a run of quiet tool calls did, in the order they started. */

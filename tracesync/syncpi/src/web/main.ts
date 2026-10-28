@@ -30,6 +30,7 @@ import { avatarHtml, ThreadView } from "./thread-view.ts";
 import { applyZoom, dragWindow, SHELL_COMMANDS, shell } from "./shell-api.ts";
 import { Terminals } from "./terminal.ts";
 import { Inbox } from "./inbox.ts";
+import { ThreadMap } from "./thread-map.ts";
 import { mentionsOf } from "../shared/mentions.ts";
 import { Git } from "./git.ts";
 
@@ -142,6 +143,8 @@ async function main(): Promise<void> {
 		showing = conv;
 		$("setup-banner").hidden = conv !== "setup";
 		threadView.show(conv);
+		threadMap.enabled = conv === "main";
+		threadMap.update();
 		updateComposer();
 	};
 
@@ -170,6 +173,7 @@ async function main(): Promise<void> {
 		return recordings.get(name)!;
 	};
 	const threadView = new ThreadView($("thread"), $("scroller"), session, { onOpenArtifact: (a) => panel.open(a), onFork: fork, onOpenFile: (path, lines) => void openFile(path, lines), loadImage, loadRecording, onComment: sendComment, draftOwner: () => composer.owner, onJoinDraft: (owner) => composer.join(owner) });
+	const threadMap = new ThreadMap(session, $("scroller"), $("thread"));
 	const settings = new Settings(session, {
 		onTheme: (theme) => {
 			applyTheme(theme as Theme);
@@ -251,6 +255,7 @@ async function main(): Promise<void> {
 	}
 
 	session.on("drafts", () => threadView.renderTyping());
+	session.on("thread", () => threadMap.update());
 	session.on("thread", () => {
 		threadView.render();
 		panel.update();
@@ -310,6 +315,7 @@ async function main(): Promise<void> {
 
 	$("settings-open").addEventListener("click", () => settings.open());
 	$("panel-toggle").addEventListener("click", () => panel.toggle());
+	$("diff-chip").addEventListener("click", () => panel.showChanges());
 	$("share").addEventListener("click", () => session.send({ type: "invite" }));
 	$("stop").addEventListener("click", () => session.send({ type: "abort" }));
 	$("setup-back").addEventListener("click", () => show("main"));
@@ -352,10 +358,22 @@ async function main(): Promise<void> {
 	};
 	const inbox = app ? undefined : new Inbox({ load: inboxItems, open: (item) => reveal(item.key), many: false });
 	if (inbox) {
+		// The inbox button in the top bar, with how many are unread (the app has its own, in the sidebar).
+		const count = () => {
+			const unread = inbox.unread(inboxItems()).length;
+			$("inbox-count").textContent = unread > 0 ? String(unread) : "";
+			$("inbox-open").title = unread > 0 ? `Inbox: ${unread} unread (⇧⌘J)` : "Inbox (⇧⌘J)";
+		};
+		$("inbox-open").hidden = false;
+		$("inbox-open").addEventListener("click", () => inbox.toggle());
+		$("inbox").addEventListener("close", count);
+		$("inbox-read-all").addEventListener("click", count);
 		session.on("thread", () => {
 			for (const m of inbox.fresh(inboxItems())) toast(`${m.author} ${m.draft !== undefined ? "tagged you in a draft" : "mentioned you"}: ${m.text.split("\n")[0]!.slice(0, 90)}`);
 			inbox.update();
+			count();
 		});
+		session.on("session", count);
 	}
 	(window as Window & { syncpiReveal?: (key: string) => boolean }).syncpiReveal = reveal;
 

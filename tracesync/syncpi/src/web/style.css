@@ -178,6 +178,15 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .comment-more { color: var(--muted); font-size: 12px; padding: 2px 0 0 4.5em; font-family: var(--sans); }
 .comment-note { display: flex; align-items: flex-start; gap: 8px; border-left: 2px solid var(--accent); background: var(--raised); border-radius: 0 6px 6px 0; padding: 6px 10px; }
 .comment-note .avatar { width: 22px; height: 22px; font-size: 9px; }
+/* An answer to one of a message's comments: the comment, quoted small, then the answer under a reply arrow. */
+.comment-answer { margin: 12px 0; }
+.answer-to { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 10px; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); font-size: 13px; color: var(--ink-2); }
+.answer-to .avatar { width: 18px; height: 18px; font-size: 9px; flex: none; }
+.answer-to .file-link { flex: none; font-size: 12px; }
+.answer-quote { min-width: 0; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.answer-body { position: relative; margin: 6px 0 0 14px; padding-left: 18px; }
+.answer-body::before { content: "↳"; position: absolute; left: 0; top: 0; color: var(--faint); }
+.answer-body > :first-child { margin-top: 0; }
 .comment-text { font-size: 14.5px; white-space: pre-wrap; padding-top: 1px; }
 /* Line comments on a file or diff: a pill under the selection, then a box right under the lines. */
 .comment-pill-row { padding: 2px 0 4px 3.2em; font-family: var(--sans); }
@@ -388,7 +397,14 @@ mark.commented { background: color-mix(in srgb, var(--removed) 16%, transparent)
 .panel-browse span { font: 12px var(--mono); }
 .panel-list { max-height: 40%; overflow-y: auto; padding: 8px 8px 10px; border-bottom: 1px solid var(--rule); flex: none; }
 .panel-group { margin-bottom: 6px; }
-.panel-group-name { font-family: var(--mono); font-size: 12px; color: var(--ink); padding: 6px 8px 2px; overflow-wrap: anywhere; }
+.panel-group-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px 2px; }
+.panel-group-name { flex: 1; min-width: 0; font-family: var(--mono); font-size: 12px; color: var(--ink); overflow-wrap: anywhere; }
+.panel-group.seen .panel-group-name { color: var(--muted); }
+/* "Mark file as seen", as in Delta: a seen file folds away until it changes again. */
+.seen-toggle { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--muted); cursor: pointer; user-select: none; }
+.seen-toggle input { margin: 0; accent-color: var(--accent); }
+.git-file.seen .git-path { color: var(--muted); }
+.git-file-head .seen-toggle { margin-left: auto; }
 .panel-row { width: 100%; display: flex; align-items: center; gap: 8px; padding: 4px 8px 4px 16px; border: none; background: none; border-radius: 6px; cursor: pointer; text-align: left; font-size: 12.5px; color: var(--ink-2); }
 .panel-row:hover { background: var(--sunken); }
 .panel-row[aria-current="true"] { background: var(--accent-soft); color: var(--ink); }
@@ -632,6 +648,25 @@ html.window-controls .topbar { padding-left: 84px; }
 .mention { color: var(--accent); font-weight: 500; }
 .mention.me { background: var(--accent-soft); border-radius: 4px; padding: 0 2px; }
 .msg.flash { animation: flash 1.6s ease; }
+
+/* ---------- the scrollbar as a map of the thread (thread-map.ts) ---------- */
+
+html.thread-map-on .scroller { scrollbar-width: none; }
+html.thread-map-on .scroller::-webkit-scrollbar { display: none; }
+.thread-map { position: absolute; right: 2px; width: 14px; z-index: 3; cursor: pointer; touch-action: none; }
+.thread-map-view { position: absolute; left: 2px; right: 2px; border-radius: 3px; background: color-mix(in srgb, var(--ink) 8%, transparent); pointer-events: none; }
+.thread-map-mark { position: absolute; left: 0; right: 0; height: 9px; margin-top: -3px; padding: 0; border: none; background: none; cursor: pointer; }
+.thread-map-mark::before { content: ""; position: absolute; left: 3px; right: 3px; top: 3px; height: 3px; border-radius: 2px; background: var(--person); opacity: .75; transition: left .1s, right .1s; }
+.thread-map-mark:hover::before { left: 0; right: 0; opacity: 1; }
+.thread-map-mark.bookmarked::before { left: 0; right: 0; top: 2px; height: 5px; opacity: 1; box-shadow: 0 0 0 1.5px var(--paper), 0 0 0 2.5px var(--accent); }
+.thread-map-tip { position: absolute; right: 22px; width: min(300px, 70vw); z-index: 20; display: grid; gap: 5px; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow); font-size: 13px; cursor: pointer; }
+.thread-map-tip-head { display: flex; align-items: baseline; gap: 8px; }
+.thread-map-tip-head span { color: var(--faint); font-size: 12px; }
+.thread-map-tip-head .link { margin-left: auto; font-size: 12px; }
+.thread-map-tip-text { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.thread-map-tip-did { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
+.thread-map-tip-did .avatar, .thread-map-tip-did .model-avatar { width: 16px; height: 16px; flex: none; }
+@media (pointer: coarse) { .thread-map, .thread-map-tip { display: none; } html.thread-map-on .scroller { scrollbar-width: auto; } }
 @keyframes flash { 0%, 30% { background: var(--accent-soft); } 100% { background: transparent; } }
 #inbox-list:focus { outline: none; }
 .tool-more { display: block; margin: 0 0 4px; padding: 2px 0; border: none; background: none; color: var(--muted); font-size: 12.5px; cursor: pointer; }
@@ -662,4 +697,5 @@ html[data-desktop="true"] .statusbar { height: 30px; padding: 0 6px 0 16px; }
 /* A recording the agent made on the VM. */
 .recording { position: relative; margin: 6px 0 4px; }
 .recording video { display: block; width: 100%; max-width: 720px; border-radius: 8px; border: 1px solid var(--rule); background: #000; }
+.screenshot img { display: block; max-width: 100%; max-height: 520px; border-radius: 8px; border: 1px solid var(--rule); cursor: zoom-in; }
 .recording-download { display: inline-block; margin-top: 4px; font-size: 12.5px; color: var(--muted); }

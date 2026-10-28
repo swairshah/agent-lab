@@ -30,7 +30,22 @@ export type ThreadViewOptions = {
 	onJoinDraft: (owner: string) => void;
 };
 
-const TOOL_VERB: Record<string, string> = { bash: "Ran", edit: "Edited", write: "Wrote", read: "Read", remote_bash: "Ran on the VM", record_browser: "Recorded" };
+/** A reply split where it answers comments one by one (<reply to="n">…</reply>); one still being written runs to the
+ *  end, and a tag still arriving is left out. */
+function replySections(text: string): { to?: number; text: string }[] {
+	const clean = text.replace(/<\/?r(?:e(?:p(?:l(?:y[^>]*)?)?)?)?$/, "");
+	const out: { to?: number; text: string }[] = [];
+	let at = 0;
+	for (const match of clean.matchAll(/<reply to="(\d+)">([\s\S]*?)(?:<\/reply>|$)/g)) {
+		if (match.index > at) out.push({ text: clean.slice(at, match.index) });
+		out.push({ to: Number(match[1]), text: match[2]!.trim() });
+		at = match.index + match[0].length;
+	}
+	if (at < clean.length) out.push({ text: clean.slice(at) });
+	return out;
+}
+
+const TOOL_VERB: Record<string, string> = { bash: "Ran", edit: "Edited", write: "Wrote", read: "Read", remote_bash: "Ran on the VM", record_browser: "Recorded", screenshot_browser: "Screenshot" };
 
 export function avatarHtml(name: string): string {
 	return `<span class="avatar" style="--person:${personColor(name)}" title="${escapeHtml(name)}">${escapeHtml(initials(name))}</span>`;
@@ -244,7 +259,7 @@ export class ThreadView {
 			case "assistant":
 				// A turn that only called tools has nothing to show of its own.
 				if (!item.text && !item.thinking && !item.error && !item.streaming) return Object.assign(el("div"), { hidden: true });
-				return this.#agentRow(this.#assistant(item), item.model, item.streaming);
+				return this.#agentRow(this.#assistant(item, this.#askedBefore(items, index)), item.model, item.streaming);
 			case "tool":
 				return this.#agentRow(this.#tool(item), this.#modelBefore(items, index), false);
 			case "notice":
@@ -258,7 +273,7 @@ export class ThreadView {
 		if (body === null) return;
 		// The text nodes of the message, as one string with offsets back into them.
 		const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
-			acceptNode: (n) => (n.parentElement?.closest(".inline-comment, pre, .artifact, .viewer, .copy-code") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+			acceptNode: (n) => (n.parentElement?.closest(".inline-comment, pre, .artifact, .viewer, .copy-code, .answer-to") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
 		});
 		const nodes: { node: Text; start: number }[] = [];
 		let full = "";
@@ -377,7 +392,38 @@ export class ThreadView {
 		return node;
 	}
 
-	#assistant(item: Extract<Item, { kind: "assistant" }>): HTMLElement {
+	/** The comments of the message a reply answers, and who wrote them. */
+	#askedBefore(items: readonly Item[], index: number): { comments: LineComment[]; name: string } | undefined {
+		for (let i = index - 1; i >= 0; i--) {
+			const item = items[i]!;
+			if (item.kind !== "user") continue;
+			return item.comments?.length ? { comments: item.comments, name: this.#session.nameOf(item.memberId, item.author ?? "someone") } : undefined;
+		}
+		return undefined;
+	}
+
+	/** An answer to one comment: the comment it answers, quoted, then the answer, as in Delta. */
+	#answer(comment: LineComment | undefined, name: string, text: string): HTMLElement {
+		const box = el("div", "comment-answer");
+		if (comment !== undefined) {
+			const to = el("div", "answer-to");
+			to.innerHTML = avatarHtml(name);
+			if (comment.message === undefined) {
+				const where = el("button", "file-link", `${comment.path}:${comment.start === comment.end ? comment.start : `${comment.start}-${comment.end}`}`);
+				where.type = "button";
+				where.onclick = () => this.#options.onOpenFile(comment.path, `${comment.start}-${comment.end}`);
+				to.append(where);
+			}
+			to.append(el("span", "answer-quote", comment.text));
+			box.append(to);
+		}
+		const body = el("div", "answer-body");
+		body.innerHTML = renderMarkdown(text);
+		box.append(body);
+		return box;
+	}
+
+	#assistant(item: Extract<Item, { kind: "assistant" }>, asked?: { comments: LineComment[]; name: string }): HTMLElement {
 		const content = el("div");
 		if (item.thinking) {
 			const thinking = el("details", "fold thinking");
@@ -386,7 +432,14 @@ export class ThreadView {
 		}
 		if (item.text) {
 			const body = el("div", "msg-body prose");
-			body.innerHTML = renderMarkdown(item.text);
+			// A reply to several comments answers each under it (<reply to="n">); the rest reads as usual.
+			const sections = asked === undefined ? [] : replySections(item.text);
+			if (sections.some((s) => s.to !== undefined)) {
+				for (const section of sections) {
+					if (section.to !== undefined) body.append(this.#answer(asked!.comments[section.to - 1], asked!.name, section.text));
+					else if (section.text.trim()) body.insertAdjacentHTML("beforeend", renderMarkdown(section.text));
+				}
+			} else body.innerHTML = renderMarkdown(item.text);
 			this.#linkFileNames(body);
 			content.append(body);
 			if (!item.streaming) this.#upgradeCode(body, item.key, item.text);
@@ -464,6 +517,24 @@ export class ThreadView {
 		return content;
 	}
 
+	/** A screenshot from the VM, loaded like a recording; it opens full size in a new tab. */
+	#screenshot(path: string, title: string): HTMLElement {
+		const box = el("div", "recording screenshot");
+		box.contentEditable = "false";
+		const link = el("a");
+		link.target = "_blank";
+		const image = Object.assign(el("img"), { alt: title, title });
+		link.append(image);
+		box.append(link);
+		void this.#options.loadRecording(path.split("/").pop()!).then((url) => {
+			if (url) {
+				image.src = url;
+				link.href = url;
+			} else box.replaceChildren(el("div", "tool-note", "The screenshot isn't on the VM any more."));
+		});
+		return box;
+	}
+
 	/** A recording from the VM: loaded with this member's credentials (it isn't public), played inline. */
 	#video(path: string, poster?: string): HTMLElement {
 		const name = (p: string) => p.split("/").pop()!;
@@ -501,7 +572,13 @@ export class ThreadView {
 		}</summary>`;
 		const body = el("div", "tool-body");
 		const recording = item.name === "record_browser" ? (item.details as { video?: string; poster?: string; error?: string } | undefined) : undefined;
-		if (recording?.video) {
+		const shot = item.name === "screenshot_browser" ? (item.details as { image?: string; error?: string } | undefined) : undefined;
+		if (shot?.image) {
+			// A picture the agent took on the VM (and looked at), shown open.
+			body.append(this.#screenshot(shot.image, toolSummary(item)));
+			if (shot.error) body.append(el("div", "tool-note", `A step failed: ${shot.error}`));
+			node.open = true;
+		} else if (recording?.video) {
 			// A video the agent recorded on the VM, shown open: it's the point of the call.
 			body.append(this.#video(recording.video, recording.poster));
 			if (recording.error) body.append(el("div", "tool-note", `Stopped early: ${recording.error}`));

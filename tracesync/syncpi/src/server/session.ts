@@ -92,13 +92,13 @@ function checkComments(comments: unknown[]): LineComment[] {
 	});
 }
 
-/** How the model sees comments: each with the file, the lines and the excerpt it's about. */
+/** How the model sees comments: each numbered, with the file, the lines and the excerpt it's about. */
 function commentText(comments: LineComment[]): string {
 	return comments
-		.map((c) =>
+		.map((c, i) =>
 			c.message !== undefined
-				? `\n\n<comment on="an earlier message in this thread">\n<quote>\n${c.excerpt}\n</quote>\n${c.text}\n</comment>`
-				: `\n\n<comment file="${c.path}" lines="${c.start === c.end ? c.start : `${c.start}-${c.end}`}">\n<lines>\n${c.excerpt}\n</lines>\n${c.text}\n</comment>`,
+				? `\n\n<comment n="${i + 1}" on="an earlier message in this thread">\n<quote>\n${c.excerpt}\n</quote>\n${c.text}\n</comment>`
+				: `\n\n<comment n="${i + 1}" file="${c.path}" lines="${c.start === c.end ? c.start : `${c.start}-${c.end}`}">\n<lines>\n${c.excerpt}\n</lines>\n${c.text}\n</comment>`,
 		)
 		.join("");
 }
@@ -154,13 +154,16 @@ function installFaux(models: MutableModels): void {
 			const blocks = typeof last.content === "string" ? [{ type: "text", text: last.content }] : (last.content as { type: string; text?: string }[]);
 			const images = blocks.filter((b) => b.type === "image").length;
 			const text = blocks.map((b) => b.text ?? "").join("") + (images > 0 ? ` [${images} image${images === 1 ? "" : "s"}]` : "");
-			if (last.role === "toolResult") return fauxAssistantMessage("Done.");
+			if (last.role === "toolResult") return fauxAssistantMessage(images > 0 ? `Done. I see ${images} image${images === 1 ? "" : "s"}.` : "Done.");
 			if (text.includes("prepare this VM")) {
 				return fauxAssistantMessage([fauxToolCall("write", { path: ".syncpi/ENVIRONMENT.md", content: "# Environment\n\nfaux setup: nothing to install.\n" })], {
 					stopReason: "toolUse",
 				});
 			}
 			const body = text.replace(/^\[[^\]]+\]\s*/, "");
+			// Several comments: an answer under each.
+			const asked = [...body.matchAll(/<comment n="(\d+)"/g)].map((m) => m[1]!);
+			if (asked.length > 1) return fauxAssistantMessage(`(faux) On the whole: fine.\n${asked.map((n) => `<reply to="${n}">(faux) answer to comment ${n}</reply>`).join("\n")}`);
 			const write = body.match(/^write (\S+) ([\s\S]+)$/);
 			if (write) return fauxAssistantMessage([fauxToolCall("write", { path: write[1]!, content: write[2]! })], { stopReason: "toolUse" });
 			const edit = body.match(/^edit (\S+) ([\s\S]+?) => ([\s\S]+)$/);
@@ -176,6 +179,8 @@ function installFaux(models: MutableModels): void {
 					[fauxToolCall("record_browser", { title: "A quick look", url: record[1]!, steps: [{ action: "caption", text: "Looking around" }, { action: "scroll", y: 400 }, { action: "wait", ms: 500 }] })],
 					{ stopReason: "toolUse" },
 				);
+			const shot = body.match(/^shot (\S+)$/);
+			if (shot) return fauxAssistantMessage([fauxToolCall("screenshot_browser", { title: "The page", url: shot[1]! })], { stopReason: "toolUse" });
 			const remote = body.match(/^remote (.+)$/);
 			if (remote) return fauxAssistantMessage([fauxToolCall("remote_bash", { command: remote[1]! })], { stopReason: "toolUse" });
 			const run = body.match(/^run ([\s\S]+)$/);
@@ -731,9 +736,11 @@ Everyone has a synced copy of the project. Files you change show up in everyone'
 
 People read your replies as Markdown, in a terminal and in the web and desktop apps. Write <, > and & literally, not as HTML entities. Put file paths, commands and code names in backticks. A \`\`\`mermaid block is drawn as a diagram (flowchart, sequence, class, state, ER, gantt, pie, mindmap, timeline); quote labels that contain punctuation, leave HTML, colors, classDef and init directives out (diagrams take the app's colors), and prefer top-to-bottom layouts, since the column is narrow. An \`\`\`html or \`\`\`svg block shows as a live preview beside its code; use one for a small visual result, not for code people should read. When you mention a project file, link it so people can open it: [the cart](src/cart.ts), with lines when they matter: [calculateTotal](src/cart.ts#L12-L16). Tables render as tables. Use GitHub alerts (> [!WARNING]) only for something the reader has to act on now.
 
+People comment on lines of files and on parts of earlier messages; a comment comes in a message as <comment n="1" …>. When a message has two or more comments, answer each in its own section, <reply to="1">…</reply>, in order, so each answer is shown under its comment; anything about the message as a whole goes outside those sections, before or after them.
+
 Run long-lived processes (dev servers, watchers) in the background with output to a log file, for example \`nohup npm run dev > /tmp/dev.log 2>&1 &\`, and on the VM never on port 8000, which serves this session.
 
-Two tools always run on the session's VM, wherever your other tools are: remote_bash (deploying, hosting something for everyone, long jobs that must outlive someone's laptop) and record_browser (a real browser on the VM goes through steps while it's recorded, and the video appears in the thread). When someone asks you to show, demo or prove that something works in a UI, build or start it on the VM, then record it, with short captions saying what's happening. A request sent with /remote runs entirely on the VM. Keep answers short; people see your tool calls as they happen.`;
+Two tools always run on the session's VM, wherever your other tools are: remote_bash (deploying, hosting something for everyone, long jobs that must outlive someone's laptop), record_browser (a real browser on the VM goes through steps while it's recorded, and the video appears in the thread) and screenshot_browser (that browser takes a picture of a page, which you see and the thread shows). When someone asks you to show, demo or prove that something works in a UI, build or start it on the VM, then record it, with short captions saying what's happening. To check how a page you built looks, take a screenshot and look at it. A request sent with /remote runs entirely on the VM. Keep answers short; people see your tool calls as they happen.`;
 }
 
 function setupInstructions(name: string, workdir: string): string {

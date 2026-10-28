@@ -48,6 +48,9 @@ export class ArtifactPanel {
 	#active = CHANGES;
 	#tabsKey = "";
 	#busy = false;
+	/** Files marked seen, as in Delta: each file's path, with its newest change when it was marked. Kept here. */
+	#seen: Record<string, string> = {};
+	#seenKey = "";
 
 	constructor(session: SessionClient, loadImage: ImageLoader, onComment: CommentHandler, loadFile: FileLoader) {
 		this.#session = session;
@@ -57,6 +60,10 @@ export class ArtifactPanel {
 		$("panel-list").addEventListener("click", (event) => {
 			const key = (event.target as HTMLElement).closest<HTMLElement>("[data-artifact]")?.dataset.artifact;
 			if (key !== undefined) this.select(key);
+		});
+		$("panel-list").addEventListener("change", (event) => {
+			const box = event.target as HTMLInputElement;
+			if (box.dataset.seen !== undefined) this.#markSeen(box.dataset.seen, box.checked);
 		});
 		$("panel-close").addEventListener("click", () => this.toggle(false));
 		$("panel-browse").addEventListener("click", () => this.#browse(!this.#browsing));
@@ -125,6 +132,14 @@ export class ArtifactPanel {
 	/** The session's id and name are known: its open tabs come back, and the tree its open folders. */
 	setSession(id: string, name: string): void {
 		this.tree.setSession(id, name);
+		if (this.#seenKey !== `syncpi-seen:${id}`) {
+			this.#seenKey = `syncpi-seen:${id}`;
+			try {
+				this.#seen = JSON.parse(storage.get(this.#seenKey) ?? "{}") as Record<string, string>;
+			} catch {}
+			this.#renderList();
+			this.#renderTabs();
+		}
 		if (this.#tabsKey === `syncpi-tabs:${id}`) return;
 		this.#tabsKey = `syncpi-tabs:${id}`;
 		try {
@@ -134,6 +149,35 @@ export class ArtifactPanel {
 		} catch {}
 		this.#renderTabs();
 		if (this.#active !== CHANGES) this.#activate(this.#active);
+	}
+
+	/** Opens the panel on the list of the thread's changes. */
+	showChanges(): void {
+		this.#activate(CHANGES);
+		this.#browse(true);
+		this.toggle(true);
+	}
+
+	/** The newest change of each file the thread changed, by path. */
+	#newest(): Map<string, string> {
+		const out = new Map<string, string>();
+		for (const a of this.#artifacts) if (a.path !== undefined && a.source !== "reply") out.set(a.path, a.key);
+		return out;
+	}
+
+	/** Files changed since they were marked seen (or never marked). */
+	#unseen(): string[] {
+		return [...this.#newest()].filter(([path, key]) => this.#seen[path] !== key).map(([path]) => path);
+	}
+
+	/** Marks a file seen as it is now; a later change shows it again. */
+	#markSeen(path: string, seen: boolean): void {
+		const key = this.#newest().get(path);
+		if (seen && key !== undefined) this.#seen[path] = key;
+		else delete this.#seen[path];
+		if (this.#seenKey !== "") storage.set(this.#seenKey, JSON.stringify(this.#seen));
+		this.#renderList();
+		this.#renderTabs();
 	}
 
 	/** Shows an artifact large in the Changes tab, opening the panel. */
@@ -270,9 +314,10 @@ export class ArtifactPanel {
 	}
 
 	#renderTabs(): void {
-		const count = this.#artifacts.length;
+		// Files not yet seen.
+		const count = this.#unseen().length;
 		const html = [
-			`<div role="tab" tabindex="0" class="panel-tab" data-tab="${CHANGES}" aria-selected="${this.#active === CHANGES}"><span class="tab-label">Changes</span>${count > 0 ? `<span class="tab-count">${count}</span>` : ""}</div>`,
+			`<div role="tab" tabindex="0" class="panel-tab" data-tab="${CHANGES}" aria-selected="${this.#active === CHANGES}" title="${count} file${count === 1 ? "" : "s"} not marked seen"><span class="tab-label">Changes</span>${count > 0 ? `<span class="tab-count">${count}</span>` : ""}</div>`,
 		];
 		for (const tab of this.#tabs) {
 			const name = tab.path.slice(tab.path.lastIndexOf("/") + 1);
@@ -325,8 +370,8 @@ export class ArtifactPanel {
 		if (signature === this.#signature) return;
 		this.#signature = signature;
 		this.#artifacts = artifacts;
-		$("panel-count").textContent = artifacts.length === 0 ? "" : String(artifacts.length);
 		$("panel-browse-count").textContent = artifacts.length === 0 ? "" : String(artifacts.length);
+		this.#renderTotals();
 		this.#renderList();
 		this.#renderTabs();
 		this.#updateTree();
@@ -353,7 +398,25 @@ export class ArtifactPanel {
 		this.tree.update(files, changed);
 	}
 
-	/** Grouped by file, newest change first; snippets from replies at the end. */
+	/** "+N −M" in the status bar: every line the thread's changes added and removed (a new file's lines are added). */
+	#renderTotals(): void {
+		let added = 0;
+		let removed = 0;
+		for (const a of this.#artifacts) {
+			if (a.source === "edit") {
+				const stats = patchStats(a.content);
+				added += stats.added;
+				removed += stats.removed;
+			} else if (a.source === "write") added += a.content.split("\n").length - (a.content.endsWith("\n") ? 1 : 0);
+		}
+		const chip = $("diff-chip");
+		chip.hidden = added === 0 && removed === 0;
+		chip.innerHTML = `<span class="added">+${added}</span> <span class="removed">−${removed}</span>`;
+		const files = this.#newest().size;
+		chip.title = `This thread changed ${files} file${files === 1 ? "" : "s"}: ${added} lines added, ${removed} removed. Click to see the changes.`;
+	}
+
+	/** Grouped by file, newest change first; snippets from replies at the end. Files marked seen fold away. */
 	#renderList(): void {
 		const groups = new Map<string, Artifact[]>();
 		for (const artifact of [...this.#artifacts].reverse()) {
@@ -366,9 +429,23 @@ export class ArtifactPanel {
 			list.append(el("p", "panel-empty", "Changes the agent makes, files it writes, and HTML or SVG it produces show up here."));
 			return;
 		}
+		const newest = this.#newest();
 		for (const [group, artifacts] of groups) {
-			const section = el("div", "panel-group");
-			section.append(el("div", "panel-group-name", group));
+			const seen = newest.has(group) && this.#seen[group] === newest.get(group);
+			const section = el("div", `panel-group${seen ? " seen" : ""}`);
+			const head = el("div", "panel-group-head");
+			head.append(el("span", "panel-group-name", group));
+			if (newest.has(group)) {
+				const label = el("label", "seen-toggle");
+				label.title = seen ? "Seen; a new change shows it again" : "Mark file as seen";
+				label.innerHTML = `<input type="checkbox" data-seen="${escapeHtml(group)}"${seen ? " checked" : ""}>Seen`;
+				head.append(label);
+			}
+			section.append(head);
+			if (seen) {
+				list.append(section);
+				continue;
+			}
 			artifacts.forEach((artifact, n) => {
 				const row = el("button", "panel-row");
 				row.type = "button";

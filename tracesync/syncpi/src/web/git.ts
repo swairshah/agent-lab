@@ -1,8 +1,9 @@
 // The project's uncommitted changes in git, in the app (⇧⌘G): the files git sees as changed, their diffs, staging,
 // and a commit. The app's host runs git in the project's folder on this machine (src/desktop/host.ts, /git).
-// Comments on these diffs go to the thread like any other.
+// Comments on these diffs go to the thread like any other. A file can be marked seen, as in Delta: its diff folds
+// away until it changes again.
 import { type CommentHandler, renderDiff } from "./artifacts.ts";
-import { $, el, escapeHtml } from "./dom.ts";
+import { $, el, escapeHtml, storage } from "./dom.ts";
 
 type Status = { files: { status: string; path: string }[]; diff: string; staged: string; branch: string };
 
@@ -16,6 +17,13 @@ function patches(diff: string): Map<string, string> {
 	return out;
 }
 
+/** A short fingerprint of a patch, to tell when a file seen has changed since. */
+function fingerprint(text: string): string {
+	let hash = 5381;
+	for (let i = 0; i < text.length; i++) hash = ((hash << 5) + hash + text.charCodeAt(i)) | 0;
+	return `${text.length}:${hash >>> 0}`;
+}
+
 const STATUS: Record<string, string> = { M: "Modified", A: "Added", D: "Deleted", R: "Renamed", C: "Copied", "?": "Untracked", U: "Conflicted" };
 
 export class Git {
@@ -23,6 +31,7 @@ export class Git {
 	readonly #onComment: CommentHandler;
 	readonly #notify: (text: string, tone?: "info" | "error") => void;
 	readonly #root = $("git");
+	#last: Status | undefined;
 
 	constructor(thread: string, onComment: CommentHandler, notify: (text: string, tone?: "info" | "error") => void) {
 		this.#thread = thread;
@@ -67,7 +76,25 @@ export class Git {
 		$("git-files").replaceChildren(el("p", "muted git-empty", text));
 	}
 
+	#seen(): Record<string, string> {
+		try {
+			return JSON.parse(storage.get(`syncpi-git-seen:${this.#thread}`) ?? "{}") as Record<string, string>;
+		} catch {
+			return {};
+		}
+	}
+
+	#markSeen(path: string, patch: string, seen: boolean): void {
+		const all = this.#seen();
+		if (seen) all[path] = fingerprint(patch);
+		else delete all[path];
+		storage.set(`syncpi-git-seen:${this.#thread}`, JSON.stringify(all));
+		if (this.#last !== undefined) this.#render(this.#last);
+	}
+
 	#render(status: Status): void {
+		this.#last = status;
+		const seenAll = this.#seen();
 		$("git-branch").textContent = status.branch ? `on ${status.branch}` : "";
 		const list = $("git-files");
 		list.replaceChildren();
@@ -87,9 +114,16 @@ export class Git {
 				stage.addEventListener("click", () => void this.#post({ action: "stage", path: file.path }));
 				head.append(stage);
 			}
+			const patch = unstaged.get(file.path) ?? staged.get(file.path) ?? "";
+			const seen = seenAll[file.path] === fingerprint(`${file.status}${patch}`);
+			const label = el("label", "seen-toggle");
+			label.title = seen ? "Seen; a new change shows it again" : "Mark file as seen";
+			label.innerHTML = `<input type="checkbox"${seen ? " checked" : ""}>Seen`;
+			label.querySelector("input")!.addEventListener("change", (event) => this.#markSeen(file.path, `${file.status}${patch}`, (event.target as HTMLInputElement).checked));
+			head.insertBefore(label, head.querySelector(".git-staged, .git-stage"));
+			section.classList.toggle("seen", seen);
 			section.append(head);
-			const patch = unstaged.get(file.path) ?? staged.get(file.path);
-			if (patch) {
+			if (patch && !seen) {
 				const diff = el("div", "git-diff");
 				section.append(diff);
 				renderDiff(diff, patch, file.path, this.#onComment);
