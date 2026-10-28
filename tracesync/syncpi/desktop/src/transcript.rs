@@ -234,7 +234,17 @@ impl Desktop {
             .items_center();
         let mut previous_agent = false;
         let mut model_of_turn = text(&state, "model");
-        for item in &items {
+        for unit in display_units(&items) {
+            let item = match unit {
+                Unit::Group(tools) if tools.len() > 1 => {
+                    let element = self.group_row(&tools, previous_agent, &model_of_turn, &p, cx);
+                    thread = thread.child(element.mt(px(if previous_agent { 10. } else { 22. })));
+                    previous_agent = true;
+                    continue;
+                }
+                Unit::Group(tools) => tools[0],
+                Unit::Item(item) => item,
+            };
             let kind = text(item, "kind");
             let key = text(item, "key");
             let agent = kind == "assistant" || kind == "tool";
@@ -507,6 +517,14 @@ impl Desktop {
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> Div {
+        row(
+            (!previous_agent).then(|| avatar_model(model, p)),
+            self.tool_content(item, key, p, cx),
+        )
+    }
+
+    /// One tool call: a quiet line, opening to its diff, written file or output.
+    fn tool_content(&self, item: &Value, key: &str, p: &Palette, cx: &mut Context<Self>) -> Div {
         let tool = text(item, "name");
         let status = text(item, "status");
         let args = &item["args"];
@@ -637,6 +655,97 @@ impl Desktop {
             if let Some(body) = body {
                 content = content.child(div().pt_1().pb_1().child(body));
             }
+        }
+        content
+    }
+
+    /// A run of quiet tool calls as one line ("Ran 1 command, read 3 files"), opening to one line per call; file
+    /// names open the file. As in the web view and Delta.
+    fn group_row(
+        &self,
+        tools: &[&Value],
+        previous_agent: bool,
+        model: &str,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let key = format!("group:{}", text(tools[0], "key"));
+        let open = self.collapsed.contains(&key);
+        let running = tools
+            .iter()
+            .any(|t| matches!(text(t, "status").as_str(), "running" | "pending"));
+        let names: Vec<String> = tools.iter().map(|t| text(t, "name")).collect();
+        let k = key.clone();
+        let header = div()
+            .id(eid(key.clone()))
+            .flex()
+            .items_center()
+            .gap_2()
+            .h(px(24.))
+            .text_size(px(15.))
+            .text_color(p.ink_2)
+            .cursor_pointer()
+            .child(group_summary(&names))
+            .when(running, |d| {
+                d.child(
+                    Icon::new(IconName::LoaderCircle)
+                        .size_3()
+                        .text_color(p.warn),
+                )
+            })
+            .child(
+                Icon::new(if open {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                })
+                .size_3()
+                .text_color(p.faint),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if !this.collapsed.remove(&k) {
+                    this.collapsed.insert(k.clone());
+                }
+                cx.notify();
+            }));
+        let mut content = div().flex().flex_col().child(header);
+        if open {
+            let mut list = div().flex().flex_col().gap(px(2.)).pt_1();
+            for tool in tools {
+                let name = text(tool, "name");
+                if name == "bash" {
+                    list = list.child(self.tool_content(tool, &text(tool, "key"), p, cx));
+                    continue;
+                }
+                let path = tool["args"]["path"].as_str().unwrap_or("").to_owned();
+                let verb = if name == "read" { "Read" } else { "Looked at" };
+                let target = path.clone();
+                list = list.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .h(px(24.))
+                        .text_size(px(15.))
+                        .text_color(p.muted)
+                        .child(verb)
+                        .child(
+                            div()
+                                .id(eid(format!("open-{}", text(tool, "key"))))
+                                .font_family(MONO)
+                                .text_size(px(12.5))
+                                .text_color(p.ink_2)
+                                .underline()
+                                .cursor_pointer()
+                                .hover(|s| s.text_color(p.accent))
+                                .child(path)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.open_file(target.clone(), cx)
+                                })),
+                        ),
+                );
+            }
+            content = content.child(list);
         }
         row((!previous_agent).then(|| avatar_model(model, p)), content)
     }
@@ -920,4 +1029,87 @@ pub(crate) fn file_diffs(id: &str, diff: &str, p: &Palette) -> Vec<Div> {
                 .child(diff_view(format!("{id}-{n}"), &patch, p))
         })
         .collect()
+}
+
+/// Tools that only look around; a run of them shows as one line. Matches isQuietTool() in src/shared/thread.ts.
+fn is_quiet(item: &Value) -> bool {
+    item["kind"] == "tool"
+        && ["read", "ls", "find", "grep", "bash"].contains(&text(item, "name").as_str())
+        && item["status"] != "error"
+}
+
+/// "Ran 1 command, read 3 files": what a run of quiet calls did. Matches toolGroupSummary() in src/shared/thread.ts.
+fn group_summary(names: &[String]) -> String {
+    let mut counts: Vec<(&str, usize)> = vec![];
+    for name in names {
+        match counts.iter_mut().find(|(n, _)| n == name) {
+            Some((_, c)) => *c += 1,
+            None => counts.push((name, 1)),
+        }
+    }
+    let text = counts
+        .iter()
+        .map(|(name, n)| {
+            let (one, many) = match *name {
+                "ls" => ("directory", "directories"),
+                "read" | "find" => ("file", "files"),
+                "grep" => ("time", "times"),
+                "bash" => ("command", "commands"),
+                _ => ("time", "times"),
+            };
+            let verb = match *name {
+                "ls" => "listed",
+                "read" => "read",
+                "find" => "looked for files",
+                "grep" => "searched",
+                "bash" => "ran",
+                other => other,
+            };
+            if *name == "find" {
+                format!("{verb} {n} {}", if *n == 1 { "time" } else { "times" })
+            } else {
+                format!("{verb} {n} {}", if *n == 1 { one } else { many })
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().collect::<String>() + chars.as_str())
+        .unwrap_or_default()
+}
+
+enum Unit<'a> {
+    Item(&'a Value),
+    Group(Vec<&'a Value>),
+}
+
+/// The thread's rows: each item on its own, except a run of quiet tool calls (and the empty tool-only turns between
+/// them), which becomes one group. As displayUnits() in src/web/thread-view.ts.
+fn display_units(items: &[Value]) -> Vec<Unit<'_>> {
+    let mut units: Vec<Unit> = vec![];
+    let silent = |i: &Value| {
+        i["kind"] == "assistant"
+            && text(i, "text").is_empty()
+            && text(i, "thinking").is_empty()
+            && text(i, "error").is_empty()
+            && !flag(i, "streaming")
+    };
+    let mut in_group = false;
+    for item in items {
+        if is_quiet(item) {
+            match units.last_mut() {
+                Some(Unit::Group(tools)) if in_group => tools.push(item),
+                _ => units.push(Unit::Group(vec![item])),
+            }
+            in_group = true;
+        } else if in_group && silent(item) {
+            continue;
+        } else {
+            in_group = false;
+            units.push(Unit::Item(item));
+        }
+    }
+    units
 }
