@@ -22,6 +22,8 @@ export type Artifact = {
 	source: "edit" | "write" | "reply" | "file";
 	/** Lines to show selected, "12-16", when a project file is opened from a citation. */
 	lines?: string;
+	/** For a project file: the content hash it was read at, so a save can refuse to overwrite someone else's change. */
+	hash?: string;
 };
 
 const EXTENSION_KIND: Record<string, ArtifactKind> = {

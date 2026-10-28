@@ -66,6 +66,28 @@ async function main(): Promise<void> {
 	};
 	const panel = new ArtifactPanel(session, loadImage, sendComment);
 	const dialogs = new Dialogs(session);
+	// Saving a file edited in the panel, refused if it changed since it was opened (compare-and-swap on its hash).
+	panel.onSave = async (path, text, base) => {
+		if (session.role === "viewer") {
+			toast("Viewers can't change files.", "error");
+			return undefined;
+		}
+		const res = await fetch(`api/file?path=${encodeURIComponent(path)}&base=${encodeURIComponent(base)}`, {
+			method: "PUT",
+			headers: { authorization: `Bearer ${token}` },
+			body: text,
+		}).catch(() => undefined);
+		if (res?.status === 409) {
+			toast(`${path} changed since you opened it. Reopen it to see the change, then edit again.`, "error");
+			return undefined;
+		}
+		if (!res?.ok) {
+			toast(`Couldn't save ${path}.`, "error");
+			return undefined;
+		}
+		toast(`Saved ${path}; it syncs to everyone's copy.`);
+		return ((await res.json()) as { hash: string }).hash;
+	};
 
 	let showing: "main" | "setup" = "main";
 		const setWhere = (next: Where) => {
@@ -90,7 +112,7 @@ async function main(): Promise<void> {
 		if (!res?.ok) return toast(`Couldn't open ${path}`, "error");
 		const kind = kindOfPath(path);
 		const content = kind === "image" ? "" : await res.text();
-		panel.openFile({ key: `file:${path}`, kind, title: path, path, content, lang: path.split(".").pop(), source: "file", lines });
+		panel.openFile({ key: `file:${path}`, kind, title: path, path, content, lang: path.split(".").pop(), source: "file", lines, hash: res.headers.get("x-hash") ?? undefined });
 	};
 	const threadView = new ThreadView($("thread"), $("scroller"), session, { onOpenArtifact: (a) => panel.open(a), onFork: fork, onOpenFile: (path, lines) => void openFile(path, lines), loadImage, onComment: sendComment });
 	const settings = new Settings(session, {

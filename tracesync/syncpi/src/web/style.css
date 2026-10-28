@@ -255,6 +255,12 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .artifact-tabs { display: flex; gap: 2px; background: var(--sunken); border-radius: 6px; padding: 2px; flex: none; }
 .artifact-tabs .tab { border: none; background: none; font-size: 12px; padding: 2px 9px; border-radius: 4px; cursor: pointer; color: var(--muted); }
 .artifact-tabs .tab[aria-selected="true"] { background: var(--raised); color: var(--ink); box-shadow: 0 1px 2px rgb(0 0 0 / .08); }
+.artifact-body.editing { display: flex; flex-direction: column; }
+.file-editor { flex: 1; min-height: 420px; width: 100%; border: none; border-radius: 0; resize: none; padding: 12px 14px; font: 12.5px/1.6 var(--mono); tab-size: 2; background: var(--raised); box-shadow: none; }
+.file-editor:focus { box-shadow: none; }
+.file-editor-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--rule); font-size: 12px; }
+.file-editor-bar .muted { flex: 1; }
+.file-editor-bar .button { padding: 3px 12px; font-size: 12.5px; }
 .artifact-hint { font-size: 11.5px; color: var(--faint); white-space: nowrap; flex: none; }
 @container (max-width: 520px) { .artifact-hint { display: none; } }
 .artifact-head { container-type: inline-size; }

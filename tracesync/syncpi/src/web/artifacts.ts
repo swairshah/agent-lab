@@ -287,6 +287,8 @@ export type CardOptions = {
 	loadImage: ImageLoader;
 	/** Lets lines of a project file be commented on. */
 	onComment?: CommentHandler;
+	/** Saves an edited project file; resolves to its new hash, or undefined when it couldn't be saved. */
+	onSave?: (path: string, text: string, base: string) => Promise<string | undefined>;
 };
 
 /** A card for one artifact: a header with its name and kind, tabs where it has several views, and the view. */
@@ -303,6 +305,57 @@ export function artifactCard(artifact: Artifact, options: CardOptions): HTMLElem
 		head.append(el("span", "artifact-hint", "Select line numbers to comment"));
 	}
 	const tabBar = el("div", "artifact-tabs");
+	// A project file can be edited and saved, as on the desktop. The save is refused if the file changed meanwhile.
+	if (options.onSave !== undefined && artifact.source === "file" && artifact.path !== undefined && artifact.kind !== "image") {
+		const editButton = el("button", "artifact-open", "Edit");
+		editButton.type = "button";
+		editButton.onclick = () => {
+			const area = el("textarea", "file-editor");
+			area.value = artifact.content;
+			area.spellcheck = false;
+			const save = el("button", "button primary", "Save");
+			save.type = "button";
+			const cancel = el("button", "text-button", "Cancel");
+			cancel.type = "button";
+			const bar = el("div", "file-editor-bar");
+			bar.append(el("span", "muted", "⌘S to save, Esc to cancel"), cancel, save);
+			const done = () => {
+				body.classList.remove("editing");
+				editButton.hidden = false;
+				select(tabs.includes("code") ? "code" : tabs[0]!);
+			};
+			const doSave = async () => {
+				save.disabled = true;
+				const hash = await options.onSave!(artifact.path!, area.value, artifact.hash ?? "none");
+				save.disabled = false;
+				if (hash === undefined) return;
+				artifact.content = area.value;
+				artifact.hash = hash;
+				done();
+			};
+			save.onclick = () => void doSave();
+			cancel.onclick = done;
+			area.addEventListener("keydown", (event) => {
+				if ((event.metaKey || event.ctrlKey) && event.key === "s") {
+					event.preventDefault();
+					void doSave();
+				} else if (event.key === "Escape") {
+					event.preventDefault();
+					done();
+				} else if (event.key === "Tab") {
+					// A tab in the file, not a jump to the next button.
+					event.preventDefault();
+					area.setRangeText("\t", area.selectionStart, area.selectionEnd, "end");
+				}
+			});
+			disposeWithin(body);
+			body.classList.add("editing");
+			body.replaceChildren(area, bar);
+			editButton.hidden = true;
+			area.focus();
+		};
+		head.append(editButton);
+	}
 	tabBar.setAttribute("role", "tablist");
 	const body = el("div", "artifact-body");
 	const select = (view: (typeof tabs)[number]) => {

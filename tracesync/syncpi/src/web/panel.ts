@@ -9,6 +9,8 @@ export class ArtifactPanel {
 	readonly #session: SessionClient;
 	readonly #loadImage: ImageLoader;
 	readonly #onComment: CommentHandler;
+	/** Saves an edited project file (see CardOptions.onSave). */
+	onSave: ((path: string, text: string, base: string) => Promise<string | undefined>) | undefined;
 	#artifacts: Artifact[] = [];
 	/** Project files opened by hand (Go to file), listed with the thread's artifacts. */
 	#files: Artifact[] = [];
@@ -62,7 +64,7 @@ export class ArtifactPanel {
 		for (const row of $("panel-list").querySelectorAll<HTMLElement>("[data-artifact]")) row.setAttribute("aria-current", String(row.dataset.artifact === key));
 		const view = $("panel-view");
 		disposeWithin(view);
-		view.replaceChildren(artifactCard(artifact, { size: "panel", loadImage: this.#loadImage, onComment: this.#onComment }));
+		view.replaceChildren(artifactCard(artifact, { size: "panel", loadImage: this.#loadImage, onComment: this.#onComment, onSave: this.onSave }));
 	}
 
 	/** Renders the selected artifact again, e.g. after a theme change. */
