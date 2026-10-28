@@ -1,0 +1,596 @@
+// The terminal view of a session: the shared thread, who is here, the setup agent's progress and sync activity, and
+// an editor to talk to the agent. It renders the same Thread state as the web view.
+import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import {
+	CombinedAutocompleteProvider,
+	type Component,
+	Editor,
+	type EditorTheme,
+	Markdown,
+	type MarkdownTheme,
+	matchesKey,
+	ProcessTerminal,
+	type TUI,
+	TuiMainScreen,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
+import { type ConvName, type EnvStatus, type InviteInfo, type Member, type Presence, ROLES, type Role, type ServerMessage, type SessionInfo } from "../shared/protocol.ts";
+import { type Item, Thread, toolSummary } from "../shared/thread.ts";
+import type { Connection, ConnectionState } from "./client.ts";
+import type { SessionRecord } from "./store.ts";
+import type { LocalDevice } from "./device.ts";
+import type { Mirror } from "./sync.ts";
+
+// ---------- colors ----------
+
+const esc = (code: string) => (s: string) => `\x1b[${code}m${s}\x1b[0m`;
+const c = {
+	dim: esc("2"),
+	bold: esc("1"),
+	italic: esc("3"),
+	underline: esc("4"),
+	strike: esc("9"),
+	red: esc("31"),
+	green: esc("32"),
+	yellow: esc("33"),
+	blue: esc("34"),
+	magenta: esc("35"),
+	cyan: esc("36"),
+	gray: esc("90"),
+	accent: esc("38;5;110"),
+};
+const PEOPLE = [esc("38;5;180"), esc("38;5;150"), esc("38;5;175"), esc("38;5;117"), esc("38;5;216"), esc("38;5;146")];
+function personColor(name: string): (s: string) => string {
+	let h = 0;
+	for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+	return PEOPLE[h % PEOPLE.length]!;
+}
+
+const markdownTheme: MarkdownTheme = {
+	heading: (t) => c.bold(c.accent(t)),
+	link: c.cyan,
+	linkUrl: c.gray,
+	code: c.yellow,
+	codeBlock: (t) => t,
+	codeBlockBorder: c.gray,
+	quote: c.italic,
+	quoteBorder: c.gray,
+	hr: c.gray,
+	listBullet: c.accent,
+	bold: c.bold,
+	italic: c.italic,
+	strikethrough: c.strike,
+	underline: c.underline,
+};
+
+const editorTheme: EditorTheme = {
+	borderColor: c.gray,
+	selectList: { selectedPrefix: c.accent, selectedText: c.accent, description: c.gray, scrollInfo: c.gray, noMatch: c.gray },
+};
+
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+// ---------- the transcript ----------
+
+/** Renders a Thread's items, caching each one by its revision and the width. */
+class ThreadView implements Component {
+	thread: Thread;
+	me = "";
+	/** Current names by member id, so a renamed person shows under their new name everywhere. */
+	names = new Map<string, string>();
+	#cache = new Map<string, { rev: number; width: number; lines: string[] }>();
+	#markdown = new Map<string, Markdown>();
+	frame = 0;
+
+	constructor(thread: Thread) {
+		this.thread = thread;
+	}
+
+	invalidate(): void {
+		this.#cache.clear();
+	}
+
+	render(width: number): string[] {
+		const out: string[] = [];
+		for (const item of this.thread.state.items) {
+			const animated = item.kind === "tool" && item.status === "running";
+			const cached = this.#cache.get(item.key);
+			let lines: string[];
+			if (!animated && cached !== undefined && cached.rev === item.rev && cached.width === width) lines = cached.lines;
+			else {
+				lines = this.#item(item, width);
+				if (!animated) this.#cache.set(item.key, { rev: item.rev, width, lines });
+			}
+			out.push(...lines);
+		}
+		return out;
+	}
+
+	#item(item: Item, width: number): string[] {
+		switch (item.kind) {
+			case "user": {
+				const name = (item.memberId !== undefined ? this.names.get(item.memberId) : undefined) ?? item.author ?? "someone";
+				const color = personColor(name);
+				const head = `${color("▍")} ${c.bold(color(name))}`;
+				const body = wrapTextWithAnsi(item.text, Math.max(10, width - 2)).map((l) => `${color("▍")} ${l}`);
+				return ["", head, ...body];
+			}
+			case "assistant": {
+				// A reply that only calls tools shows as its tool lines.
+				if (!item.text && !item.thinking && !item.error) return [];
+				const lines: string[] = [""];
+				if (item.thinking && !item.text) lines.push(c.gray(c.italic(truncateToWidth(`thinking… ${item.thinking.replace(/\s+/g, " ").slice(-200)}`, width))));
+				if (item.text) {
+					let md = this.#markdown.get(item.key);
+					if (md === undefined) {
+						md = new Markdown(item.text, 0, 0, markdownTheme);
+						this.#markdown.set(item.key, md);
+					} else md.setText(item.text);
+					lines.push(...md.render(width));
+				}
+				if (item.error) lines.push(c.red(`✗ ${item.error}`));
+				return lines;
+			}
+			case "tool": {
+				const icon =
+					item.status === "running"
+						? c.yellow(SPINNER[this.frame % SPINNER.length]!)
+						: item.status === "error"
+							? c.red("✗")
+							: item.status === "done"
+								? c.green("✓")
+								: c.gray("○");
+				const summary = toolSummary(item);
+				const head = `${icon} ${c.bold(item.name)} ${c.gray(truncateToWidth(summary, Math.max(10, width - visibleWidth(item.name) - 4)))}`;
+				const showOutput = item.status === "running" || item.status === "error" || item.name === "bash";
+				const tail = showOutput ? item.output.trimEnd().split("\n").filter((l) => l.length > 0) : [];
+				const keep = item.status === "done" ? 3 : 8;
+				const shown = tail.slice(-keep).map((l) => c.gray(`  │ ${truncateToWidth(l.replace(/\t/g, "  "), Math.max(10, width - 4))}`));
+				if (tail.length > keep) shown.unshift(c.gray(`  │ … ${tail.length - keep} more lines`));
+				return [head, ...shown];
+			}
+			case "notice":
+				return ["", c.gray(c.italic(`  — ${item.text}`))];
+		}
+	}
+}
+
+class Lines implements Component {
+	lines: string[] = [];
+	invalidate(): void {}
+	render(width: number): string[] {
+		return this.lines.map((l) => truncateToWidth(l, width));
+	}
+}
+
+// ---------- the app ----------
+
+const COMMANDS = [
+	{ name: "invite", description: "Invite someone: an email (they sign in with exe.dev), or a link anyone can use", argumentHint: "[email] [admin|editor|viewer] [7d|never] [--uses N]" },
+	{ name: "session-share", description: "Create a link others can open in a browser or with syncpi --url" },
+	{ name: "members", description: "People in this session, their roles, who is online" },
+	{ name: "role", description: "Change someone's role (admins)", argumentHint: "<name|email> <admin|editor|viewer>" },
+	{ name: "remove", description: "Remove someone from the session (admins)", argumentHint: "<name|email>" },
+	{ name: "links", description: "Invites that still work (admins)" },
+	{ name: "revoke", description: "Revoke an invite (admins)", argumentHint: "<code>" },
+	{ name: "name", description: "Change your name", argumentHint: "<new name>" },
+	{ name: "web", description: "Open this session in your browser" },
+	{ name: "env", description: "Show or hide the setup agent's thread" },
+	{ name: "steer", description: "Send a message that joins the agent's current run", argumentHint: "<message>" },
+	{ name: "stop", description: "Stop the agent (also Esc)" },
+	{ name: "sync", description: "File sync status" },
+	{ name: "where", description: "Run your requests here (your machine) or on the session VM", argumentHint: "here|vm" },
+	{ name: "ssh", description: "How to get a shell on the VM" },
+	{ name: "quit", description: "Leave; the session keeps running" },
+];
+
+export class App {
+	readonly #tui: TUI;
+	readonly #conn: Connection;
+	readonly #record: SessionRecord;
+	readonly #mirror: Mirror | undefined;
+	readonly #device: LocalDevice | undefined;
+	/** Where requests sent from this terminal run. */
+	#where: "device" | "vm";
+	/** Where the shared thread's current run executes, as the server reports it. */
+	#target = "";
+	#localTools = 0;
+	readonly #threads: Record<ConvName, Thread> = { main: new Thread(), setup: new Thread() };
+	readonly #view: ThreadView;
+	readonly #header = new Lines();
+	readonly #notes = new Lines();
+	readonly #status = new Lines();
+	readonly #editor: Editor;
+	#showing: ConvName = "main";
+	#session: SessionInfo | undefined;
+	#me: Member | undefined;
+	#online: Presence[] = [];
+	#members: Member[] = [];
+	#env: EnvStatus = { status: "pending" };
+	#connState: ConnectionState = "connecting";
+	/** While the session's server is being created: what is happening, or why it failed. */
+	#setup: { step?: string; error?: string } | undefined = { step: "starting" };
+	#connDetail: string | undefined;
+	#frame = 0;
+	#notesTimer: NodeJS.Timeout | undefined;
+	#spinner: NodeJS.Timeout | undefined;
+	#done: () => void = () => {};
+
+	constructor(record: SessionRecord, conn: Connection, mirror: Mirror | undefined, device: LocalDevice | undefined) {
+		this.#record = record;
+		this.#conn = conn;
+		this.#mirror = mirror;
+		this.#device = device;
+		this.#where = device === undefined ? "vm" : "device";
+		if (device !== undefined) {
+			device.onActivity = (running) => {
+				this.#localTools = running;
+				this.#refresh();
+			};
+		}
+		this.#tui = new TuiMainScreen(new ProcessTerminal());
+		this.#view = new ThreadView(this.#threads.main);
+		this.#editor = new Editor(this.#tui, editorTheme, { paddingX: 1 });
+		this.#editor.setAutocompleteProvider(new CombinedAutocompleteProvider(COMMANDS, mirror?.dir ?? process.cwd()));
+		this.#editor.onSubmit = (text) => this.#submit(text);
+		this.#tui.addChild(this.#header);
+		this.#tui.addChild(this.#view);
+		this.#tui.addChild(this.#notes);
+		this.#tui.addChild(this.#status);
+		this.#tui.addChild(this.#editor);
+		this.#tui.setFocus(this.#editor);
+		this.#tui.addInputListener((data) => this.#key(data));
+	}
+
+	run(): Promise<void> {
+		this.#conn.onMessage = (message) => this.#onMessage(message);
+		this.#conn.onState = (state, detail) => {
+			if (state === "closed") this.#device?.disconnected();
+			this.#connState = state;
+			this.#connDetail = detail;
+			this.#refresh();
+		};
+		if (this.#mirror !== undefined) {
+			this.#mirror.onEvent = (event) => {
+				if (event.type === "conflict") this.#note(c.yellow(`⚠ ${event.path} changed on both sides; kept yours, theirs is in ${event.saved}`), 20_000);
+				else if (event.type === "error") this.#note(c.red(`sync: ${event.message}`), 8_000);
+				this.#refresh();
+			};
+		}
+		this.#spinner = setInterval(() => {
+			const busy = this.#setup !== undefined || this.#threads[this.#showing].state.busy || this.#threads[this.#showing].state.items.some((i) => i.kind === "tool" && i.status === "running");
+			if (!busy) return;
+			this.#frame++;
+			this.#view.frame = this.#frame;
+			this.#refresh();
+		}, 120);
+		this.#tui.start();
+		this.#refresh();
+		return new Promise((resolve) => (this.#done = resolve));
+	}
+
+	/** Progress of the server's creation; undefined once it is up (the caller then starts the connection). */
+	setup(state: { step?: string; error?: string } | undefined): void {
+		this.#setup = state;
+		this.#refresh();
+	}
+
+	stop(): void {
+		if (this.#spinner !== undefined) clearInterval(this.#spinner);
+		this.#tui.stop();
+		this.#done();
+	}
+
+	#key(data: string): { consume: boolean } | undefined {
+		if (matchesKey(data, "ctrl+c") || matchesKey(data, "ctrl+d")) {
+			if (this.#editor.getText().length > 0 && matchesKey(data, "ctrl+c")) {
+				this.#editor.setText("");
+				return { consume: true };
+			}
+			this.stop();
+			return { consume: true };
+		}
+		if (matchesKey(data, "escape") && !this.#editor.isShowingAutocomplete()) {
+			if (this.#showing === "setup") {
+				this.#show("main");
+				return { consume: true };
+			}
+			if (this.#threads.main.state.busy) {
+				this.#conn.send({ type: "abort" });
+				this.#note(c.gray("stopping the agent…"), 3_000);
+				return { consume: true };
+			}
+		}
+		return undefined;
+	}
+
+	#onMessage(message: ServerMessage): void {
+		if (this.#device?.handle(message)) return;
+		switch (message.type) {
+			case "target":
+				this.#target = message.label;
+				break;
+			case "welcome":
+				this.#session = message.session;
+				this.#me = message.me;
+				this.#setMembers(message.members);
+				break;
+			case "events":
+				this.#threads[message.conv].apply(message.events);
+				break;
+			case "presence":
+				this.#online = message.online;
+				this.#setMembers(message.members);
+				break;
+			case "env":
+				this.#env = message.env;
+				break;
+			case "files":
+				this.#mirror?.remoteChanged(message.full === true, message.changed, message.version);
+				break;
+			case "invite":
+				this.#shareLink(message.url, message.invite);
+				break;
+			case "invites":
+				this.#showInvites(message.invites);
+				break;
+			case "removed":
+				this.#note(c.red("you were removed from this session; your local copy stays where it is"), 600_000);
+				break;
+			case "notice":
+				this.#note(message.text, 8_000);
+				break;
+			case "error":
+				this.#note(c.red(`error: ${message.message}`), 10_000);
+				break;
+			case "pong":
+				break;
+		}
+		this.#refresh();
+	}
+
+	#submit(raw: string): void {
+		const text = raw.trim();
+		if (text.length === 0) return;
+		this.#editor.addToHistory(text);
+		if (text.startsWith("/")) return this.#command(text);
+		if (this.#me?.role === "viewer") return this.#note(c.gray("you're a viewer in this session; an admin can make you an editor"), 6_000);
+		if (this.#showing === "setup") this.#show("main");
+		this.#conn.send({ type: "submit", requestId: randomUUID(), text, mode: "followUp", where: this.#where });
+	}
+
+	#command(text: string): void {
+		const [name = "", ...rest] = text.slice(1).split(" ");
+		const arg = rest.join(" ").trim();
+		switch (name) {
+			case "session-share":
+			case "share":
+			case "invite": {
+				const parsed = parseInvite(name === "invite" ? arg : "");
+				if (typeof parsed === "string") return this.#note(c.gray(parsed), 6_000);
+				this.#conn.send({ type: "invite", ...parsed });
+				this.#note(c.gray(parsed.email ? `inviting ${parsed.email}…` : "creating a link…"), 5_000);
+				return;
+			}
+			case "links":
+				this.#conn.send({ type: "invites" });
+				return;
+			case "revoke":
+				if (arg.length === 0) return this.#note(c.gray("usage: /revoke <code> (see /links)"), 4_000);
+				this.#conn.send({ type: "revoke", code: arg });
+				return;
+			case "name":
+				if (arg.length === 0) return this.#note(c.gray("usage: /name <new name>"), 4_000);
+				this.#conn.send({ type: "rename", name: arg });
+				return;
+			case "role": {
+				const parts = arg.split(/\s+/);
+				const role = parts.pop() as Role;
+				const target = this.#findMember(parts.join(" "));
+				if (!ROLES.includes(role) || target === undefined) return this.#note(c.gray("usage: /role <name|email> <admin|editor|viewer> (see /members)"), 5_000);
+				this.#conn.send({ type: "setRole", memberId: target.id, role });
+				return;
+			}
+			case "remove": {
+				const target = this.#findMember(arg);
+				if (target === undefined) return this.#note(c.gray("usage: /remove <name|email> (see /members)"), 5_000);
+				this.#conn.send({ type: "remove", memberId: target.id });
+				return;
+			}
+			case "web": {
+				if (this.#setup !== undefined) return this.#note(c.gray("the web view is available once the session is up"), 4_000);
+				const url = `${this.#record.url}/#token=${this.#record.token}`;
+				openUrl(url);
+				this.#note(`opened the web view ${c.gray(`(${this.#record.url})`)}`, 6_000);
+				return;
+			}
+			case "env":
+				this.#show(this.#showing === "main" ? "setup" : "main");
+				return;
+			case "who":
+			case "members": {
+				const online = new Set(this.#online.map((p) => p.memberId));
+				const lines = this.#members.map((m) => {
+					const where = this.#online.filter((p) => p.memberId === m.id).map((p) => p.client);
+					const role = m.creator ? "admin, created the session" : m.role;
+					return `  ${online.has(m.id) ? c.green("●") : c.gray("○")} ${personColor(m.name)(m.name)}${m.email ? c.gray(` <${m.email}>`) : ""} ${c.gray(role)}${m.id === this.#me?.id ? c.gray(" (you)") : ""}${where.length ? c.gray(` · ${[...new Set(where)].join(", ")}`) : ""}`;
+				});
+				this.#note([c.bold("people"), ...lines].join("\n"), 20_000);
+				return;
+			}
+			case "steer":
+				if (arg.length === 0) return this.#note(c.gray("usage: /steer <message>"), 4_000);
+				this.#conn.send({ type: "submit", requestId: randomUUID(), text: arg, mode: "steer", where: this.#where });
+				return;
+			case "stop":
+				this.#conn.send({ type: "abort" });
+				return;
+			case "where": {
+				if (arg === "vm") this.#where = "vm";
+				else if (arg === "here" || arg === "local") {
+					if (this.#device === undefined) return this.#note(c.gray("file sync is off (--no-sync), so requests can only run on the VM"), 5_000);
+					this.#where = "device";
+				} else if (arg.length > 0) return this.#note(c.gray("usage: /where here|vm"), 4_000);
+				this.#note(`your requests run ${this.#where === "device" ? "on this machine, in " + (this.#mirror?.dir ?? "") : "on the session VM"}`, 6_000);
+				return;
+			}
+			case "sync": {
+				const m = this.#mirror;
+				if (m === undefined) return this.#note("file sync is off", 5_000);
+				const conflicts = m.conflicts.length > 0 ? `\n  conflicts: ${m.conflicts.join(", ")}` : "";
+				this.#note(`sync ${m.dir}\n  pulled ${m.pulled}, pushed ${m.pushed}, pending ${m.pending}${conflicts}`, 12_000);
+				return;
+			}
+			case "ssh":
+				if (this.#record.vm === undefined) return this.#note("this session does not run on an exe.dev VM", 5_000);
+				this.#note(this.#record.role === "owner" ? `ssh ${this.#record.vm}.exe.xyz   (project in ${this.#session?.workdir ?? "~"})` : "only the owner has shell access to the VM", 12_000);
+				return;
+			case "quit":
+			case "exit":
+				this.stop();
+				return;
+			default:
+				this.#note(c.gray(`unknown command /${name}`), 4_000);
+		}
+	}
+
+	#setMembers(members: Member[]): void {
+		this.#members = members;
+		const mine = members.find((m) => m.id === this.#me?.id);
+		if (mine !== undefined) this.#me = mine;
+		if (this.#mirror !== undefined) this.#mirror.readOnly = this.#me?.role === "viewer";
+		const names = new Map(members.map((m) => [m.id, m.name]));
+		if ([...names].some(([id, n]) => this.#view.names.get(id) !== n)) {
+			this.#view.names = names;
+			this.#view.invalidate();
+		}
+		this.#view.me = this.#me?.name ?? "";
+	}
+
+	/** A member by name, email or id prefix, for /role and /remove. */
+	#findMember(query: string): Member | undefined {
+		const q = query.trim().toLowerCase();
+		if (q.length === 0) return undefined;
+		const exact = this.#members.filter((m) => m.name.toLowerCase() === q || m.email === q || m.id === q);
+		if (exact.length === 1) return exact[0];
+		const prefix = this.#members.filter((m) => m.name.toLowerCase().startsWith(q));
+		return prefix.length === 1 ? prefix[0] : undefined;
+	}
+
+	#shareLink(url: string, invite: InviteInfo): void {
+		copy(url);
+		const expires = invite.expiresAt === undefined ? "never expires" : `expires ${new Date(invite.expiresAt).toLocaleDateString()}`;
+		const who = invite.email ? `only ${invite.email}, after signing in with exe.dev` : `anyone with the link${invite.maxUses ? `, ${invite.maxUses} use${invite.maxUses > 1 ? "s" : ""}` : ""}`;
+		this.#note(
+			[
+				`${c.bold(invite.email ? `invite for ${invite.email}` : "invite link")} ${c.gray(`(copied) · joins as ${invite.role} · ${who} · ${expires}`)}`,
+				`  ${c.cyan(url)}`,
+				c.gray("  opens in a browser, or join from a terminal with:"),
+				`  syncpi --url ${url}`,
+			].join("\n"),
+			60_000,
+		);
+	}
+
+	#showInvites(invites: InviteInfo[]): void {
+		if (invites.length === 0) return this.#note(c.gray("no active invites"), 6_000);
+		const lines = invites.map((i) => {
+			const expires = i.expiresAt === undefined ? "no expiry" : `until ${new Date(i.expiresAt).toLocaleDateString()}`;
+			return `  ${c.bold(i.code.slice(0, 6))}  ${i.email ?? "link"} ${c.gray(`· ${i.role} · used ${i.uses}${i.maxUses ? `/${i.maxUses}` : ""} · ${expires}`)}`;
+		});
+		this.#note([c.bold("invites"), ...lines, c.gray("  /revoke <code> stops one")].join("\n"), 30_000);
+	}
+
+	#show(conv: ConvName): void {
+		this.#showing = conv;
+		this.#view.thread = this.#threads[conv];
+		this.#view.invalidate();
+		this.#refresh();
+	}
+
+	#note(text: string, ms: number): void {
+		this.#notes.lines = text.split("\n");
+		if (this.#notesTimer !== undefined) clearTimeout(this.#notesTimer);
+		this.#notesTimer = setTimeout(() => {
+			this.#notes.lines = [];
+			this.#refresh();
+		}, ms);
+		this.#refresh();
+	}
+
+	#refresh(): void {
+		const s = this.#session;
+		const name = s?.name ?? this.#record.name;
+		const people = [...new Map(this.#online.map((p) => [p.memberId, p])).values()].map((p) => personColor(p.name)(`● ${p.name}`)).join(" ");
+		const waiting = this.#setup !== undefined ? c.gray("the session is being created; type away, messages are sent once it is up") : c.gray("connecting…");
+		const title = this.#showing === "setup" ? c.yellow(" · setup agent (Esc to go back)") : "";
+		const me = this.#me === undefined ? "" : c.gray(` · you: ${this.#me.name}, ${this.#me.role}`);
+		this.#header.lines = [`${c.bold(c.accent("syncpi"))} ${c.bold(name)} ${c.gray(this.#record.url)}${me}${title}`, people || waiting];
+
+		const thread = this.#threads[this.#showing].state;
+		const parts: string[] = [];
+		if (this.#setup?.error !== undefined) parts.push(c.red(`setup failed: ${this.#setup.error}`));
+		else if (this.#setup !== undefined) {
+			const queued = this.#conn.queued;
+			parts.push(c.yellow(`${SPINNER[this.#frame % SPINNER.length]} setting up: ${this.#setup.step}${queued > 0 ? ` · ${queued} message${queued > 1 ? "s" : ""} waiting` : ""}`));
+		} else if (this.#connState !== "open") parts.push(c.yellow(`${this.#connState}${this.#connDetail ? ` (${this.#connDetail})` : ""}`));
+		if (thread.retry) parts.push(c.yellow(`retrying: ${thread.retry}`));
+		else if (thread.busy) parts.push(c.accent(`${SPINNER[this.#frame % SPINNER.length]} working${this.#showing === "main" ? " · Esc to stop" : ""}`));
+		if (thread.queued > 0) parts.push(`${thread.queued} queued`);
+		if (this.#setup === undefined) parts.push(envLabel(this.#env));
+		if (this.#mirror !== undefined) parts.push(c.gray(`sync ↓${this.#mirror.pulled} ↑${this.#mirror.pushed}${this.#mirror.conflicts.length ? c.yellow(` ⚠${this.#mirror.conflicts.length}`) : ""}`));
+		if (this.#setup === undefined) {
+			parts.push(c.gray(`yours run ${this.#where === "device" ? "here" : "on the VM"}`));
+			if (thread.busy && this.#target) parts.push(this.#localTools > 0 ? c.accent(`tools on this machine`) : c.gray(`tools on ${this.#target}`));
+		}
+		if (thread.cost > 0) parts.push(c.gray(`$${thread.cost.toFixed(2)}`));
+		if (thread.model) parts.push(c.gray(thread.model));
+		this.#status.lines = ["", parts.join(c.gray(" · "))];
+		this.#tui.requestRender();
+	}
+}
+
+/** `/invite [email] [role] [7d|12h|never] [--uses N] [--link]`: everything optional; no email makes a link. */
+export function parseInvite(arg: string): { email?: string; role?: Role; expiresInDays?: number; maxUses?: number } | string {
+	const out: { email?: string; role?: Role; expiresInDays?: number; maxUses?: number } = {};
+	const words = arg.split(/\s+/).filter((w) => w.length > 0);
+	for (let i = 0; i < words.length; i++) {
+		const w = words[i]!;
+		if (w === "--link" || w === "link") continue;
+		if (w.includes("@")) out.email = w;
+		else if (ROLES.includes(w as Role)) out.role = w as Role;
+		else if (/^\d+d$/.test(w)) out.expiresInDays = Number(w.slice(0, -1));
+		else if (/^\d+h$/.test(w)) out.expiresInDays = Number(w.slice(0, -1)) / 24;
+		else if (w === "never") out.expiresInDays = 0;
+		else if (w === "--uses" && /^\d+$/.test(words[i + 1] ?? "")) out.maxUses = Number(words[++i]);
+		else return `don't understand "${w}"; usage: /invite [email] [admin|editor|viewer] [7d|12h|never] [--uses N]`;
+	}
+	return out;
+}
+
+function envLabel(env: EnvStatus): string {
+	switch (env.status) {
+		case "ready":
+			return c.green("env ready");
+		case "failed":
+			return c.red("env setup failed (/env)");
+		case "running":
+			return c.yellow(`env: ${env.activity ? truncateToWidth(env.activity, 40) : "setting up"} (/env)`);
+		default:
+			return c.gray("env: pending");
+	}
+}
+
+function openUrl(url: string): void {
+	const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+	execFile(cmd, [url], () => {});
+}
+
+function copy(text: string): void {
+	if (process.platform !== "darwin") return;
+	const child = execFile("pbcopy", () => {});
+	child.stdin?.end(text);
+}
