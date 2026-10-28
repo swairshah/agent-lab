@@ -421,7 +421,8 @@ window.syncpiShell = {
 	},
 	titled(id: string, title: string) {
 		const t = catalog.sessions.find((s) => s.id === id);
-		if (t && !t.title?.trim()) void decorate(id, { title });
+		// A new thread is named after its first message.
+		if (t && (!t.title?.trim() || t.title === "New thread")) void decorate(id, { title });
 	},
 	openUrl,
 	toast,
