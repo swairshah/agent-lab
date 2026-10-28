@@ -6,7 +6,10 @@ use crate::{Desktop, array, eid, flag, icons, label, message, text};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::{
-    Disableable,Icon, IconName, Sizable, button::{Button, ButtonVariants}, input::Input};
+    Disableable, Icon, IconName, Sizable,
+    button::{Button, ButtonVariants},
+    input::Input,
+};
 use serde_json::{Value, json};
 
 const MEASURE: f32 = 760.;
@@ -44,7 +47,9 @@ fn avatar_model(model: &str, p: &Palette) -> Div {
         Some((_, path)) => base.child(svg().path(path).size(px(16.)).text_color(p.ink)),
         None => {
             let id = model.split_once('/').map_or(model, |(_, id)| id);
-            base.font_family(MONO).text_size(px(11.)).child(id.chars().next().unwrap_or('?').to_uppercase().to_string())
+            base.font_family(MONO)
+                .text_size(px(11.))
+                .child(id.chars().next().unwrap_or('?').to_uppercase().to_string())
         }
     }
 }
@@ -90,10 +95,23 @@ pub(crate) fn diff_view(id: String, patch: &str, p: &Palette) -> Stateful<Div> {
         if let Some(header) = line.strip_prefix("@@") {
             // @@ -a,b +c,d @@
             let mut numbers = header.split_whitespace();
-            old = numbers.next().and_then(|n| n.trim_start_matches('-').split(',').next()?.parse().ok()).unwrap_or(1);
-            new = numbers.next().and_then(|n| n.trim_start_matches('+').split(',').next()?.parse().ok()).unwrap_or(1);
+            old = numbers
+                .next()
+                .and_then(|n| n.trim_start_matches('-').split(',').next()?.parse().ok())
+                .unwrap_or(1);
+            new = numbers
+                .next()
+                .and_then(|n| n.trim_start_matches('+').split(',').next()?.parse().ok())
+                .unwrap_or(1);
             if hunks > 0 {
-                lines = lines.child(div().h(px(18.)).pl(px(82.)).bg(p.sunken).text_color(p.faint).child("⋯"));
+                lines = lines.child(
+                    div()
+                        .h(px(18.))
+                        .pl(px(82.))
+                        .bg(p.sunken)
+                        .text_color(p.faint)
+                        .child("⋯"),
+                );
             }
             hunks += 1;
             continue;
@@ -102,19 +120,42 @@ pub(crate) fn diff_view(id: String, patch: &str, p: &Palette) -> Stateful<Div> {
         let (bg, fg, left, right) = match mark {
             "+" => {
                 new += 1;
-                (p.added.opacity(0.12), p.ink, String::new(), (new - 1).to_string())
+                (
+                    p.added.opacity(0.12),
+                    p.ink,
+                    String::new(),
+                    (new - 1).to_string(),
+                )
             }
             "-" => {
                 old += 1;
-                (p.removed.opacity(0.12), p.ink, (old - 1).to_string(), String::new())
+                (
+                    p.removed.opacity(0.12),
+                    p.ink,
+                    (old - 1).to_string(),
+                    String::new(),
+                )
             }
             _ => {
                 old += 1;
                 new += 1;
-                (transparent_black(), p.ink_2, (old - 1).to_string(), (new - 1).to_string())
+                (
+                    transparent_black(),
+                    p.ink_2,
+                    (old - 1).to_string(),
+                    (new - 1).to_string(),
+                )
             }
         };
-        let gutter = |n: String| div().w(px(34.)).flex_shrink_0().text_right().pr_2().text_color(p.faint).child(n);
+        let gutter = |n: String| {
+            div()
+                .w(px(34.))
+                .flex_shrink_0()
+                .text_right()
+                .pr_2()
+                .text_color(p.faint)
+                .child(n)
+        };
         lines = lines.child(
             div()
                 .flex()
@@ -122,7 +163,19 @@ pub(crate) fn diff_view(id: String, patch: &str, p: &Palette) -> Stateful<Div> {
                 .text_color(fg)
                 .child(gutter(left))
                 .child(gutter(right))
-                .child(div().w(px(14.)).flex_shrink_0().text_color(if mark == "+" { p.added } else if mark == "-" { p.removed } else { p.faint }).child(mark.to_owned()))
+                .child(
+                    div()
+                        .w(px(14.))
+                        .flex_shrink_0()
+                        .text_color(if mark == "+" {
+                            p.added
+                        } else if mark == "-" {
+                            p.removed
+                        } else {
+                            p.faint
+                        })
+                        .child(mark.to_owned()),
+                )
                 .child(div().whitespace_nowrap().pr_4().child(body.to_owned())),
         );
     }
@@ -190,7 +243,9 @@ impl Desktop {
             }
             let element = match kind.as_str() {
                 "user" => Some(self.user_row(item, &key, &p, window, cx).mt(px(22.))),
-                "assistant" => self.assistant_row(item, &key, previous_agent, &model_of_turn, &p, window, cx),
+                "assistant" => {
+                    self.assistant_row(item, &key, previous_agent, &model_of_turn, &p, window, cx)
+                }
                 "tool" => Some(self.tool_row(item, &key, previous_agent, &model_of_turn, &p, cx)),
                 "notice" => Some(
                     div()
@@ -211,7 +266,13 @@ impl Desktop {
             };
             if let Some(element) = element {
                 // Consecutive agent rows sit closer together under one avatar.
-                thread = thread.child(if agent && previous_agent { element.mt(px(10.)) } else if agent { element.mt(px(22.)) } else { element });
+                thread = thread.child(if agent && previous_agent {
+                    element.mt(px(10.))
+                } else if agent {
+                    element.mt(px(22.))
+                } else {
+                    element
+                });
                 previous_agent = agent;
             }
         }
@@ -240,10 +301,16 @@ impl Desktop {
                         .text_size(px(12.5))
                         .text_color(p.ink_2)
                         .child("The setup agent's thread: it prepares the environment.")
-                        .child(Button::new("setup-back").ghost().xsmall().label("Back to the conversation").on_click(cx.listener(|this, _, _, cx| {
-                            this.showing = "main".into();
-                            cx.notify();
-                        }))),
+                        .child(
+                            Button::new("setup-back")
+                                .ghost()
+                                .xsmall()
+                                .label("Back to the conversation")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.showing = "main".into();
+                                    cx.notify();
+                                })),
+                        ),
                 )
             })
             .child(thread)
@@ -251,7 +318,14 @@ impl Desktop {
             .into_any_element()
     }
 
-    fn user_row(&self, item: &Value, key: &str, p: &Palette, _window: &mut Window, cx: &mut Context<Self>) -> Div {
+    fn user_row(
+        &self,
+        item: &Value,
+        key: &str,
+        p: &Palette,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let id = text(item, "memberId");
         let name = array(&self.native, "members")
             .iter()
@@ -260,16 +334,23 @@ impl Desktop {
             .unwrap_or_else(|| text(item, "author"));
         let body = text(item, "text");
         let color = theme::person_color(&name);
-        let fork = (self.role() == "admin" && self.showing == "main" && key.chars().all(|c| c.is_ascii_digit())).then(|| {
+        let fork = (self.role() == "admin"
+            && self.showing == "main"
+            && key.chars().all(|c| c.is_ascii_digit()))
+        .then(|| {
             let before = key.to_owned();
             let draft = body.clone();
-            Button::new(eid(format!("fork-{key}"))).ghost().xsmall().label("Edit & fork").on_click(cx.listener(move |this, _, window, cx| {
-                this.send(json!({"type":"fork","before":before}));
-                this.composer.update(cx, |s, cx| {
-                    s.set_value(draft.clone(), window, cx);
-                    s.focus(window, cx);
-                });
-            }))
+            Button::new(eid(format!("fork-{key}")))
+                .ghost()
+                .xsmall()
+                .label("Edit & fork")
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.send(json!({"type":"fork","before":before}));
+                    this.composer.update(cx, |s, cx| {
+                        s.set_value(draft.clone(), window, cx);
+                        s.focus(window, cx);
+                    });
+                }))
         });
         let attachments = array(item, "attachments");
         let group = SharedString::from(format!("message-{key}"));
@@ -285,37 +366,68 @@ impl Desktop {
                         .gap_2()
                         .h(px(20.))
                         .text_size(px(12.))
-                        .child(div().font_weight(FontWeight::SEMIBOLD).text_color(color).child(name))
+                        .child(
+                            div()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(color)
+                                .child(name),
+                        )
                         .child(div().flex_1())
                         // Shown while the pointer is over the message, as on the web.
-                        .children(fork.map(|b| div().invisible().group_hover(group.clone(), |s| s.visible()).child(b))),
+                        .children(fork.map(|b| {
+                            div()
+                                .invisible()
+                                .group_hover(group.clone(), |s| s.visible())
+                                .child(b)
+                        })),
                 )
-                .when(!body.is_empty(), |d| d.child(div().text_size(px(15.)).line_height(px(24.)).text_color(p.ink).child(body)))
-                .when(!attachments.is_empty(), |d| {
-                    d.child(div().flex().flex_wrap().gap_2().mt_2().children(attachments.iter().map(|a| {
+                .when(!body.is_empty(), |d| {
+                    d.child(
                         div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .px_2()
-                            .py(px(3.))
-                            .rounded(px(6.))
-                            .border_1()
-                            .border_color(p.rule)
-                            .bg(p.surface)
-                            .font_family(MONO)
-                            .text_size(px(12.))
-                            .text_color(p.ink_2)
-                            .when(text(a, "kind") == "image", |d| d.child(Icon::new(IconName::Frame).size_3()))
-                            .child(text(a, "name"))
-                    })))
+                            .text_size(px(15.))
+                            .line_height(px(24.))
+                            .text_color(p.ink)
+                            .child(body),
+                    )
+                })
+                .when(!attachments.is_empty(), |d| {
+                    d.child(div().flex().flex_wrap().gap_2().mt_2().children(
+                        attachments.iter().map(|a| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .px_2()
+                                .py(px(3.))
+                                .rounded(px(6.))
+                                .border_1()
+                                .border_color(p.rule)
+                                .bg(p.surface)
+                                .font_family(MONO)
+                                .text_size(px(12.))
+                                .text_color(p.ink_2)
+                                .when(text(a, "kind") == "image", |d| {
+                                    d.child(Icon::new(IconName::Frame).size_3())
+                                })
+                                .child(text(a, "name"))
+                        }),
+                    ))
                 }),
         )
         .group(group)
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn assistant_row(&self, item: &Value, key: &str, previous_agent: bool, model: &str, p: &Palette, window: &mut Window, cx: &mut Context<Self>) -> Option<Div> {
+    fn assistant_row(
+        &self,
+        item: &Value,
+        key: &str,
+        previous_agent: bool,
+        model: &str,
+        p: &Palette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
         let body = text(item, "text");
         let thinking = text(item, "thinking");
         let error = text(item, "error");
@@ -338,8 +450,20 @@ impl Desktop {
                     .text_color(p.muted)
                     .cursor_pointer()
                     .hover(|s| s.text_color(p.ink_2))
-                    .child(if streaming && body.is_empty() { "Thinking…" } else { "Thinking" })
-                    .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).size_3().text_color(p.faint))
+                    .child(if streaming && body.is_empty() {
+                        "Thinking…"
+                    } else {
+                        "Thinking"
+                    })
+                    .child(
+                        Icon::new(if open {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        })
+                        .size_3()
+                        .text_color(p.faint),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !this.thinking.remove(&k) {
                             this.thinking.insert(k.clone());
@@ -361,19 +485,35 @@ impl Desktop {
             }
         }
         if !body.is_empty() {
-            content = content.child(div().text_size(px(15.)).line_height(px(25.)).child(message::render(&format!("assistant-{key}"), &body, window, cx)));
+            content = content.child(div().text_size(px(15.)).line_height(px(25.)).child(
+                message::render(&format!("assistant-{key}"), &body, window, cx),
+            ));
         }
         if !error.is_empty() {
             content = content.child(label(error).text_size(px(13.)).text_color(p.removed));
         }
-        Some(row((!previous_agent).then(|| avatar_model(model, p)), content))
+        Some(row(
+            (!previous_agent).then(|| avatar_model(model, p)),
+            content,
+        ))
     }
 
-    fn tool_row(&self, item: &Value, key: &str, previous_agent: bool, model: &str, p: &Palette, cx: &mut Context<Self>) -> Div {
+    fn tool_row(
+        &self,
+        item: &Value,
+        key: &str,
+        previous_agent: bool,
+        model: &str,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let tool = text(item, "name");
         let status = text(item, "status");
         let args = &item["args"];
-        let detail = ["command", "path", "file_path", "url", "pattern"].iter().find_map(|k| args[*k].as_str()).unwrap_or("");
+        let detail = ["command", "path", "file_path", "url", "pattern"]
+            .iter()
+            .find_map(|k| args[*k].as_str())
+            .unwrap_or("");
         let summary = detail.split_whitespace().collect::<Vec<_>>().join(" ");
         let patch = item["details"]["patch"].as_str().unwrap_or("").to_owned();
         let stats = (!patch.is_empty()).then(|| patch_stats(&patch));
@@ -391,9 +531,32 @@ impl Desktop {
             .h(px(24.))
             .text_size(px(15.))
             .cursor_pointer()
-            .child(div().flex_shrink_0().text_color(if status == "error" { p.removed } else { p.ink_2 }).child(verb(&tool).to_owned()))
-            .when(status == "running" || status == "pending", |d| d.child(Icon::new(IconName::LoaderCircle).size_3().text_color(p.warn)))
-            .child(div().min_w_0().truncate().font_family(MONO).text_size(px(12.5)).text_color(p.muted).child(summary))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_color(if status == "error" {
+                        p.removed
+                    } else {
+                        p.ink_2
+                    })
+                    .child(verb(&tool).to_owned()),
+            )
+            .when(status == "running" || status == "pending", |d| {
+                d.child(
+                    Icon::new(IconName::LoaderCircle)
+                        .size_3()
+                        .text_color(p.warn),
+                )
+            })
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .font_family(MONO)
+                    .text_size(px(12.5))
+                    .text_color(p.muted)
+                    .child(summary),
+            )
             .when_some(stats, |d, (added, removed)| {
                 d.child(
                     div()
@@ -406,7 +569,16 @@ impl Desktop {
                         .child(div().text_color(p.removed).child(format!("−{removed}"))),
                 )
             })
-            .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).size_3().flex_shrink_0().text_color(p.faint))
+            .child(
+                Icon::new(if open {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                })
+                .size_3()
+                .flex_shrink_0()
+                .text_color(p.faint),
+            )
             .on_click(cx.listener(move |this, _, _, cx| {
                 if !this.collapsed.remove(&k) {
                     this.collapsed.insert(k.clone());
@@ -436,7 +608,14 @@ impl Desktop {
                         .into_any_element(),
                 )
             } else if !output.trim().is_empty() {
-                let tail: String = output.chars().rev().take(20_000).collect::<Vec<_>>().into_iter().rev().collect();
+                let tail: String = output
+                    .chars()
+                    .rev()
+                    .take(20_000)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
                 Some(
                     div()
                         .id(eid(format!("output-{key}")))
@@ -465,8 +644,16 @@ impl Desktop {
     /// The next row of the thread: your avatar and a plain place to type. Enter starts a new line; ⌘↩ sends.
     fn composer_row(&self, _p: &Palette, _cx: &mut Context<Self>) -> Div {
         let name = text(&self.native["me"], "name");
-        row(Some(avatar_person(&name)), Input::new(&self.composer).appearance(false).px_0().py(px(2.)).w_full().text_size(px(15.)))
-            .mt(px(26.))
+        row(
+            Some(avatar_person(&name)),
+            Input::new(&self.composer)
+                .appearance(false)
+                .px_0()
+                .py(px(2.))
+                .w_full()
+                .text_size(px(15.)),
+        )
+        .mt(px(26.))
     }
 
     fn status_bar(&self, state: &Value, p: &Palette, cx: &mut Context<Self>) -> Div {
@@ -516,7 +703,11 @@ impl Desktop {
                     Button::new("where")
                         .ghost()
                         .xsmall()
-                        .label(if self.where_vm { "Runs on the session VM" } else { "Runs on this Mac" })
+                        .label(if self.where_vm {
+                            "Runs on the session VM"
+                        } else {
+                            "Runs on this Mac"
+                        })
                         .tooltip("Where your requests run")
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.where_vm = !this.where_vm;
@@ -526,34 +717,74 @@ impl Desktop {
             })
             .when(branches > 1, |d| {
                 d.child(
-                    Button::new("branch-chip").ghost().xsmall().icon(icons::icon("git-branch")).label(branch).on_click(cx.listener(|this, _, window, cx| this.open_modal("branches", window, cx))),
+                    Button::new("branch-chip")
+                        .ghost()
+                        .xsmall()
+                        .icon(icons::icon("git-branch"))
+                        .label(branch)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_modal("branches", window, cx)
+                        })),
                 )
             })
+            .child(div().px_1().child(format!(
+                "↑{} ↓{} {}",
+                sync["pushed"].as_u64().unwrap_or(0),
+                sync["pulled"].as_u64().unwrap_or(0),
+                if conflicts {
+                    "conflicts saved"
+                } else {
+                    "synced"
+                }
+            )))
             .child(
-                div().px_1().child(format!(
-                    "↑{} ↓{} {}",
-                    sync["pushed"].as_u64().unwrap_or(0),
-                    sync["pulled"].as_u64().unwrap_or(0),
-                    if conflicts { "conflicts saved" } else { "synced" }
-                )),
+                Button::new("setup-chip")
+                    .ghost()
+                    .xsmall()
+                    .label("Setup agent")
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.run_action("setup", window, cx)),
+                    ),
             )
-            .child(Button::new("setup-chip").ghost().xsmall().label("Setup agent").on_click(cx.listener(|this, _, window, cx| this.run_action("setup", window, cx))))
             .child(div().flex_1())
-            .when(busy || compacting, |d| d.child(Icon::new(IconName::LoaderCircle).size_3().text_color(p.muted)))
+            .when(busy || compacting, |d| {
+                d.child(
+                    Icon::new(IconName::LoaderCircle)
+                        .size_3()
+                        .text_color(p.muted),
+                )
+            })
             .child(div().px_1().child(activity.join(" · ")))
             .when(busy && editor && self.showing == "main", |d| {
-                d.child(Button::new("stop").ghost().xsmall().label("Stop").tooltip("Stop the agent (Esc)").on_click(cx.listener(|this, _, _, _| this.send(json!({"type":"abort"})))))
+                d.child(
+                    Button::new("stop")
+                        .ghost()
+                        .xsmall()
+                        .label("Stop")
+                        .tooltip("Stop the agent (Esc)")
+                        .on_click(cx.listener(|this, _, _, _| this.send(json!({"type":"abort"})))),
+                )
             })
-            .when(cost > 0., |d| d.child(div().px_1().child(format!("${cost:.2}"))))
+            .when(cost > 0., |d| {
+                d.child(div().px_1().child(format!("${cost:.2}")))
+            })
             .child(
                 Button::new("model-chip")
                     .ghost()
                     .xsmall()
-                    .when_some(icons::model_vendor(&model), |b, (_, path)| b.icon(Icon::default().path(path)))
-                    .label(if model.is_empty() { "model".to_owned() } else { model })
+                    .when_some(icons::model_vendor(&model), |b, (_, path)| {
+                        b.icon(Icon::default().path(path))
+                    })
+                    .label(if model.is_empty() {
+                        "model".to_owned()
+                    } else {
+                        model
+                    })
                     .disabled(!admin)
                     .tooltip("Change the agent's model")
-                    .on_click(cx.listener(|this, _, window, cx| this.open_modal("model", window, cx))),
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.open_modal("model", window, cx)),
+                    ),
             )
             .when(editor && self.showing == "main", |d| {
                 d.child(
@@ -561,7 +792,11 @@ impl Desktop {
                         .ghost()
                         .small()
                         .icon(IconName::ArrowRight)
-                        .tooltip(if busy { "Queue (⌘↩)" } else { "Send (⌘↩)" })
+                        .tooltip(if busy {
+                            "Queue (⌘↩)"
+                        } else {
+                            "Send (⌘↩)"
+                        })
                         .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),
                 )
             })
@@ -575,17 +810,40 @@ impl Desktop {
             .items_center()
             .justify_center()
             .gap_3()
-            .child(label("A shared place to build.").text_size(px(24.)).font_weight(FontWeight::MEDIUM).text_color(p.ink))
-            .child(label("Your project, your agent, and everyone on the same page.").text_size(px(14.)).text_color(p.muted))
+            .child(
+                label("A shared place to build.")
+                    .text_size(px(24.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(p.ink),
+            )
+            .child(
+                label("Your project, your agent, and everyone on the same page.")
+                    .text_size(px(14.))
+                    .text_color(p.muted),
+            )
             .child(
                 div()
                     .flex()
                     .gap_2()
                     .mt_3()
-                    .child(Button::new("open-project").primary().label("Open a project").on_click(cx.listener(|this, _, window, cx| this.choose_project(window, cx))))
-                    .child(Button::new("join").label("Join a shared thread").on_click(cx.listener(|this, _, window, cx| this.open_modal("join", window, cx)))),
+                    .child(
+                        Button::new("open-project")
+                            .primary()
+                            .label("Open a project")
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.choose_project(window, cx)),
+                            ),
+                    )
+                    .child(Button::new("join").label("Join a shared thread").on_click(
+                        cx.listener(|this, _, window, cx| this.open_modal("join", window, cx)),
+                    )),
             )
-            .child(label("The agent runs on its own, with your pi setup.").text_size(px(12.)).mt_6().text_color(p.muted))
+            .child(
+                label("The agent runs on its own, with your pi setup.")
+                    .text_size(px(12.))
+                    .mt_6()
+                    .text_color(p.muted),
+            )
             .into_any_element()
     }
 
@@ -598,9 +856,26 @@ impl Desktop {
             .items_center()
             .justify_center()
             .gap_2()
-            .child(label(if failed { "Could not prepare this workspace" } else { "Preparing your workspace…" }).text_size(px(17.)).text_color(p.ink))
-            .child(label(text(selected, if failed { "error" } else { "step" })).max_w(px(600.)).text_size(px(13.)).text_color(p.muted))
-            .when(failed, |d| d.child(Button::new("retry").mt_2().label("Retry setup").on_click(cx.listener(|this, _, window, cx| this.run_action("retry", window, cx)))))
+            .child(
+                label(if failed {
+                    "Could not prepare this workspace"
+                } else {
+                    "Preparing your workspace…"
+                })
+                .text_size(px(17.))
+                .text_color(p.ink),
+            )
+            .child(
+                label(text(selected, if failed { "error" } else { "step" }))
+                    .max_w(px(600.))
+                    .text_size(px(13.))
+                    .text_color(p.muted),
+            )
+            .when(failed, |d| {
+                d.child(Button::new("retry").mt_2().label("Retry setup").on_click(
+                    cx.listener(|this, _, window, cx| this.run_action("retry", window, cx)),
+                ))
+            })
             .into_any_element()
     }
 }
@@ -633,7 +908,14 @@ pub(crate) fn file_diffs(id: &str, diff: &str, p: &Palette) -> Vec<Div> {
                         .gap_2()
                         .font_family(MONO)
                         .text_size(px(12.))
-                        .child(div().flex_1().min_w_0().truncate().text_color(p.ink).child(path))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_color(p.ink)
+                                .child(path),
+                        )
                         .child(div().text_color(p.added).child(format!("+{added}")))
                         .child(div().text_color(p.removed).child(format!("−{removed}"))),
                 )

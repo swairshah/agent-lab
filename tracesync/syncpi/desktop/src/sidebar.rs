@@ -12,18 +12,29 @@ use serde_json::Value;
 
 /// When a thread was last active, for ordering.
 fn recency(session: &Value) -> u64 {
-    session["lastOpened"].as_u64().or(session["createdAt"].as_u64()).unwrap_or_default()
+    session["lastOpened"]
+        .as_u64()
+        .or(session["createdAt"].as_u64())
+        .unwrap_or_default()
 }
 
 fn title(session: &Value) -> String {
     let title = text(session, "title");
-    if title.is_empty() { text(session, "name") } else { title }
+    if title.is_empty() {
+        text(session, "name")
+    } else {
+        title
+    }
 }
 
 impl Desktop {
     pub(crate) fn sidebar(&self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let p = theme::palette(cx);
-        let mut threads: Vec<&Value> = self.sessions.iter().filter(|s| flag(s, "archived") == self.archived).collect();
+        let mut threads: Vec<&Value> = self
+            .sessions
+            .iter()
+            .filter(|s| flag(s, "archived") == self.archived)
+            .collect();
         threads.sort_by_key(|s| (!flag(s, "pinned"), std::cmp::Reverse(recency(s))));
         // Projects in the order of their most recent thread.
         let mut projects: Vec<(String, String)> = vec![];
@@ -38,24 +49,52 @@ impl Desktop {
             list = list.child(self.caption("Archived threads", None, &p, cx));
             list = list.children(threads.iter().map(|s| self.thread_row(s, false, &p, cx)));
             if threads.is_empty() {
-                list = list.child(label("Nothing archived.").px_3().py_2().text_size(px(13.)).text_color(p.muted));
+                list = list.child(
+                    label("Nothing archived.")
+                        .px_3()
+                        .py_2()
+                        .text_size(px(13.))
+                        .text_color(p.muted),
+                );
             }
         } else {
-            list = list.child(self.caption(
-                "Projects",
-                Some(Button::new("add-project").ghost().xsmall().icon(IconName::Plus).tooltip("Open a project (⌘O)").on_click(cx.listener(|this, _, window, cx| this.choose_project(window, cx)))),
-                &p,
-                cx,
-            ));
+            list = list.child(
+                self.caption(
+                    "Projects",
+                    Some(
+                        Button::new("add-project")
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Plus)
+                            .tooltip("Open a project (⌘O)")
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.choose_project(window, cx)),
+                            ),
+                    ),
+                    &p,
+                    cx,
+                ),
+            );
             for (dir, name) in projects {
                 let folded = self.folded.contains(&dir);
                 list = list.child(self.project_row(&dir, &name, folded, &p, cx));
                 if !folded {
-                    list = list.children(threads.iter().filter(|s| text(s, "dir") == dir).map(|s| self.thread_row(s, true, &p, cx)));
+                    list = list.children(
+                        threads
+                            .iter()
+                            .filter(|s| text(s, "dir") == dir)
+                            .map(|s| self.thread_row(s, true, &p, cx)),
+                    );
                 }
             }
             if threads.is_empty() {
-                list = list.child(label("Open a project to start a thread.").px_3().py_2().text_size(px(13.)).text_color(p.muted));
+                list = list.child(
+                    label("Open a project to start a thread.")
+                        .px_3()
+                        .py_2()
+                        .text_size(px(13.))
+                        .text_color(p.muted),
+                );
             }
         }
         let name = text(&self.catalog["identity"], "name");
@@ -78,7 +117,16 @@ impl Desktop {
                     .pl(px(91.))
                     .pr_2()
                     .gap_1()
-                    .child(Button::new("search").ghost().small().icon(IconName::Search).tooltip("Search threads (⌘K)").on_click(cx.listener(|this, _, window, cx| this.open_modal("search", window, cx))))
+                    .child(
+                        Button::new("search")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Search)
+                            .tooltip("Search threads (⌘K)")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_modal("search", window, cx)
+                            })),
+                    )
                     .child(div().flex_1())
                     .child(
                         Button::new("archives")
@@ -86,11 +134,27 @@ impl Desktop {
                             .small()
                             .icon(icons::icon("archive"))
                             .when(self.archived, |b| b.bg(p.sunken))
-                            .tooltip(if self.archived { "Back to threads" } else { "Archived threads" })
-                            .on_click(cx.listener(|this, _, window, cx| this.run_action("archives", window, cx))),
+                            .tooltip(if self.archived {
+                                "Back to threads"
+                            } else {
+                                "Archived threads"
+                            })
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.run_action("archives", window, cx)
+                            })),
                     ),
             )
-            .child(div().id("sidebar-scroll").flex_1().min_h_0().overflow_y_scroll().px_2().pt_2().pb_4().child(list))
+            .child(
+                div()
+                    .id("sidebar-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px_2()
+                    .pt_2()
+                    .pb_4()
+                    .child(list),
+            )
             .child(
                 div()
                     .h(px(46.))
@@ -119,15 +183,27 @@ impl Desktop {
                         Button::new("theme")
                             .ghost()
                             .small()
-                            .icon(if self.prefs.dark { IconName::Sun } else { IconName::Moon })
+                            .icon(if self.prefs.dark {
+                                IconName::Sun
+                            } else {
+                                IconName::Moon
+                            })
                             .tooltip("Light or dark (⌘⇧L)")
-                            .on_click(cx.listener(|this, _, window, cx| this.run_action("theme", window, cx))),
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.run_action("theme", window, cx)
+                            })),
                     ),
             )
             .into_any_element()
     }
 
-    fn caption(&self, title: &str, action: Option<Button>, p: &Palette, _cx: &mut Context<Self>) -> Div {
+    fn caption(
+        &self,
+        title: &str,
+        action: Option<Button>,
+        p: &Palette,
+        _cx: &mut Context<Self>,
+    ) -> Div {
         div()
             .flex()
             .items_center()
@@ -140,7 +216,14 @@ impl Desktop {
             .children(action)
     }
 
-    fn project_row(&self, dir: &str, name: &str, folded: bool, p: &Palette, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn project_row(
+        &self,
+        dir: &str,
+        name: &str,
+        folded: bool,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         let group = SharedString::from(format!("project-{dir}"));
         let toggle = dir.to_owned();
         let target = dir.to_owned();
@@ -157,8 +240,24 @@ impl Desktop {
             .rounded(px(6.))
             .cursor_pointer()
             .hover(|s| s.bg(p.sunken))
-            .child(Icon::new(if folded { IconName::Folder } else { IconName::FolderOpen }).size_4().text_color(p.muted))
-            .child(div().flex_1().min_w_0().truncate().text_size(px(13.5)).text_color(p.ink).child(name.to_owned()))
+            .child(
+                Icon::new(if folded {
+                    IconName::Folder
+                } else {
+                    IconName::FolderOpen
+                })
+                .size_4()
+                .text_color(p.muted),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(13.5))
+                    .text_color(p.ink)
+                    .child(name.to_owned()),
+            )
             .child(
                 div().invisible().group_hover(group, |s| s.visible()).child(
                     Button::new(eid(format!("new-in-{dir}")))
@@ -169,7 +268,7 @@ impl Desktop {
                         .on_click(cx.listener(move |this, _, window, cx| {
                             cx.stop_propagation();
                             this.project = target.clone();
-                            this.open_modal("create", window, cx);
+                            this.new_thread(target.clone(), window, cx);
                         })),
                 ),
             )
@@ -181,12 +280,22 @@ impl Desktop {
             }))
     }
 
-    fn thread_row(&self, s: &Value, nested: bool, p: &Palette, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn thread_row(
+        &self,
+        s: &Value,
+        nested: bool,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         let id = text(s, "id");
         let selected = id == self.active;
         let working = s["status"] == "provisioning";
         let failed = s["status"] == "failed";
-        let tags = array(s, "tags").iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" · ");
+        let tags = array(s, "tags")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(" · ");
         div()
             .id(eid(format!("thread-{id}")))
             .flex()
@@ -208,10 +317,30 @@ impl Desktop {
                     .text_color(if selected { p.ink } else { p.ink_2 })
                     .child(title(s)),
             )
-            .when(!tags.is_empty(), |d| d.child(div().flex_shrink_0().max_w(px(80.)).truncate().text_size(px(11.)).text_color(p.muted).child(tags)))
-            .when(flag(s, "pinned"), |d| d.child(icons::icon("pin").size_3().text_color(p.muted)))
-            .when(working, |d| d.child(Icon::new(IconName::LoaderCircle).size_3().text_color(p.warn)))
-            .when(failed, |d| d.child(Icon::new(IconName::CircleX).size_3().text_color(p.removed)))
+            .when(!tags.is_empty(), |d| {
+                d.child(
+                    div()
+                        .flex_shrink_0()
+                        .max_w(px(80.))
+                        .truncate()
+                        .text_size(px(11.))
+                        .text_color(p.muted)
+                        .child(tags),
+                )
+            })
+            .when(flag(s, "pinned"), |d| {
+                d.child(icons::icon("pin").size_3().text_color(p.muted))
+            })
+            .when(working, |d| {
+                d.child(
+                    Icon::new(IconName::LoaderCircle)
+                        .size_3()
+                        .text_color(p.warn),
+                )
+            })
+            .when(failed, |d| {
+                d.child(Icon::new(IconName::CircleX).size_3().text_color(p.removed))
+            })
             .on_click(cx.listener(move |this, _, window, cx| this.select(id.clone(), window, cx)))
     }
 }
