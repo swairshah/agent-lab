@@ -15,7 +15,7 @@
 import { kindOfPath } from "../shared/artifacts.ts";
 import type { LineComment, Where } from "../shared/protocol.ts";
 import { commentOnSelection } from "./artifacts.ts";
-import { signIn, TOKEN_KEY } from "./auth.ts";
+import { BASE, signIn, TOKEN_KEY } from "./auth.ts";
 import { embedded, onHostAction, toHost } from "./bridge.ts";
 import { Composer } from "./composer.ts";
 import { Dialogs } from "./dialogs.ts";
@@ -27,6 +27,7 @@ import { ArtifactPanel } from "./panel.ts";
 import { SessionClient } from "./session.ts";
 import { Settings } from "./settings.ts";
 import { avatarHtml, ThreadView } from "./thread-view.ts";
+import { applyZoom, dragWindow, SHELL_COMMANDS, shell } from "./shell-api.ts";
 
 type Theme = "system" | "light" | "dark";
 
@@ -50,6 +51,13 @@ function toast(text: string, tone: "info" | "error" = "info"): void {
 async function main(): Promise<void> {
 	applyTheme((storage.get("syncpi-theme") as Theme | undefined) ?? "system");
 	document.documentElement.classList.toggle("embedded", embedded);
+	// In the app: one of its threads, beside the sidebar (shell.ts). The shell runs what spans threads.
+	const app = shell();
+	const threadId = app ? (BASE.match(/\/session\/([A-Za-z0-9_-]+)\//)?.[1] ?? "") : "";
+	if (app) {
+		applyZoom(document);
+		dragWindow(document.querySelector<HTMLElement>(".topbar")!);
+	}
 	const token = await signIn();
 	$("app").hidden = false;
 
@@ -192,6 +200,22 @@ async function main(): Promise<void> {
 	};
 
 	let titled = false;
+	// The project's sync with this machine, in the app: what went up and down, and conflicts.
+	const updateSync = () => {
+		const sync = app?.session(threadId)?.sync;
+		const box = $("sync-status");
+		box.hidden = sync === undefined;
+		if (sync === undefined) return;
+		box.textContent = sync.error ? "Sync failed" : sync.conflicts.length > 0 ? `${sync.conflicts.length} conflict${sync.conflicts.length === 1 ? "" : "s"}` : `↑${sync.pushed} ↓${sync.pulled} synced`;
+		box.title = sync.error || (sync.conflicts.length > 0 ? `Conflicts: ${sync.conflicts.join(", ")}` : "Files synced with this machine. Click to sync now.");
+		box.dataset.state = sync.error || sync.conflicts.length > 0 ? "error" : "ok";
+	};
+	if (app) {
+		setInterval(updateSync, 2000);
+		updateSync();
+		$("sync-status").addEventListener("click", () => app.command("project.sync"));
+	}
+
 	session.on("thread", () => {
 		threadView.render();
 		panel.update();
@@ -276,11 +300,17 @@ async function main(): Promise<void> {
 			choose: (model, thinkingLevel) => session.send({ type: "configure", model, thinkingLevel }),
 		});
 	};
-	// What each command in src/shared/keymap.json does here.
+	// What each command in src/shared/keymap.json does here; in the app, the shell's commands go up to it.
+	const fromShell = Object.fromEntries((app ? SHELL_COMMANDS : []).map((id) => [id, () => void app!.command(id)]));
 	const palette = new Palette({
+		app: app ? "desktop" : "web",
 		files: () => session.files,
 		openFile: (path) => void openFile(path),
+		threads: app ? () => app.threads() : undefined,
+		openThread: (id) => app?.open(id),
 		handlers: {
+			...fromShell,
+			"palette.threads": () => palette.open("threads"),
 			"palette.all": () => palette.open("all"),
 			"palette.commands": () => palette.open("commands"),
 			"palette.files": () => palette.open("files"),
@@ -312,6 +342,24 @@ async function main(): Promise<void> {
 		const dialog = document.querySelector("dialog[open]");
 		if (dialog !== null && dialog.id !== "palette" && dialog.id !== "settings-dialog") return;
 		palette.handleKey(event);
+	});
+
+	// The shell runs this thread's commands (its menu, its shortcuts while the sidebar has focus) and shares the theme.
+	const run = (window as Window & { syncpiRun?: (id: string) => boolean; syncpiTheme?: (theme: string) => void });
+	run.syncpiRun = (id) => {
+		const handler = palette.handler(id);
+		if (handler === undefined) return false;
+		handler();
+		return true;
+	};
+	run.syncpiTheme = (theme) => {
+		applyTheme(theme as Theme);
+		threadView.reset();
+		panel.refresh();
+	};
+	addEventListener("storage", (event) => {
+		if (event.key === "syncpi-zoom") applyZoom(document);
+		if (event.key === "syncpi-theme") run.syncpiTheme!(event.newValue ?? "system");
 	});
 
 	onHostAction((action, data) => {

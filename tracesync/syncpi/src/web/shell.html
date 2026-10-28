@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en" data-desktop="true">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SyncPi</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="shell">
+
+<div class="shell-layout">
+  <nav id="sidebar" class="sidebar" aria-label="Threads">
+    <header class="sidebar-head">
+      <span class="spacer"></span>
+      <button id="sidebar-search" type="button" class="icon-button small" title="Go to thread (⌘T)" aria-label="Go to thread">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5"/><path d="m13 13 3.5 3.5"/></svg>
+      </button>
+      <button id="sidebar-new" type="button" class="icon-button small" title="New thread (⌘N)" aria-label="New thread">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M14.5 3.5 16.5 5.5 9 13l-3 .9.9-3z"/><path d="M15.5 11.5V15a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 15V6A1.5 1.5 0 0 1 5 4.5h3.5"/></svg>
+      </button>
+    </header>
+    <div id="sidebar-list" class="sidebar-list"></div>
+    <footer class="sidebar-foot">
+      <span id="me" class="sidebar-me"></span>
+      <span class="spacer"></span>
+      <button id="archive-toggle" type="button" class="icon-button small" title="Archived threads (⌘Y)" aria-label="Archived threads" aria-pressed="false">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="4" rx="1"/><path d="M4.5 8v7a1.5 1.5 0 0 0 1.5 1.5h8a1.5 1.5 0 0 0 1.5-1.5V8M8 11h4"/></svg>
+      </button>
+      <button id="theme-toggle" type="button" class="icon-button small" title="Switch light or dark (⇧⌘L)" aria-label="Switch light or dark">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16 11.5A6.5 6.5 0 0 1 8.5 4a6.5 6.5 0 1 0 7.5 7.5z"/></svg>
+      </button>
+    </footer>
+  </nav>
+
+  <main class="shell-main">
+    <div id="frames" class="frames"></div>
+    <section id="preparing" class="shell-state" hidden>
+      <div class="card">
+        <p class="eyebrow" id="preparing-project"></p>
+        <h1 id="preparing-title">Preparing</h1>
+        <p id="preparing-step" class="muted"></p>
+        <p id="preparing-error" class="error" role="alert"></p>
+        <div class="row"><button id="preparing-retry" type="button" class="button primary" hidden>Retry setup</button></div>
+      </div>
+    </section>
+    <section id="empty" class="shell-state" hidden>
+      <div class="card">
+        <p class="eyebrow">SyncPi</p>
+        <h1>Start a <em>thread</em></h1>
+        <p class="muted">Open a project folder and talk to an agent about it, alone or with others. Or join a thread someone shared with you.</p>
+        <div class="row">
+          <button id="empty-open" type="button" class="button primary">Open a project</button>
+          <button id="empty-join" type="button" class="button">Join a thread</button>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="context-menu" class="menu" role="menu" hidden></div>
+
+<dialog id="create-dialog" class="form-dialog">
+  <form id="create-form">
+    <h2>New thread</h2>
+    <label for="create-dir">Project folder</label>
+    <div class="row"><input id="create-dir" required spellcheck="false" placeholder="/Users/you/project"><button id="create-choose" type="button" class="button">Choose…</button></div>
+    <label for="create-compute">Runs on</label>
+    <select id="create-compute"><option value="local">This Mac</option><option value="host">An exe.dev VM</option></select>
+    <div id="create-vm-field">
+      <label for="create-vm">VM</label>
+      <input id="create-vm" spellcheck="false" placeholder="syncpi">
+    </div>
+    <label for="create-model">Model</label>
+    <div class="row">
+      <input id="create-model" spellcheck="false">
+      <select id="create-thinking" aria-label="Thinking"><option>off</option><option>minimal</option><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option></select>
+    </div>
+    <p id="create-error" class="error" role="alert"></p>
+    <div class="dialog-actions"><button type="button" data-close class="button">Cancel</button><button type="submit" class="button primary">Start thread</button></div>
+  </form>
+</dialog>
+
+<dialog id="join-dialog" class="form-dialog">
+  <form id="join-form">
+    <h2>Join a thread</h2>
+    <label for="join-url">Share link</label>
+    <input id="join-url" required spellcheck="false" placeholder="https://…/s/…">
+    <label for="join-as">Your name</label>
+    <input id="join-as" maxlength="40">
+    <p id="join-login" class="muted" hidden></p>
+    <p id="join-error" class="error" role="alert"></p>
+    <div class="dialog-actions"><button type="button" data-close class="button">Cancel</button><button type="submit" class="button primary">Join</button></div>
+  </form>
+</dialog>
+
+<dialog id="text-dialog" class="form-dialog">
+  <form id="text-form">
+    <h2 id="text-title"></h2>
+    <label id="text-label" for="text-input"></label>
+    <input id="text-input" spellcheck="false">
+    <p id="text-hint" class="muted small"></p>
+    <div class="dialog-actions"><button type="button" data-close class="button">Cancel</button><button id="text-ok" type="submit" class="button primary">Save</button></div>
+  </form>
+</dialog>
+
+<dialog id="palette" class="palette" aria-label="Command palette">
+  <input id="palette-input" autocomplete="off" spellcheck="false" aria-label="Search">
+  <div id="palette-tabs" class="palette-tabs" role="tablist"></div>
+  <div id="palette-list" class="palette-list" role="listbox"></div>
+</dialog>
+
+<div id="toast" class="toast" role="status" hidden></div>
+<script type="module" src="/shell.js"></script>
+</body>
+</html>

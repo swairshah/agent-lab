@@ -44,23 +44,28 @@ function filePath(dir: string, path: string, creating = false): string {
   if (relative(root, real).startsWith('..') || real === root && !creating) throw new Error('File is outside the project');
   return full;
 }
-async function staticFile(res: ServerResponse, path: string, type: string) {
+const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.ttf': 'font/ttf', '.woff2': 'font/woff2' };
+async function staticFile(res: ServerResponse, path: string, type = MIME[path.slice(path.lastIndexOf('.'))] || 'application/octet-stream') {
   res.writeHead(200, { 'content-type': type, 'cache-control': 'no-cache' });
   res.end(await readFile(path));
 }
+// The web app's files (dist/web): the page, its script and the chunks it loads, the stylesheet, fonts.
+const WEB_ASSET = /^(?:[A-Za-z0-9_-]+\.(?:js|css)|fonts\/[A-Za-z0-9_-]+\.(?:ttf|woff2))$/;
+const webDir = join(appDir, 'web');
 async function handle(req: IncomingMessage, res: ServerResponse) {
   const url = new URL(req.url || '/', origin);
   if (req.headers.host !== new URL(origin).host) return json(res, { error: 'Invalid host' }, 403);
   res.setHeader('x-content-type-options', 'nosniff');
   res.setHeader('referrer-policy', 'no-referrer');
-  res.setHeader('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws:; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'");
+  res.setHeader('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' ws: ipc: http://ipc.localhost; frame-src 'self' blob: data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'");
   if (url.pathname === '/' && url.searchParams.get('key') === secret) {
     res.writeHead(303, { location: '/', 'set-cookie': `syncpi_app=${secret}; HttpOnly; SameSite=Strict; Path=/`, 'cache-control': 'no-store' });
     return void res.end();
   }
   if (!authorized(req) || !sameOrigin(req)) return json(res, { error: 'Open the app using its launch link' }, 403);
-  if (url.pathname === '/') return staticFile(res, join(appDir, 'desktop/index.html'), 'text/html; charset=utf-8');
-  if (/^\/(app\.js|style\.css|xterm\.css)$/.test(url.pathname)) return staticFile(res, join(appDir, 'desktop', url.pathname.slice(1)), url.pathname.endsWith('.js') ? 'text/javascript' : 'text/css');
+  // The app: the shell (sidebar, threads) around each session's web view (web/shell.html, web/index.html).
+  if (url.pathname === '/') return staticFile(res, join(webDir, 'shell.html'));
+  if (WEB_ASSET.test(url.pathname.slice(1))) return staticFile(res, join(webDir, url.pathname.slice(1)));
   if (url.pathname === '/api/sessions' && req.method === 'GET') return json(res, { sessions: runtime.list(), identity: identity(), defaults: piDefaults(), login });
   if (url.pathname === '/api/sessions' && req.method === 'POST') { const data = await input(req); return json(res, { id: await runtime.create({ ...data, faux: args.faux }) }); }
   if (url.pathname === '/api/join' && req.method === 'POST') { const data = await input(req); const id = await runtime.join(data.url, data.name); login = undefined; return json(res, { id }); }
@@ -95,6 +100,8 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       if (!response.ok || !data.title) throw new Error(data.error || 'Could not generate a title');
       runtime.decorate(id!, { title: data.title }); return json(res, data);
     }
+    // The session in a browser: its web address with this member's token.
+    if (verb === 'weblink') return json(res, { url: `${live.record.url.replace(/\/$/, '')}/#token=${encodeURIComponent(live.record.token)}` });
     if (verb === 'context') return json(res, { skillCount: live.context.skillCount, agents: live.context.agents.map(a => a.path), prompts: live.context.prompts.map(p => ({ name: p.name, description: p.description })), sync: live.sync });
     if (verb === 'update' && req.method === 'POST') { await runtime.update(id!); return json(res, { ok: true }); }
     if (verb === 'sync' && req.method === 'POST') { await live.mirror.fence('flush', 0); return json(res, live.sync); }
@@ -143,20 +150,24 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       return json(res, { ok: true });
     }
   }
-  // Session page uses the same renderer as web/CLI clients, through a credential-hiding proxy.
+  // A session's web view: the same page browsers get from its server, through a proxy that adds this member's
+  // credentials, so the page never holds the token.
   const sessionPath = url.pathname.match(/^\/session\/([a-zA-Z0-9_-]+)\/(.*)$/);
   if (sessionPath) {
     const [, id, rest] = sessionPath;
-    const live = await runtime.open(id!);
     if (!rest) {
-      let html = await readFile(join(appDir, 'desktop-session/index.html'), 'utf8');
+      if (!loadSession(id!)) return json(res, { error: 'No such session' }, 404);
+      let html = await readFile(join(webDir, 'index.html'), 'utf8');
       html = html.replace('__BASE__', `/session/${id}/`).replace('<html lang="en">', '<html lang="en" data-desktop="true">');
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return void res.end(html);
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' }); return void res.end(html);
     }
-    if (rest === 'app.js' || rest === 'style.css') return staticFile(res, join(appDir, 'desktop-session', rest), rest.endsWith('.js') ? 'text/javascript' : 'text/css');
-    if (!/^api\/(info|manifest|models|file|snapshot\.tgz)$/.test(rest!)) return json(res, { error: 'Unknown route' }, 404);
-    const upstream = await fetch(`${live.record.url}/${rest}${url.search}`, { method: req.method, headers: { authorization: `Bearer ${live.record.token}` }, body: ['PUT', 'POST'].includes(req.method || '') ? new Uint8Array(await body(req)) : undefined, signal: AbortSignal.timeout(30_000), redirect: 'error' });
-    res.writeHead(upstream.status, { 'content-type': upstream.headers.get('content-type') || 'application/json' });
+    if (WEB_ASSET.test(rest!)) return staticFile(res, join(webDir, rest!));
+    if (!/^api\/(info|manifest|models|file|title)$/.test(rest!)) return json(res, { error: 'Unknown route' }, 404);
+    const live = await runtime.open(id!);
+    const upstream = await fetch(`${live.record.url}/${rest}${url.search}`, { method: req.method, headers: { authorization: `Bearer ${live.record.token}` }, body: ['PUT', 'POST'].includes(req.method || '') ? new Uint8Array(await body(req)) : undefined, signal: AbortSignal.timeout(60_000), redirect: 'error' });
+    const headers: Record<string, string> = { 'content-type': upstream.headers.get('content-type') || 'application/json', 'cache-control': 'no-store' };
+    const hash = upstream.headers.get('x-hash'); if (hash) headers['x-hash'] = hash;
+    res.writeHead(upstream.status, headers);
     res.end(Buffer.from(await upstream.arrayBuffer())); return;
   }
   json(res, { error: 'Not found' }, 404);

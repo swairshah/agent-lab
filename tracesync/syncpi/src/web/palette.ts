@@ -1,17 +1,21 @@
-// The command palette, as in Delta: ⌘K searches everything, ⌘⇧P opens on commands, ⌘P on files. ⌘1–⌘3 switch
-// tabs while it's open; arrows move, Enter runs, Esc closes. Commands and their shortcuts come from
+// The command palette, as in Delta: ⌘K searches everything, ⌘⇧P opens on commands, ⌘P on files, ⌘T on threads (in
+// the app). ⌘1–⌘4 switch tabs while it's open; arrows move, Enter runs, Esc closes. Commands and their shortcuts come from
 // src/shared/keymap.json, so the desktop app offers the same ones; each app supplies what a command does.
 // The same box picks the agent's model (⌘⌥/): models grouped by the provider serving them, with the thinking level.
-import { type Command, commandsFor, formatKeys, matchesKeys } from "../shared/keymap.ts";
+import { type App, type Command, commandsFor, formatKeys, matchesKeys } from "../shared/keymap.ts";
 import { $, el, escapeHtml } from "./dom.ts";
 import { modelVendor, providerName } from "./icons.ts";
 
-export type Tab = "all" | "commands" | "files";
-const TABS: { tab: Tab; label: string }[] = [
+export type Tab = "all" | "threads" | "commands" | "files";
+const ALL_TABS: { tab: Tab; label: string }[] = [
 	{ tab: "all", label: "All" },
+	{ tab: "threads", label: "Threads" },
 	{ tab: "commands", label: "Commands" },
 	{ tab: "files", label: "Files" },
 ];
+
+/** A thread the palette can go to (in the app, which has more than one). */
+export type ThreadRow = { id: string; title: string; project: string; current: boolean };
 
 type Row = { key: string; title: string; detail?: string; keys?: string; section: string; icon?: string; current?: boolean; run(): void };
 
@@ -69,6 +73,7 @@ function highlight(text: string, query: string): string {
 }
 
 const FILE_ICON = '<svg viewBox="0 0 24 24"><path d="m8 7-5 5 5 5M16 7l5 5-5 5"/></svg>';
+const THREAD_ICON = '<svg viewBox="0 0 24 24"><path d="M20 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z"/></svg>';
 
 export class Palette {
 	readonly #dialog: HTMLDialogElement;
@@ -78,6 +83,9 @@ export class Palette {
 	readonly #handlers: Record<string, () => void>;
 	readonly #files: () => string[];
 	readonly #openFile: (path: string) => void;
+	readonly #threads: (() => ThreadRow[]) | undefined;
+	readonly #openThread: (id: string) => void;
+	readonly #tabs: { tab: Tab; label: string }[];
 	#tab: Tab = "all";
 	/** Set while the box is picking a model rather than running commands. */
 	#pick: ModelPick | undefined;
@@ -86,12 +94,22 @@ export class Palette {
 	#selected = 0;
 	#quietUntil = 0;
 
-	constructor(options: { handlers: Record<string, () => void>; files: () => string[]; openFile: (path: string) => void }) {
+	constructor(options: {
+		handlers: Record<string, () => void>;
+		files: () => string[];
+		openFile: (path: string) => void;
+		app?: App;
+		threads?: () => ThreadRow[];
+		openThread?: (id: string) => void;
+	}) {
 		this.#handlers = options.handlers;
 		this.#files = options.files;
 		this.#openFile = options.openFile;
+		this.#threads = options.threads;
+		this.#openThread = options.openThread ?? (() => {});
+		this.#tabs = ALL_TABS.filter((t) => t.tab !== "threads" || this.#threads !== undefined);
 		// Only commands this app can carry out.
-		this.#commands = commandsFor("web").filter((c) => c.id in options.handlers);
+		this.#commands = commandsFor(options.app ?? "web").filter((c) => c.id in options.handlers);
 		this.#dialog = $<HTMLDialogElement>("palette");
 		this.#input = $<HTMLInputElement>("palette-input");
 		this.#list = $("palette-list");
@@ -151,7 +169,7 @@ export class Palette {
 	}
 
 	#renderTabs(): void {
-		$("palette-tabs").innerHTML = TABS.map((t, n) => `<button type="button" role="tab" data-tab="${t.tab}">${t.label}<kbd>${formatKeys(`cmd-${n + 1}`)}</kbd></button>`).join("");
+		$("palette-tabs").innerHTML = this.#tabs.map((t, n) => `<button type="button" role="tab" data-tab="${t.tab}">${t.label}<kbd>${formatKeys(`cmd-${n + 1}`)}</kbd></button>`).join("");
 	}
 
 	#renderThinking(): void {
@@ -162,6 +180,11 @@ export class Palette {
 
 	close(): void {
 		this.#dialog.close();
+	}
+
+	/** What command `id` does here, if this app does it. */
+	handler(id: string): (() => void) | undefined {
+		return this.#commands.some((c) => c.id === id) || id.startsWith("palette.") ? this.#handlers[id] : undefined;
 	}
 
 	/** Runs the command a key press is the shortcut for. Returns whether one ran. */
@@ -176,7 +199,8 @@ export class Palette {
 	#show(tab: Tab): void {
 		this.#tab = tab;
 		for (const button of $("palette-tabs").querySelectorAll<HTMLElement>("[data-tab]")) button.setAttribute("aria-selected", String(button.dataset.tab === tab));
-		this.#input.placeholder = tab === "files" ? "Go to a file…" : tab === "commands" ? "Run a command…" : "Search commands and files…";
+		this.#input.placeholder =
+			tab === "files" ? "Go to a file…" : tab === "commands" ? "Run a command…" : tab === "threads" ? "Go to a thread…" : this.#threads ? "Search threads, commands and files…" : "Search commands and files…";
 		this.#input.focus();
 		this.#render();
 	}
@@ -199,6 +223,15 @@ export class Palette {
 				const slash = path.lastIndexOf("/");
 				return { key: `file:${path}`, title: path.slice(slash + 1), detail: slash > 0 ? `${path.slice(0, slash)}/` : undefined, section: "Files", icon: FILE_ICON, run: () => this.#openFile(path) };
 			});
+	}
+
+	#threadRows(query: string, limit: number): Row[] {
+		return (this.#threads?.() ?? [])
+			.map((t) => ({ t, s: Math.max(score(t.title, query), score(t.project, query) - 20) }))
+			.filter(({ s }) => s >= 0)
+			.sort((a, b) => (query ? b.s - a.s : 0))
+			.slice(0, limit)
+			.map(({ t }) => ({ key: `thread:${t.id}`, title: t.title, detail: t.project, section: "Threads", icon: THREAD_ICON, current: t.current, run: () => this.#openThread(t.id) }));
 	}
 
 	#modelRows(query: string): Row[] {
@@ -228,18 +261,21 @@ export class Palette {
 		if (this.#pick !== undefined) this.#rows = this.#modelRows(query);
 		else if (this.#tab === "commands") this.#rows = this.#commandRows(query, "Commands");
 		else if (this.#tab === "files") this.#rows = this.#fileRows(query, 60);
+		else if (this.#tab === "threads") this.#rows = this.#threadRows(query, 80);
 		else if (query === "") {
 			const quick = this.#commands.filter((c) => c.quick);
 			this.#rows = [
 				...quick.map((c) => ({ key: c.id, title: c.title, keys: c.keys, section: "Quick actions", run: () => this.#handlers[c.id]!() })),
 				...this.#commandRows("", "Commands").filter((r) => !quick.some((c) => c.id === r.key)),
 			];
-		} else this.#rows = [...this.#commandRows(query, "Commands").slice(0, 8), ...this.#fileRows(query, 12)];
+		} else this.#rows = [...this.#threadRows(query, 6), ...this.#commandRows(query, "Commands").slice(0, 8), ...this.#fileRows(query, 12)];
 		// The model picker opens on the model in use.
 		this.#selected = this.#pick !== undefined && query === "" ? Math.max(0, this.#rows.findIndex((r) => r.current)) : 0;
 		this.#list.replaceChildren();
 		if (this.#rows.length === 0) {
-			this.#list.append(el("div", "palette-empty", this.#tab === "files" && this.#files().length === 0 ? "No project files yet." : "Nothing matches."));
+			this.#list.append(
+				el("div", "palette-empty", this.#tab === "files" && this.#files().length === 0 ? "No project files yet." : this.#tab === "threads" && !this.#threads?.().length ? "No threads yet." : "Nothing matches."),
+			);
 			return;
 		}
 		let section = "";
@@ -277,10 +313,10 @@ export class Palette {
 	}
 
 	#key(event: KeyboardEvent): void {
-		const tab = this.#pick === undefined ? TABS.findIndex((_, n) => matchesKeys(event, `cmd-${n + 1}`)) : -1;
+		const tab = this.#pick === undefined ? this.#tabs.findIndex((_, n) => matchesKeys(event, `cmd-${n + 1}`)) : -1;
 		if (tab >= 0) {
 			event.preventDefault();
-			return this.#show(TABS[tab]!.tab);
+			return this.#show(this.#tabs[tab]!.tab);
 		}
 		if (event.key === "ArrowDown" || event.key === "ArrowUp") {
 			event.preventDefault();

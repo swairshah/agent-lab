@@ -2,7 +2,7 @@
 // below them, and the project tree beside it (⇧⌘E). The Changes tab lists every artifact in the thread (changes to
 // files, files written, HTML and SVG) and shows the selected one large; opening an artifact from the thread selects
 // it there. A file tab shows the file as it is now, rendered when it's Markdown, and follows changes to it.
-import { type Artifact, patchStats, threadArtifacts } from "../shared/artifacts.ts";
+import { type Artifact, kindOfPath, patchStats, threadArtifacts } from "../shared/artifacts.ts";
 import { artifactCard, type CommentHandler, disposeWithin, type ImageLoader } from "./artifacts.ts";
 import { $, el, escapeHtml, storage } from "./dom.ts";
 import { FilesTree } from "./files-tree.ts";
@@ -11,7 +11,11 @@ import type { SessionClient } from "./session.ts";
 /** Reads a project file as an artifact, or says why it couldn't. */
 export type FileLoader = (path: string, lines?: string) => Promise<Artifact | undefined>;
 
-type FileTab = { path: string; artifact?: Artifact; lines?: string; missing?: boolean };
+/**
+ * An open file. `version` is what Delta's picker offers: the file now, or as it was before the thread's last turn
+ * (`before`: the file, or why it can't be shown).
+ */
+type FileTab = { path: string; artifact?: Artifact; lines?: string; missing?: boolean; version: "latest" | "before"; before?: Artifact | string };
 
 const CHANGES = "changes";
 
@@ -43,6 +47,7 @@ export class ArtifactPanel {
 	/** CHANGES, or the path of the open file tab. */
 	#active = CHANGES;
 	#tabsKey = "";
+	#busy = false;
 
 	constructor(session: SessionClient, loadImage: ImageLoader, onComment: CommentHandler, loadFile: FileLoader) {
 		this.#session = session;
@@ -124,7 +129,7 @@ export class ArtifactPanel {
 		this.#tabsKey = `syncpi-tabs:${id}`;
 		try {
 			const saved = JSON.parse(storage.get(this.#tabsKey) ?? "{}") as { open?: string[]; active?: string };
-			this.#tabs = (saved.open ?? []).map((path) => ({ path }));
+			this.#tabs = (saved.open ?? []).map((path) => ({ path, version: "latest" as const }));
 			this.#active = saved.active !== undefined && this.#tabs.some((t) => t.path === saved.active) ? saved.active : CHANGES;
 		} catch {}
 		this.#renderTabs();
@@ -173,7 +178,7 @@ export class ArtifactPanel {
 	}
 
 	#addTab(path: string): FileTab {
-		const tab: FileTab = { path };
+		const tab: FileTab = { path, version: "latest" };
 		// After the open tab, where the eye already is.
 		const at = this.#tabs.findIndex((t) => t.path === this.#active);
 		this.#tabs.splice(at === -1 ? this.#tabs.length : at + 1, 0, tab);
@@ -208,11 +213,47 @@ export class ArtifactPanel {
 	#showFile(tab: FileTab): void {
 		const view = $("panel-file");
 		disposeWithin(view);
-		if (tab.artifact === undefined) {
-			view.replaceChildren(el("p", "panel-empty", tab.missing ? `${tab.path} isn't in the project.` : `Opening ${tab.path}…`));
+		const picker = this.#picker(tab);
+		// An earlier version is for reading: no edits, and no comments on lines that may not exist any more.
+		const shown = tab.version === "before" ? tab.before : tab.artifact;
+		if (typeof shown === "object") {
+			view.replaceChildren(artifactCard(shown, tab.version === "before" ? { size: "panel", loadImage: this.#loadImage, extra: picker } : { size: "panel", loadImage: this.#loadImage, onComment: this.#onComment, onSave: this.onSave, extra: picker }));
 			return;
 		}
-		view.replaceChildren(artifactCard(tab.artifact, { size: "panel", loadImage: this.#loadImage, onComment: this.#onComment, onSave: this.onSave }));
+		const note =
+			tab.version === "before" ? (shown ?? "Loading…") : tab.missing ? `${tab.path} isn't in the project.` : `Opening ${tab.path}…`;
+		const bar = el("div", "file-note");
+		bar.append(el("span", "artifact-title", tab.path), picker);
+		view.replaceChildren(bar, el("p", "panel-empty", note));
+	}
+
+	/** Delta's version picker: the file now, or as it was before the thread's last turn. */
+	#picker(tab: FileTab): HTMLSelectElement {
+		const select = el("select", "version-select");
+		select.setAttribute("aria-label", "Version");
+		select.innerHTML = '<option value="latest">Latest</option><option value="before">Before last turn</option>';
+		select.value = tab.version;
+		select.onchange = () => {
+			tab.version = select.value === "before" ? "before" : "latest";
+			if (tab.version === "before" && tab.before === undefined) void this.#loadBefore(tab);
+			this.#showFile(tab);
+		};
+		return select;
+	}
+
+	async #loadBefore(tab: FileTab): Promise<void> {
+		const res = await fetch(`api/file?path=${encodeURIComponent(tab.path)}&at=before-last-turn`, { headers: { authorization: `Bearer ${this.#session.token}` } }).catch(() => undefined);
+		let before: Artifact | string;
+		if (res?.ok) {
+			const kind = kindOfPath(tab.path);
+			before = { key: `before:${tab.path}`, kind, title: tab.path, path: tab.path, content: kind === "image" ? "" : await res.text(), lang: tab.path.split(".").pop(), source: "file" };
+		} else {
+			const reason = res === undefined ? "" : ((await res.json().catch(() => ({}))) as { reason?: string }).reason;
+			before = reason === "no-turn" ? "The agent hasn't taken a turn yet." : reason === "absent" ? `${tab.path} didn't exist before the last turn.` : "Couldn't load the earlier version.";
+		}
+		if (!this.#tabs.includes(tab)) return;
+		tab.before = before;
+		if (this.#active === tab.path && tab.version === "before") this.#showFile(tab);
 	}
 
 	/** A file someone (or the agent) changed reloads in its tab, unless it's being edited there. */
@@ -271,6 +312,14 @@ export class ArtifactPanel {
 
 	/** Re-reads the thread's artifacts; cheap when nothing changed. */
 	update(): void {
+		// A new turn moves "before the last turn": earlier versions read so far are out of date.
+		const busy = this.#session.threads.main.state.busy;
+		if (busy && !this.#busy) {
+			for (const tab of this.#tabs) tab.before = undefined;
+			const tab = this.#tabs.find((t) => t.path === this.#active && t.version === "before");
+			if (tab !== undefined) void this.#loadBefore(tab);
+		}
+		this.#busy = busy;
 		const artifacts = threadArtifacts(this.#session.threads.main.state.items);
 		const signature = artifacts.map((a) => a.key).join("|");
 		if (signature === this.#signature) return;

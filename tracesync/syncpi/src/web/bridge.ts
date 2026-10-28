@@ -25,8 +25,9 @@ export const embedded =
 export function toHost(event: string, payload: Record<string, unknown> = {}): void {
 	if (!embedded) return;
 	const message = { type: "syncpi", event, ...payload };
-	if (window.ipc !== undefined) window.ipc.postMessage(JSON.stringify(message));
-	else if (window.parent !== window) window.parent.postMessage(message, location.origin);
+	// A page in an iframe talks to the page around it (the app's shell), even if a native webview's IPC is present.
+	if (window.parent !== window) window.parent.postMessage(message, location.origin);
+	else if (window.ipc !== undefined) window.ipc.postMessage(JSON.stringify(message));
 }
 
 export function onHostAction(handler: (action: string, data: unknown) => void): void {

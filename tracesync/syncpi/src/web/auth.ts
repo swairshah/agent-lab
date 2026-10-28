@@ -20,6 +20,8 @@ async function join(invite: string, name: string): Promise<{ ok: boolean; status
 
 /** Resolves with a member token once this browser is in the session, showing the join or sign-in screen meanwhile. */
 export async function signIn(): Promise<string> {
+	// In the app, its local host signs every request in for this member; the page holds no token.
+	if (document.documentElement.dataset.desktop === "true") return "desktop";
 	const fromHash = new URLSearchParams(location.hash.slice(1)).get("token");
 	if (fromHash) storage.set(TOKEN_KEY, fromHash);
 	const invite = location.pathname.slice(BASE.length - 1).match(/^\/s\/([A-Za-z0-9_-]+)/)?.[1];

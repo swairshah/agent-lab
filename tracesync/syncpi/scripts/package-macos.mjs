@@ -1,11 +1,11 @@
-// A native Rust/GPUI application with the existing SyncPi agent service as a private sidecar.
+// The desktop app: a native window (Tauri, desktop/) around the web app, with the SyncPi host as a private sidecar.
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, readdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 const root = resolve(import.meta.dirname, '..');
 const profile = process.env.SYNCPI_PACKAGE_PROFILE || 'release';
 const binary = join(root, 'desktop/target', profile, 'syncpi-desktop');
-if (!existsSync(binary)) throw new Error(`Build the native desktop app first (cargo build --manifest-path desktop/Cargo.toml${profile === 'release' ? ' --release' : ''}).`);
+if (!existsSync(binary)) throw new Error(`Build the desktop app first (cargo build --manifest-path desktop/Cargo.toml${profile === 'release' ? ' --release' : ''}).`);
 const target = join(root, 'dist/SyncPi.app');
 if (existsSync(target)) {
  const plist = join(target, 'Contents/Info.plist');
@@ -16,6 +16,7 @@ const contents = join(target,'Contents');
 mkdirSync(join(contents,'MacOS'), { recursive: true });
 const runtime = join(contents,'Resources/runtime'); mkdirSync(runtime, { recursive: true });
 cpSync(binary, join(contents,'MacOS/SyncPi')); chmodSync(join(contents,'MacOS/SyncPi'),0o755);
+cpSync(join(root,'desktop/icons/icon.icns'), join(contents,'Resources/icon.icns'));
 for (const name of ['desktop-host.mjs', 'pi-context.mjs', 'server.mjs', 'relay.mjs', 'web']) cpSync(join(root,'dist',name),join(runtime,name),{recursive:true});
 cpSync(process.execPath,join(runtime,'node')); chmodSync(join(runtime,'node'),0o755);
 writeFileSync(join(runtime,'package.json'), JSON.stringify({name:'syncpi-runtime',version:'0.1.0',type:'module'}));
@@ -38,7 +39,7 @@ writeFileSync(join(contents,'Info.plist'),`<?xml version="1.0" encoding="UTF-8"?
 <key>CFBundleIdentifier</key><string>dev.syncpi.desktop</string>
 <key>CFBundleExecutable</key><string>SyncPi</string>
 <key>CFBundleName</key><string>SyncPi</string>
-<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>dev.syncpi.desktop.open</string><key>CFBundleURLSchemes</key><array><string>syncpi</string></array></dict></array>
+<key>CFBundleIconFile</key><string>icon.icns</string>
 <key>CFBundleDisplayName</key><string>SyncPi</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>

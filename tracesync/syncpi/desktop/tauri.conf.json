@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SyncPi",
+  "version": "0.1.0",
+  "identifier": "dev.syncpi.desktop",
+  "build": { "frontendDist": "loading" },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": { "csp": null }
+  }
+}

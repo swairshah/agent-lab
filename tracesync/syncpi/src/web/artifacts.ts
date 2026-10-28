@@ -297,6 +297,8 @@ export type CardOptions = {
 	onComment?: CommentHandler;
 	/** Saves an edited project file; resolves to its new hash, or undefined when it couldn't be saved. */
 	onSave?: (path: string, text: string, base: string) => Promise<string | undefined>;
+	/** Goes in the header after the title, e.g. a file's version picker. */
+	extra?: HTMLElement;
 };
 
 /** A card for one artifact: a header with its name and kind, tabs where it has several views, and the view. */
@@ -315,6 +317,7 @@ export function artifactCard(artifact: Artifact, options: CardOptions): HTMLElem
 	if (options.onComment !== undefined && artifact.path !== undefined && artifact.kind !== "image") {
 		head.append(el("span", "artifact-hint", "Select line numbers to comment"));
 	}
+	if (options.extra !== undefined) head.append(options.extra);
 	const tabBar = el("div", "artifact-tabs");
 	// A project file can be edited and saved, as on the desktop. The save is refused if the file changed meanwhile.
 	if (options.onSave !== undefined && artifact.source === "file" && artifact.path !== undefined && artifact.kind !== "image") {
