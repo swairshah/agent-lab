@@ -1,6 +1,7 @@
 mod backend;
 mod citations;
 mod diagram;
+mod fileview;
 mod icons;
 mod keymap;
 mod message;
@@ -40,7 +41,7 @@ fn flag(value: &Value, key: &str) -> bool {
     value[key].as_bool().unwrap_or(false)
 }
 /// The highlighter language for a file, from its extension.
-fn language_of(path: &str) -> &'static str {
+pub(crate) fn language_of(path: &str) -> &'static str {
     match path
         .rsplit('.')
         .next()
@@ -146,7 +147,12 @@ struct Desktop {
     /// The open file as the project has it, to tell a real local edit from the file as loaded.
     file_text: String,
     /// A cited file being opened, and the line to put the cursor on when it arrives.
-    cite_line: Option<(String, usize)>,
+    cite_line: Option<(String, usize, usize)>,
+    /// Lines selected in the file view (anchor, head), a drag in progress, and whether the editor is showing.
+    line_selection: Option<(usize, usize)>,
+    line_drag: bool,
+    file_editing: bool,
+    file_scroll: ScrollHandle,
     git: Value,
     share_url: String,
     models: Vec<Value>,
@@ -298,6 +304,10 @@ impl Desktop {
             file_hash: String::new(),
             file_text: String::new(),
             cite_line: None,
+            line_selection: None,
+            line_drag: false,
+            file_editing: false,
+            file_scroll: ScrollHandle::new(),
             git: Value::Null,
             share_url: String::new(),
             models: vec![],
@@ -428,8 +438,15 @@ impl Desktop {
                                 let cited = self
                                     .cite_line
                                     .take()
-                                    .filter(|(path, _)| *path == self.file_path)
-                                    .map(|(_, line)| line);
+                                    .filter(|(path, _, _)| *path == self.file_path)
+                                    .map(|(_, start, end)| (start, end));
+                                self.file_editing = false;
+                                self.comment_lines = None;
+                                self.line_selection = cited;
+                                if let Some((start, _)) = cited {
+                                    self.file_scroll.scroll_to_item(start.saturating_sub(4));
+                                }
+                                let cited = cited.map(|(start, _)| start);
                                 self.editor.update(cx, |editor, cx| {
                                     editor.set_highlighter(language, cx);
                                     editor.set_value(content, window, cx);
@@ -486,7 +503,7 @@ impl Desktop {
             }
         }
         for (path, lines) in citations::take() {
-            self.cite_line = lines.map(|(start, _)| (path.clone(), start));
+            self.cite_line = lines.map(|(start, end)| (path.clone(), start, end));
             self.open_file(path, cx);
             changed = true;
         }
@@ -886,6 +903,13 @@ impl Desktop {
         if self.file_path.is_empty() || self.pane != "files" {
             return self.notice("Open a file and select lines to comment on them.", cx);
         }
+        // In the view, the selected lines; in the editor, the lines of its selection, shown in the view.
+        if !self.file_editing {
+            if self.line_selection.is_none() {
+                return self.notice("Select lines to comment on them.", cx);
+            }
+            return self.comment_on_selection(window, cx);
+        }
         let text = self.editor.read(cx).value().to_string();
         let selection = self.editor.update(cx, |editor, cx| {
             editor.selected_text_range(true, window, cx)
@@ -916,12 +940,9 @@ impl Desktop {
                 .max(selection.range.start),
         )
         .max(start);
-        self.comment_lines = Some((start, end));
-        self.comment_input.update(cx, |input, cx| {
-            input.set_value("", window, cx);
-            input.focus(window, cx);
-        });
-        cx.notify();
+        self.file_editing = false;
+        self.line_selection = Some((start, end));
+        self.comment_on_selection(window, cx);
     }
     /// Sends the comment being written, with the lines it's about, to the thread as its own message.
     fn send_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -950,6 +971,7 @@ impl Desktop {
             "comments": [{ "path": self.file_path, "start": start, "end": end, "excerpt": excerpt, "text": note }],
         }));
         self.comment_lines = None;
+        self.line_selection = None;
         self.comment_input
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.notice(
@@ -1315,14 +1337,22 @@ impl Desktop {
                                 )
                                 .child(label(self.file_path.clone()).flex_1().text_xs())
                                 .child(
-                                    Button::new("comment-file")
+                                    Button::new("edit-file")
                                         .ghost()
                                         .xsmall()
-                                        .icon(icons::icon("message-square"))
-                                        .label("Comment")
-                                        .tooltip("Comment on the selected lines (⌥⌘M)")
+                                        .label(if self.file_editing { "Done" } else { "Edit" })
+                                        .disabled(self.role() == "viewer")
+                                        .tooltip(if self.file_editing {
+                                            "Back to viewing and commenting"
+                                        } else {
+                                            "Edit the file"
+                                        })
                                         .on_click(cx.listener(|this, _, window, cx| {
-                                            this.start_comment(window, cx)
+                                            this.file_editing = !this.file_editing;
+                                            if this.file_editing {
+                                                this.editor.update(cx, |e, cx| e.focus(window, cx));
+                                            }
+                                            cx.notify();
                                         })),
                                 )
                                 .child(
@@ -1358,55 +1388,19 @@ impl Desktop {
                                         })),
                                 ),
                         )
-                        .child(
+                        .child(if self.file_editing {
                             Input::new(&self.editor)
                                 .h_full()
                                 .bordered(false)
                                 .font_family(theme::MONO)
-                                .text_size(theme::sz(12.5)),
-                        )
-                        .when_some(self.comment_lines, |d, (start, end)| {
-                            let p = theme::palette(cx);
-                            d.child(
-                                div()
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .m_2()
-                                    .p_2()
-                                    .rounded(px(8.))
-                                    .border_l_2()
-                                    .border_color(p.accent)
-                                    .bg(p.surface)
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .text_size(theme::sz(12.))
-                                            .text_color(p.muted)
-                                            .child(div().flex_1().child(format!(
-                                                "Comment on {}:{}",
-                                                self.file_path,
-                                                if start == end {
-                                                    start.to_string()
-                                                } else {
-                                                    format!("{start}-{end}")
-                                                }
-                                            )))
-                                            .child(
-                                                Button::new("cancel-comment")
-                                                    .ghost()
-                                                    .xsmall()
-                                                    .label("Cancel")
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.comment_lines = None;
-                                                        cx.notify();
-                                                    })),
-                                            ),
-                                    )
-                                    .child(Input::new(&self.comment_input).w_full()),
-                            )
+                                .text_size(theme::sz(12.5))
+                                .into_any_element()
+                        } else {
+                            div()
+                                .flex_1()
+                                .min_h_0()
+                                .child(self.file_view(cx))
+                                .into_any_element()
                         })
                         .child(
                             label(if dirty {
