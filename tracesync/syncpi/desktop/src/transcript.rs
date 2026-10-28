@@ -245,14 +245,15 @@ impl Desktop {
         CONTENT.store((column - AVATAR - 14.) as u32, Ordering::Relaxed);
         let state = self.native[&self.showing].clone();
         let items = array(&state, "items");
-        let mut thread = div()
+        // The thread's rows, built every frame (cheap) but laid out and painted only when on screen: a virtual list,
+        // since laying out a long thread every frame made scrolling and typing slow.
+        let mut rows: Vec<AnyElement> = vec![];
+        let thread = div()
             .id("transcript")
             .w_full()
             .min_w_0()
             .flex_1()
             .min_h_0()
-            .overflow_y_scroll()
-            .track_scroll(&self.scroll)
             .track_focus(&self.thread_focus)
             // A press on a message's text (prose.rs) put the caret there: the thread takes focus.
             .on_mouse_down(
@@ -265,13 +266,7 @@ impl Desktop {
                     }
                 }),
             )
-            .on_mouse_up(MouseButton::Left, |_, _, _| crate::cursor::release())
-            .px(px(28.))
-            .pt(px(28.))
-            .pb(px(160.))
-            .flex()
-            .flex_col()
-            .items_center();
+            .on_mouse_up(MouseButton::Left, |_, _, _| crate::cursor::release());
         // The thread's text cursor (cursor.rs): the caret shows while the thread has focus; the comment box goes under
         // the block it's about.
         let focused = self.thread_focus.is_focused(window);
@@ -303,26 +298,26 @@ impl Desktop {
             .thread_comment
             .as_ref()
             .map(|c| (c.2.clone(), self.quote_box(&p, cx).into_any_element()));
-        crate::cursor::begin(
-            p.accent.opacity(0.22),
-            p.accent,
-            focused,
-            after,
-            &self.scroll,
-        );
+        crate::cursor::begin(p.accent.opacity(0.22), p.accent, focused, after, &self.list);
         let mut previous_agent = false;
         let mut model_of_turn = text(&state, "model");
         for unit in display_units(&items) {
             let item = match unit {
                 Unit::Group(tools) if tools.len() > 1 => {
+                    crate::cursor::row(rows.len());
                     let element = self.group_row(&tools, previous_agent, &model_of_turn, &p, cx);
-                    thread = thread.child(element.mt(px(if previous_agent { 10. } else { 22. })));
+                    rows.push(
+                        element
+                            .mt(px(if previous_agent { 10. } else { 22. }))
+                            .into_any_element(),
+                    );
                     previous_agent = true;
                     continue;
                 }
                 Unit::Group(tools) => tools[0],
                 Unit::Item(item) => item,
             };
+            crate::cursor::row(rows.len());
             let kind = text(item, "kind");
             let key = text(item, "key");
             let agent = kind == "assistant" || kind == "tool";
@@ -353,21 +348,69 @@ impl Desktop {
             };
             if let Some(element) = element {
                 // Consecutive agent rows sit closer together under one avatar.
-                thread = thread.child(if agent && previous_agent {
-                    element.mt(px(10.))
-                } else if agent {
-                    element.mt(px(22.))
-                } else {
-                    element
-                });
+                rows.push(
+                    if agent && previous_agent {
+                        element.mt(px(10.))
+                    } else if agent {
+                        element.mt(px(22.))
+                    } else {
+                        element
+                    }
+                    .into_any_element(),
+                );
                 previous_agent = agent;
             }
         }
         if self.showing == "main" && self.role() != "viewer" {
-            thread = thread.child(self.composer_row(&p, cx));
+            crate::cursor::row(rows.len());
+            rows.push(self.composer_row(&p, cx).into_any_element());
         } else if self.role() == "viewer" {
-            thread = thread.child(label("You can read this thread. Ask an admin to make you an editor to talk to the agent.").mt(px(26.)).text_color(p.muted).text_size(theme::sz(13.)));
+            rows.push(label("You can read this thread. Ask an admin to make you an editor to talk to the agent.").mt(px(26.)).text_color(p.muted).text_size(theme::sz(13.)).into_any_element());
         }
+        // A new thread starts over; rows added or removed are measured again from the old last row (the composer).
+        let count = rows.len();
+        let showing = format!("{}/{}", self.active, self.showing);
+        if self.list_showing != showing {
+            self.list_showing = showing;
+            self.list.reset(count);
+            self.list.scroll_to(ListOffset {
+                item_ix: count,
+                offset_in_item: px(0.),
+            });
+        } else if self.list.item_count() != count {
+            let old = self.list.item_count();
+            let from = old.saturating_sub(1).min(count);
+            self.list.splice(from..old, count - from);
+        }
+        let last = count.saturating_sub(1);
+        let rows: Vec<Option<AnyElement>> = rows
+            .into_iter()
+            .enumerate()
+            .map(|(n, row)| {
+                Some(
+                    div()
+                        .w_full()
+                        .px(px(28.))
+                        .when(n == 0, |d| d.pt(px(28.)))
+                        .when(n == last, |d| d.pb(px(160.)))
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .child(row)
+                        .into_any_element(),
+                )
+            })
+            .collect();
+        let rows = std::rc::Rc::new(std::cell::RefCell::new(rows));
+        let thread = thread.child(
+            list(self.list.clone(), move |n, _, _| {
+                rows.borrow_mut()
+                    .get_mut(n)
+                    .and_then(Option::take)
+                    .unwrap_or_else(|| div().into_any_element())
+            })
+            .size_full(),
+        );
         div()
             .size_full()
             .min_w_0()
@@ -1033,7 +1076,11 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if e.modifiers.platform || e.modifiers.alt || e.modifiers.control {
+        if e.modifiers.alt || e.modifiers.control {
+            return false;
+        }
+        // ⌘↩ (or ↩) on a selection opens the comment box; other ⌘ keys aren't the cursor's.
+        if e.modifiers.platform && e.key != "enter" {
             return false;
         }
         match e.key.as_str() {
@@ -1048,9 +1095,10 @@ impl Desktop {
                 let Some(quote) = crate::cursor::quote() else {
                     return false;
                 };
+                crate::cursor::reveal_box(&quote.2);
                 self.thread_comment = Some(quote);
                 self.comment_input.update(cx, |input, cx| {
-                    input.set_placeholder("Comment on this", window, cx);
+                    input.set_placeholder("", window, cx);
                     input.set_value("", window, cx);
                     input.focus(window, cx);
                 });
@@ -1075,6 +1123,7 @@ impl Desktop {
             quote
         };
         div()
+            .relative()
             .flex()
             .flex_col()
             .gap_2()
@@ -1083,6 +1132,30 @@ impl Desktop {
             .bg(p.raised)
             .shadow_sm()
             .font_family(theme::SANS)
+            // Just opened: scroll it into view, with a little room below.
+            .child(
+                canvas(
+                    |_, _, _| {},
+                    |bounds, _, window, _| {
+                        if !crate::cursor::take_reveal_box() {
+                            return;
+                        }
+                        if let Some(list) = crate::cursor::scroll() {
+                            let view = list.viewport_bounds();
+                            let below = bounds.bottom() + px(40.) - view.bottom();
+                            let above = view.top() + px(40.) - bounds.top();
+                            if below > px(0.) {
+                                list.scroll_by(below);
+                            } else if above > px(0.) {
+                                list.scroll_by(-above);
+                            }
+                            window.refresh();
+                        }
+                    },
+                )
+                .absolute()
+                .inset_0(),
+            )
             .capture_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
                 if e.keystroke.key == "escape" {
                     this.thread_comment = None;
@@ -1111,13 +1184,7 @@ impl Desktop {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_size(theme::sz(11.5))
-                            .text_color(p.muted)
-                            .child("⌘↩ to send, Esc to cancel"),
-                    )
+                    .child(div().flex_1())
                     .child(
                         Button::new("cancel-quote")
                             .ghost()

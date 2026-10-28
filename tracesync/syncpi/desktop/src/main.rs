@@ -145,7 +145,9 @@ struct Desktop {
     thread_comment: Option<(String, String, String)>,
     comment_input: Entity<InputState>,
     thinking: HashSet<String>,
-    scroll: ScrollHandle,
+    /// The thread, as a virtual list, and which thread it shows ("session/thread").
+    list: ListState,
+    list_showing: String,
     files: Vec<String>,
     file_path: String,
     file_hash: String,
@@ -214,14 +216,6 @@ impl Desktop {
         let intercept = cx.intercept_keystrokes(move |event, window, cx| {
             let key = event.keystroke.clone();
             let stroke = key.unparse();
-            eprintln!(
-                "KEY {stroke} t={:?}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis()
-                    % 100000
-            );
             if last
                 .as_ref()
                 .is_some_and(|(s, at)| *s == stroke && at.elapsed() < Duration::from_millis(12))
@@ -234,17 +228,50 @@ impl Desktop {
                     || key.modifiers.platform
                     || key.modifiers.alt
                     || key.modifiers.control);
-                let handled =
-                    if this.thread_focus.is_focused(window) && this.thread_comment.is_none() {
-                        this.thread_key(&key, window, cx)
-                    } else if key.key == "up"
-                        && plain
-                        && this.composer.focus_handle(cx).is_focused(window)
-                    {
-                        this.composer_up(window, cx)
+                let cmd = key.modifiers.platform && !key.modifiers.alt && !key.modifiers.control;
+                // Text size: ⌘+ (⌘= or ⇧⌘=), ⌘−, ⌘0. Matched here: macOS reports these keys in ways the bindings miss.
+                let zoom = match key.key.as_str() {
+                    "=" | "+" if cmd => Some("app.zoomIn"),
+                    "-" | "_" if cmd => Some("app.zoomOut"),
+                    "0" if cmd && !key.modifiers.shift => Some("app.zoomReset"),
+                    _ => None,
+                };
+                let handled = if let Some(command) = zoom {
+                    this.run_command(command, window, cx);
+                    true
+                } else if key.key == "escape"
+                    && plain
+                    && (this.palette.is_some() || !this.modal.is_empty())
+                {
+                    // Esc closes the palette or a dialog, even when a text field in it has focus.
+                    if this.palette.is_some() {
+                        this.close_palette(window, cx);
                     } else {
-                        false
-                    };
+                        this.modal.clear();
+                        cx.notify();
+                    }
+                    true
+                } else if key.key == "escape" && plain && this.thread_comment.is_some() {
+                    // Esc drops the comment being written, even with its text field focused.
+                    this.thread_comment = None;
+                    this.thread_focus.focus(window);
+                    cx.notify();
+                    true
+                } else if key.key == "escape" && plain && this.comment_lines.is_some() {
+                    this.comment_lines = None;
+                    this.line_selection = None;
+                    cx.notify();
+                    true
+                } else if this.thread_focus.is_focused(window) && this.thread_comment.is_none() {
+                    this.thread_key(&key, window, cx)
+                } else if key.key == "up"
+                    && plain
+                    && this.composer.focus_handle(cx).is_focused(window)
+                {
+                    this.composer_up(window, cx)
+                } else {
+                    false
+                };
                 if handled {
                     cx.stop_propagation();
                 }
@@ -354,7 +381,8 @@ impl Desktop {
             thread_comment: None,
             comment_input,
             thinking: HashSet::new(),
-            scroll: ScrollHandle::new(),
+            list: ListState::new(0, ListAlignment::Top, px(800.)),
+            list_showing: String::new(),
             files: vec![],
             file_path: String::new(),
             file_hash: String::new(),
@@ -433,10 +461,14 @@ impl Desktop {
                     let old_rev = self.native[&self.showing]["rev"].as_u64();
                     let new_rev = data[&self.showing]["rev"].as_u64();
                     if old_rev != new_rev {
-                        let offset = self.scroll.offset();
-                        let max = self.scroll.max_offset();
-                        if -offset.y + px(120.) >= max.height {
-                            self.scroll.scroll_to_bottom();
+                        // Following the end of the thread: stay at the end as it grows.
+                        let offset = self.list.scroll_px_offset_for_scrollbar();
+                        let max = self.list.max_offset_for_scrollbar();
+                        if -offset.y + px(160.) >= max.height {
+                            self.list.scroll_to(ListOffset {
+                                item_ix: usize::MAX,
+                                offset_in_item: px(0.),
+                            });
                         }
                     }
                     let error = text(&data, "error");
@@ -557,6 +589,13 @@ impl Desktop {
                 }
                 _ => {}
             }
+        }
+        // An arrow key that reached a text off screen, now revealed.
+        if let Some((key, shift)) = crate::cursor::take_retry() {
+            if let crate::cursor::Moved::Out = crate::cursor::key(&key, shift) {
+                self.composer.update(cx, |s, cx| s.focus(window, cx));
+            }
+            changed = true;
         }
         for (path, lines) in citations::take() {
             self.cite_line = lines.map(|(start, end)| (path.clone(), start, end));
@@ -1142,7 +1181,10 @@ impl Desktop {
         self.prefs.drafts.remove(&self.active);
         self.persist();
         self.steer = false;
-        self.scroll.scroll_to_bottom();
+        self.list.scroll_to(ListOffset {
+            item_ix: usize::MAX,
+            offset_in_item: px(0.),
+        });
         cx.notify();
     }
     fn slash(&mut self, message: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {

@@ -69,12 +69,8 @@ impl Desktop {
             return;
         };
         self.comment_lines = Some(lines);
-        let (start, end) = lines;
-        let placeholder = if start == end {
-            format!("Comment on line {start}")
-        } else {
-            format!("Comment on lines {start}–{end}")
-        };
+
+        let placeholder = String::new();
         self.comment_input.update(cx, |input, cx| {
             input.set_placeholder(placeholder, window, cx);
             input.set_value("", window, cx);
@@ -277,13 +273,7 @@ impl Desktop {
                             .items_center()
                             .justify_end()
                             .gap_1()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_size(theme::sz(11.5))
-                                    .text_color(p.muted)
-                                    .child("⌘↩ to send, Esc to cancel"),
-                            )
+                            .child(div().flex_1())
                             .child(
                                 Button::new("cancel-comment")
                                     .ghost()

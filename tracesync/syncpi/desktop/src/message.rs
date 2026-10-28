@@ -3,7 +3,7 @@ use gpui::{prelude::FluentBuilder, *};
 use gpui_component::ActiveTheme;
 use markdown::{ParseOptions, mdast::Node};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Block {
     Prose(String),
     Table(Vec<Vec<String>>),
@@ -39,7 +39,31 @@ fn alert(quoted: &str) -> Option<(String, String)> {
         .contains(&kind)
         .then(|| (kind.to_owned(), body.trim().to_owned()))
 }
+/// The blocks of `source`, parsed once and kept (see prose::parsed).
 pub fn blocks(source: &str) -> Vec<Block> {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    thread_local! {
+        static CACHE: RefCell<HashMap<u64, Vec<Block>>> = RefCell::new(HashMap::new());
+    }
+    let mut hasher = DefaultHasher::new();
+    source.hash(&mut hasher);
+    let key = hasher.finish();
+    if let Some(hit) = CACHE.with_borrow(|c| c.get(&key).cloned()) {
+        return hit;
+    }
+    let out = parse_blocks(source);
+    CACHE.with_borrow_mut(|c| {
+        if c.len() > 4000 {
+            c.clear();
+        }
+        c.insert(key, out.clone());
+    });
+    out
+}
+
+fn parse_blocks(source: &str) -> Vec<Block> {
     let Ok(Node::Root(root)) = markdown::to_mdast(source, &ParseOptions::gfm()) else {
         return vec![Block::Prose(source.into())];
     };

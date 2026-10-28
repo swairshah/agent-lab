@@ -4,9 +4,11 @@
 // composer's first line puts the caret at the end of the thread, and Down past the end goes back.
 //
 // Messages are drawn by free functions (message.rs, prose.rs), so each text registers itself here as the frame
-// renders, in order, with its layout; keys and clicks move through the texts of the frame before. Each text paints
-// its own part of the selection and the caret (prose::visual_lines).
-use gpui::{AnyElement, Hsla, Pixels, Point, ScrollHandle, TextLayout, point, px};
+// renders, in order, with its layout and the thread row it's in; keys and clicks move through the texts of the frame
+// before. Each text paints its own part of the selection and the caret (prose::visual_lines). The thread is a
+// virtual list: only rows on screen are laid out, so a key that reaches a text off screen reveals its row and is
+// tried again on the next tick (take_retry).
+use gpui::{AnyElement, Hsla, ListState, Pixels, Point, TextLayout, point, px};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
@@ -31,6 +33,8 @@ struct Text {
     message: String,
     text: String,
     layout: TextLayout,
+    /// The thread row it's in.
+    row: usize,
 }
 
 #[derive(Default)]
@@ -49,11 +53,25 @@ struct State {
     /// An element to draw right after the block with this id (the comment box).
     after: Option<(String, AnyElement)>,
     follow: bool,
-    scroll: Option<ScrollHandle>,
+    scroll: Option<ListState>,
+    /// The thread row being built, and a key to try again once an off-screen row is revealed.
+    row: usize,
+    retry: Option<(String, bool)>,
+    /// Texts painted this frame and the last: only those are laid out (the rest are off screen).
+    painted: HashSet<String>,
+    painted_before: HashSet<String>,
+    /// The comment box just opened: scroll it into view when it's drawn.
+    reveal_box: bool,
     /// Comments by the message they're on, the ones already placed this frame, and their color.
     marks: HashMap<String, Vec<Mark>>,
     placed: HashSet<(String, usize)>,
     mark_color: Option<Hsla>,
+    /// Where each text is in the order, and the selection as (text order, offset) pairs, worked out once per frame
+    /// on the first paint rather than by every text.
+    order: Option<(
+        HashMap<String, usize>,
+        Option<((usize, usize), (usize, usize))>,
+    )>,
 }
 
 thread_local! {
@@ -73,11 +91,12 @@ pub fn begin(
     caret: Hsla,
     focused: bool,
     after: Option<(String, AnyElement)>,
-    scroll: &ScrollHandle,
+    scroll: &ListState,
 ) {
     STATE.with_borrow_mut(|s| {
         if !s.drawing.is_empty() {
             s.last = std::mem::take(&mut s.drawing);
+            s.painted_before = std::mem::take(&mut s.painted);
         }
         s.tint = Some(tint);
         s.caret_color = Some(caret);
@@ -85,6 +104,7 @@ pub fn begin(
         s.after = after;
         s.scroll = Some(scroll.clone());
         s.placed.clear();
+        s.order = None;
     });
 }
 
@@ -159,6 +179,31 @@ fn texts(s: &State) -> &Vec<Text> {
     }
 }
 
+/// The thread row the texts registered next are in.
+pub fn row(index: usize) {
+    STATE.with_borrow_mut(|s| s.row = index);
+}
+
+/// A key that reached a text off screen: its row has been revealed, so try it again (from the app's poll).
+pub fn take_retry() -> Option<(String, bool)> {
+    STATE.with_borrow_mut(|s| s.retry.take())
+}
+
+/// Brings the row of text `id` on screen, and the comment box that opens under it into view once it's drawn.
+pub fn reveal_box(id: &str) {
+    STATE.with_borrow_mut(|s| {
+        if let (Some(list), Some(t)) = (&s.scroll, texts(s).iter().find(|t| t.id == id)) {
+            list.scroll_to_reveal_item(t.row);
+        }
+        s.reveal_box = true;
+    });
+}
+
+/// Whether the comment box should scroll itself into view (taken once).
+pub fn take_reveal_box() -> bool {
+    STATE.with_borrow_mut(|s| std::mem::take(&mut s.reveal_box))
+}
+
 /// Registers a text as it's drawn. Only messages' texts take the cursor.
 pub fn register(id: &str, text: &str, layout: &TextLayout) {
     if !(id.starts_with("assistant-") || id.starts_with("user-")) {
@@ -170,6 +215,7 @@ pub fn register(id: &str, text: &str, layout: &TextLayout) {
             message: message_of(id),
             text: text.to_owned(),
             layout: layout.clone(),
+            row: s.row,
         })
     });
 }
@@ -186,29 +232,37 @@ pub struct Paint {
 
 pub fn paint_for(id: &str, len: usize) -> Option<Paint> {
     STATE.with_borrow_mut(|s| {
+        s.painted.insert(id.to_owned());
         let (tint, caret_color) = (s.tint?, s.caret_color?);
-        let list = texts(s).clone();
-        let order = |p: &Pos| list.iter().position(|t| t.id == p.id);
-        let me = list.iter().position(|t| t.id == id)?;
-        let mut selected = None;
-        if let (Some(a), Some(b)) = (&s.anchor, &s.caret) {
-            if a != b {
-                if let (Some(oa), Some(ob)) = (order(a), order(b)) {
-                    let (start, end) = if (oa, a.index) <= (ob, b.index) {
+        if s.order.is_none() {
+            let order: HashMap<String, usize> = texts(s)
+                .iter()
+                .enumerate()
+                .map(|(n, t)| (t.id.clone(), n))
+                .collect();
+            let range = match (&s.anchor, &s.caret) {
+                (Some(a), Some(b)) if a != b => match (order.get(&a.id), order.get(&b.id)) {
+                    (Some(&oa), Some(&ob)) => Some(if (oa, a.index) <= (ob, b.index) {
                         ((oa, a.index), (ob, b.index))
                     } else {
                         ((ob, b.index), (oa, a.index))
-                    };
-                    if start.0 <= me && me <= end.0 {
-                        let from = if me == start.0 { start.1 } else { 0 };
-                        let to = if me == end.0 { end.1 } else { len };
-                        if from < to {
-                            selected = Some((from, to.min(len)));
-                        }
-                    }
-                }
-            }
+                    }),
+                    _ => None,
+                },
+                _ => None,
+            };
+            s.order = Some((order, range));
         }
+        let (order, range) = s.order.as_ref()?;
+        let me = *order.get(id)?;
+        let selected = range.and_then(|(start, end)| {
+            if !(start.0 <= me && me <= end.0) {
+                return None;
+            }
+            let from = if me == start.0 { start.1 } else { 0 };
+            let to = if me == end.0 { end.1 } else { len };
+            (from < to).then_some((from, to.min(len)))
+        });
         let caret = s
             .caret
             .as_ref()
@@ -225,7 +279,7 @@ pub fn paint_for(id: &str, len: usize) -> Option<Paint> {
     })
 }
 
-pub fn scroll() -> Option<ScrollHandle> {
+pub fn scroll() -> Option<ListState> {
     STATE.with_borrow(|s| s.scroll.clone())
 }
 
@@ -343,6 +397,24 @@ pub fn key(key: &str, shift: bool) -> Moved {
         };
         let here = &list[at];
         let index = caret.index.min(here.text.len());
+        // The caret's text, or the one a key moves into, isn't laid out (off screen): reveal its row, try again.
+        let painted = if s.drawing.is_empty() {
+            &s.painted_before
+        } else {
+            &s.painted
+        };
+        let painted = painted.clone();
+        let laid_out = |t: &Text| painted.contains(&t.id);
+        let reveal = |t: &Text, s: &mut State| {
+            if let Some(list) = &s.scroll {
+                list.scroll_to_reveal_item(t.row);
+            }
+            s.retry = Some((key.to_owned(), shift));
+            Moved::Yes
+        };
+        if (key == "up" || key == "down") && !laid_out(here) {
+            return reveal(here, s);
+        }
         let next = match key {
             "left" => {
                 if index > 0 {
@@ -407,6 +479,7 @@ pub fn key(key: &str, shift: bool) -> Moved {
                         list.get(at + 1)
                     };
                     match other {
+                        Some(t) if !laid_out(t) => return reveal(t, s),
                         Some(t) => safe(|| {
                             let b = t.layout.bounds();
                             let h = t.layout.line_height();

@@ -71,7 +71,6 @@ function lineComments(path: string, onComment: CommentHandler, excerpt: (range: 
 		redraw();
 		clear();
 	};
-	const label = (r: Range) => `${r.start === r.end ? `line ${r.start}` : `lines ${r.start}–${r.end}`}${r.side === "deletions" ? " (removed)" : ""}`;
 	return {
 		onLineSelectionEnd(range: (Range & { endSide?: Range["side"] }) | null) {
 			if (range === null) return drop();
@@ -87,7 +86,7 @@ function lineComments(path: string, onComment: CommentHandler, excerpt: (range: 
 			if (!meta.box) {
 				const pill = el("button", "comment-pill");
 				pill.type = "button";
-				pill.title = "Comment on these lines (⌥⌘M)";
+				pill.title = "Comment (⌥⌘M)";
 				pill.innerHTML = `<svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Comment`;
 				pill.onclick = open;
 				const row = el("div", "comment-pill-row");
@@ -97,7 +96,6 @@ function lineComments(path: string, onComment: CommentHandler, excerpt: (range: 
 			const form = el("div", "line-comment");
 			const input = el("textarea");
 			input.rows = 2;
-			input.placeholder = `Comment on ${label(meta.range)}`;
 			const send = () => {
 				const text = input.value.trim();
 				if (!text) return;
@@ -112,7 +110,7 @@ function lineComments(path: string, onComment: CommentHandler, excerpt: (range: 
 				}
 			});
 			const actions = el("div", "line-comment-actions");
-			actions.append(el("span", "muted", "⌘↩ to send, Esc to cancel"));
+			actions.append(el("span", "spacer"));
 			const cancel = el("button", "text-button", "Cancel");
 			cancel.type = "button";
 			cancel.onclick = drop;

@@ -55,7 +55,7 @@ export class QuoteComments {
 			"keydown",
 			(event) => {
 				// The cursor in the thread: Enter comments where it is.
-				if (event.target === thread && event.key === "Enter" && !event.metaKey && !event.ctrlKey && !event.isComposing) {
+				if (event.target === thread && event.key === "Enter" && !event.isComposing) {
 					event.preventDefault();
 					if (!this.#shown?.classList.contains("quote-box")) this.#enter();
 					return;
@@ -66,7 +66,7 @@ export class QuoteComments {
 					event.preventDefault();
 					event.stopPropagation();
 					this.#close(true);
-				} else if (event.key === "Enter" && !typing && this.#shown.classList.contains("quote-pill-row")) {
+				} else if (event.key === "Enter" && !typing && this.#shown?.classList.contains("quote-pill-row")) {
 					event.preventDefault();
 					this.#open();
 				}
@@ -157,7 +157,7 @@ export class QuoteComments {
 		const row = el("div", "quote-pill-row");
 		const pill = el("button", "comment-pill");
 		pill.type = "button";
-		pill.title = "Comment on this (Enter)";
+		pill.title = "Comment (⌘↩)";
 		pill.innerHTML = `${ICON}Comment`;
 		// Keep the selection: a mousedown on the button would otherwise clear it.
 		pill.addEventListener("mousedown", (event) => event.preventDefault());
@@ -177,7 +177,6 @@ export class QuoteComments {
 		box.append(el("blockquote", "quote-excerpt", shown));
 		const input = el("textarea");
 		input.rows = 2;
-		input.placeholder = "Comment on this";
 		const send = () => {
 			const text = input.value.trim();
 			if (!text) return;
@@ -191,7 +190,7 @@ export class QuoteComments {
 			}
 		});
 		const actions = el("div", "line-comment-actions");
-		actions.append(el("span", "muted", "⌘↩ to send, Esc to cancel"));
+		actions.append(el("span", "spacer"));
 		const cancel = el("button", "text-button", "Cancel");
 		cancel.type = "button";
 		cancel.onclick = () => this.#close(true);

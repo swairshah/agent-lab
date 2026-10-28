@@ -189,6 +189,34 @@ fn inline_note(mark: crate::cursor::Mark) -> Div {
         .child(div().text_size(theme::sz(14.5)).child(mark.note))
 }
 
+/// The Markdown tree of `source`, parsed once and kept: a frame draws every message, and parsing each one every
+/// frame made long threads slow.
+fn parsed(source: &str) -> Option<std::rc::Rc<Vec<Node>>> {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    thread_local! {
+        static CACHE: RefCell<HashMap<u64, Option<std::rc::Rc<Vec<Node>>>>> = RefCell::new(HashMap::new());
+    }
+    let mut hasher = DefaultHasher::new();
+    source.hash(&mut hasher);
+    let key = hasher.finish();
+    if let Some(hit) = CACHE.with_borrow(|c| c.get(&key).cloned()) {
+        return hit;
+    }
+    let nodes = match to_mdast(&crate::citations::rewrite(source), &ParseOptions::gfm()) {
+        Ok(Node::Root(root)) => Some(std::rc::Rc::new(root.children)),
+        _ => None,
+    };
+    CACHE.with_borrow_mut(|c| {
+        if c.len() > 4000 {
+            c.clear();
+        }
+        c.insert(key, nodes.clone());
+    });
+    nodes
+}
+
 /// The byte offset in `layout` under a point; 0 when it isn't laid out yet.
 fn index_at(layout: &TextLayout, at: Point<Pixels>) -> usize {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -320,17 +348,16 @@ pub(crate) fn visual_lines(
                                 paint.caret_color,
                             ));
                             if paint.follow {
-                                if let Some(scroll) = crate::cursor::scroll() {
-                                    let view = scroll.bounds();
-                                    let mut offset = scroll.offset();
+                                if let Some(list) = crate::cursor::scroll() {
+                                    let view = list.viewport_bounds();
                                     let margin = height * 2.;
                                     if c.y < view.top() + margin {
-                                        offset.y += view.top() + margin - c.y;
+                                        list.scroll_by(c.y - (view.top() + margin));
+                                        window.refresh();
                                     } else if c.y + height > view.bottom() - margin {
-                                        offset.y -= c.y + height - (view.bottom() - margin);
+                                        list.scroll_by(c.y + height - (view.bottom() - margin));
+                                        window.refresh();
                                     }
-                                    scroll.set_offset(offset);
-                                    window.refresh();
                                 }
                             }
                         }
@@ -449,9 +476,8 @@ pub(crate) fn as_line(id: String, text: &str, element: AnyElement) -> AnyElement
 /// Markdown prose as wrapping native text.
 pub fn render(id: &str, source: &str, cx: &App) -> AnyElement {
     let p = theme::palette(cx);
-    let nodes = match to_mdast(&crate::citations::rewrite(source), &ParseOptions::gfm()) {
-        Ok(Node::Root(root)) => root.children,
-        _ => return div().w_full().child(source.to_owned()).into_any_element(),
+    let Some(nodes) = parsed(source) else {
+        return div().w_full().child(source.to_owned()).into_any_element();
     };
     div()
         .w_full()
