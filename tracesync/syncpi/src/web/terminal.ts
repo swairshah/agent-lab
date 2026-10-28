@@ -3,7 +3,7 @@
 // composer runs a command in a new one. Only in the app: a browser has no shell to give.
 import { $, el } from "./dom.ts";
 
-type Tab = { id: number; title: string; view: HTMLElement; socket: WebSocket; closed: boolean; fit(): void; focus(): void };
+type Tab = { id: number; title: string; view: HTMLElement; socket: WebSocket; closed: boolean; fit(): void; focus(): void; clear(): void; send(data: string): void };
 
 export class Terminals {
 	readonly #thread: string;
@@ -34,6 +34,21 @@ export class Terminals {
 
 	get open(): boolean {
 		return !this.#root.hidden;
+	}
+
+	/** Whether a terminal has the keyboard: its keys are its own (⌘K, ⌘F). */
+	get focused(): boolean {
+		return document.activeElement?.closest(".terminal") != null;
+	}
+
+	/**
+	 * ⌘K (Ctrl+K elsewhere) when it reaches the page by the app's menu rather than as a key: what the terminal would
+	 * have done with it, clearing the screen on a Mac, as Terminal does, and sending Ctrl+K to the shell elsewhere.
+	 */
+	commandK(mac: boolean): void {
+		const tab = this.#tab();
+		if (mac) tab?.clear();
+		else tab?.send("\x0b");
 	}
 
 	/** Shows the terminals (making one if there's none), or hides them. */
@@ -76,6 +91,8 @@ export class Terminals {
 				if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ cols: term.cols, rows: term.rows }));
 			},
 			focus: () => term.focus(),
+			clear: () => term.clear(),
+			send: (data) => socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ data })),
 		};
 		socket.onopen = () => {
 			tab.fit();

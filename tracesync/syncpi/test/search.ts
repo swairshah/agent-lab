@@ -381,6 +381,124 @@ try {
 	ok("an HTML preview says Find isn't available for it");
 	await page.keyboard.press("Escape");
 
+	// ---------- the palette, in a browser ----------
+	await page.locator("#input").fill("hello world");
+	await page.locator("#input").evaluate((i: HTMLTextAreaElement) => i.setSelectionRange(0, 5));
+	await page.keyboard.press(`${mod}+k`);
+	await until("the palette", () => page.locator("#palette").isVisible());
+	const tabs = await page.locator("#palette-tabs [data-tab]").allTextContents();
+	check(await page.evaluate(() => document.activeElement?.id === "palette-input"), "the palette's input has focus");
+	check((await page.locator("#palette-input").getAttribute("aria-expanded")) === "true", "the combobox says it's expanded");
+	check(!tabs.some((t) => t.startsWith("Threads")), `no Threads tab in a browser: ${tabs.join(", ")}`);
+	check((await page.locator("#palette-heading").textContent()) === "Search commands and files", "titled for what it searches here");
+	const active = await page.locator("#palette-input").getAttribute("aria-activedescendant");
+	check(active !== null && (await page.locator(`#${active}`).getAttribute("aria-selected")) === "true", "the active option is the selected row");
+	ok("⌘K opens the palette on All with its input focused, as a combobox; in a browser there's no Threads tab");
+
+	await page.keyboard.press("Escape");
+	await until("closed", async () => !(await page.locator("#palette").isVisible()));
+	check(await page.evaluate(() => { const i = document.activeElement as HTMLTextAreaElement; return i.id === "input" && i.selectionStart === 0 && i.selectionEnd === 5; }), "the composer's selection is back");
+	ok("Esc closes the palette and puts focus and the selection back where they were");
+
+	await page.keyboard.press(`${mod}+p`);
+	await page.keyboard.type("server");
+	await until("room.ts by its folder", () => page.evaluate(() => [...document.querySelectorAll("#palette-list .palette-row")].some((r) => r.querySelector(".palette-title")?.textContent === "room.ts" && r.querySelector(".palette-detail mark")?.textContent === "server")));
+	check(await page.evaluate(() => !document.querySelector("#palette-list .palette-row .palette-title mark")?.closest(".palette-row")?.textContent?.includes("room.ts")), "the name isn't marked");
+	ok("a file matched only by its folder shows the folder marked, not the name");
+
+	await page.locator("#palette-input").fill("<img src=x onerror=alert(1)>");
+	await until("create row", () => page.evaluate(() => document.querySelector("#palette-list")?.textContent?.includes("Create <img src=x onerror=alert(1)>")));
+	check((await page.locator("#palette-list img").count()) === 0, "no markup from the query");
+	ok("a query with HTML in it shows as text");
+
+	await page.keyboard.press(`${mod}+2`); // Commands (no Threads tab here)
+	await page.locator("#palette-input").fill("zzqxjv");
+	await until("nothing matches", async () => (await page.locator("#palette-list").textContent()) === "Nothing matches.");
+	await page.keyboard.press("Enter");
+	check(await page.locator("#palette").isVisible(), "Enter with no results did nothing");
+	await page.keyboard.press("Escape");
+	ok("with no results, Enter does nothing");
+
+	if (errors.length > 0) throw new Error(`page errors: ${errors.join("; ")}`);
+
+	// ---------- the app: its shell, threads and terminal (the desktop host) ----------
+	const appProject = project("app", { "README.md": "# App\n\nshell needle\n" });
+	const host = spawn(process.execPath, [join(dist, "desktop-host.mjs"), "--faux"], { env: { ...process.env, SYNCPI_HOME: join(root, "home-app"), PI_CODING_AGENT_DIR: join(root, "empty-pi") }, stdio: ["ignore", "pipe", "pipe"] });
+	processes.push(host);
+	let hostOut = "";
+	host.stdout!.on("data", (d) => (hostOut += d));
+	const launch = await until("the app's host", () => hostOut.match(/SYNCPI_APP (\S+)/)?.[1], 30_000);
+	const app = await (await browser.newContext({ viewport: { width: 1380, height: 880 } })).newPage();
+	app.on("pageerror", (e) => errors.push(e.message));
+	await app.goto(launch);
+	await app.evaluate((dir) => (window.prompt = () => dir), appProject);
+	await app.getByRole("button", { name: "Open a project" }).click();
+	await app.getByRole("button", { name: "Start thread" }).click();
+	const thread = app.frameLocator("iframe.session-frame:not([hidden])");
+	await thread.locator("#input").waitFor({ timeout: 60_000 });
+	await thread.locator("#input").fill("the shell needle is here");
+	await thread.locator("#input").press(`${mod}+Enter`);
+	await until("the reply", async () => (await thread.locator(".thread").textContent())?.includes("(faux) the shell needle"));
+
+	// In a thread, ⌘K has a Threads tab.
+	await thread.locator("#input").press(`${mod}+k`);
+	await until("the thread's palette", () => thread.locator("#palette").isVisible());
+	check((await thread.locator("#palette-tabs [data-tab='threads']").count()) === 1, "Threads tab in the app");
+	check((await thread.locator("#palette-heading").textContent()) === "Search commands, threads and files", "titled with threads");
+	await thread.locator("#palette-input").press("Escape");
+	ok("in the app, the palette has a Threads tab and says it searches threads");
+
+	// From the sidebar, ⌘F opens Find in the open thread's conversation.
+	await app.locator("#sidebar").click({ position: { x: 20, y: 300 } });
+	await app.keyboard.press(`${mod}+f`);
+	await until("Find in the thread", () => thread.locator("#find-bar").isVisible());
+	check((await thread.locator("#find-scope").textContent()) === "Conversation", "the conversation");
+	await thread.locator("#find-input").fill("shell needle");
+	await until("found from the sidebar", async () => (await count(thread))?.endsWith("/2"));
+	ok("⌘F with the sidebar focused opens Find in the open thread's conversation (shell → page, once)");
+
+	// Another thread showing: the hidden one's Find is closed.
+	const firstThread = await app.locator("iframe.session-frame:not([hidden])").getAttribute("src");
+	await app.evaluate(() => (window as Window & { syncpiCommand?: (id: string) => void }).syncpiCommand!("thread.new"));
+	await until("a second thread", async () => (await app.locator("iframe.session-frame:not([hidden])").getAttribute("src")) !== firstThread, 60_000);
+	const away = await app.evaluate((src) => {
+		const frame = [...document.querySelectorAll<HTMLIFrameElement>("iframe.session-frame")].find((f) => f.getAttribute("src") === src);
+		const doc = frame?.contentDocument;
+		return { found: !!frame, hidden: frame?.hidden, bar: doc ? !doc.querySelector<HTMLElement>("#find-bar")!.hidden : undefined, focus: doc?.hasFocus() };
+	}, firstThread!);
+	check(away.found && away.hidden && away.bar === false && away.focus === false, `the hidden thread: ${JSON.stringify(away)}`);
+	ok("switching threads closes Find in the one put away; it keeps no bar or focus");
+	await app.evaluate(() => (window as Window & { syncpiCommand?: (id: string) => void }).syncpiCommand!("thread.previous"));
+	await until("back", async () => (await app.locator("iframe.session-frame:not([hidden])").getAttribute("src")) === firstThread);
+
+	// A terminal keeps ⌘K and ⌘F; ⇧⌘P still opens the commands.
+	await app.evaluate(() => (window as Window & { syncpiCommand?: (id: string) => void }).syncpiCommand!("view.terminal"));
+	await thread.locator(".terminal .xterm").first().waitFor({ timeout: 20_000 });
+	await thread.locator(".terminal .xterm").first().click();
+	await until("terminal focus", () => thread.locator("#terminal").evaluate((t) => t.contains(t.ownerDocument.activeElement)));
+	const prevented = (key: string) =>
+		thread.locator("#terminal").evaluate((t, key) => {
+			const target = t.ownerDocument.activeElement!;
+			const event = new KeyboardEvent("keydown", { key, code: `Key${key.toUpperCase()}`, metaKey: navigator.platform.includes("Mac"), ctrlKey: !navigator.platform.includes("Mac"), bubbles: true, cancelable: true });
+			target.dispatchEvent(event);
+			return event.defaultPrevented;
+		}, key);
+	check(!(await prevented("k")), "⌘K isn't taken from the terminal");
+	check(!(await thread.locator("#palette").isVisible()), "no palette");
+	check(!(await prevented("f")), "⌘F isn't taken from the terminal");
+	check(!(await thread.locator("#find-bar").isVisible()), "no Find");
+	await app.keyboard.press(`${mod}+Shift+p`);
+	await until("commands from the terminal", () => thread.locator("#palette").isVisible());
+	check((await thread.locator("#palette-tabs [aria-selected='true']").textContent())?.startsWith("Commands"), "on Commands");
+	await thread.locator("#palette-input").press("Escape");
+	ok("in a terminal, ⌘K and ⌘F are the terminal's; ⇧⌘P still opens the commands");
+
+	// The app's menu (no key event): ⌘K in a terminal does what the terminal would; Find follows the last pane.
+	await thread.locator(".terminal .xterm").first().click();
+	check(await app.evaluate(() => { (window as Window & { syncpiCommand?: (id: string) => void }).syncpiCommand!("palette.all"); return true; }), "menu ran");
+	check(!(await thread.locator("#palette").isVisible()) && !(await app.locator("#palette").isVisible()), "the menu's ⌘K in a terminal opens no palette");
+	ok("⌘K from the app's menu while a terminal has focus goes to the terminal, not to a palette");
+
 	if (errors.length > 0) throw new Error(`page errors: ${errors.join("; ")}`);
 	console.log(`\n${checks} checks passed`);
 } catch (error) {

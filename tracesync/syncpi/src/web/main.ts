@@ -33,6 +33,7 @@ import { Inbox } from "./inbox.ts";
 import { ThreadMap } from "./thread-map.ts";
 import { Follow } from "./follow.ts";
 import { mentionsOf } from "../shared/mentions.ts";
+import { matchesKeys } from "../shared/keymap.ts";
 import { Git } from "./git.ts";
 import { Find, type FindTarget } from "./find.ts";
 
@@ -206,7 +207,9 @@ async function main(): Promise<void> {
 	new MutationObserver(changed).observe($("panel-file"), { childList: true, subtree: true });
 	new MutationObserver(changed).observe($("panel-view"), { childList: true, subtree: true });
 	/** A terminal has its own keys (⌘F, ⌘K); another dialog keeps its own input. */
-	const findBlocked = () => document.activeElement?.closest(".terminal") != null || document.querySelector("dialog[open]") !== null;
+	const inTerminal = () => terminals?.focused === true;
+	const findBlocked = () => inTerminal() || document.querySelector("dialog[open]") !== null;
+	const mac = /Mac|iPhone|iPad/.test(navigator.platform);
 	const follow = new Follow({ session, scroller: $("scroller"), box: $("thread"), panel, showing: () => showing, show: (conv) => show(conv), notify: toast });
 	const settings = new Settings(session, {
 		onTheme: (theme) => {
@@ -475,7 +478,11 @@ async function main(): Promise<void> {
 			...fromShell,
 			"palette.threads": () => palette.open("threads"),
 			...(inbox ? { "inbox.toggle": () => inbox.toggle() } : {}),
-			"palette.all": () => palette.open("all"),
+			// In a terminal, ⌘K is the terminal's. As a key it goes straight there; from the app's menu, it's done for it.
+			"palette.all": () => {
+				if (inTerminal()) return void terminals!.commandK(mac);
+				palette.open("all");
+			},
 			"palette.commands": () => palette.open("commands"),
 			"palette.files": () => palette.open("files"),
 			"app.keymap": () => dialogs.keymap("web"),
@@ -512,16 +519,22 @@ async function main(): Promise<void> {
 		// With a dialog open only the palette and settings shortcuts apply, so typing there stays typing.
 		const dialog = document.querySelector("dialog[open]");
 		if (dialog !== null && dialog.id !== "palette" && dialog.id !== "settings-dialog" && dialog.id !== "inbox") return;
+		// The terminal keeps ⌘K (Ctrl+K: kill to the end of the line, elsewhere) and ⌘F; ⇧⌘P still opens the palette.
+		if (inTerminal() && (matchesKeys(event, "cmd-k") || matchesKeys(event, "cmd-f"))) return;
 		palette.handleKey(event);
 	});
 
 	// The shell runs this thread's commands (its menu, its shortcuts while the sidebar has focus) and shares the theme.
-	const run = (window as Window & { syncpiRun?: (id: string) => boolean; syncpiTheme?: (theme: string) => void });
-	run.syncpiRun = (id) => {
+	const run = (window as Window & { syncpiRun?: (id: string, from?: "sidebar") => boolean; syncpiTheme?: (theme: string) => void });
+	run.syncpiRun = (id, from) => {
+		// From the sidebar, Find is the conversation's.
+		if (from === "sidebar") pane = "conversation";
 		const handler = palette.handler(id);
 		if (handler === undefined) return false;
 		return handler() !== false;
 	};
+	// The app put this thread away (another is showing): Find closes, so a hidden page holds no bar or focus.
+	(window as Window & { syncpiHidden?: () => void }).syncpiHidden = () => find.close(true);
 	run.syncpiTheme = (theme) => {
 		applyTheme(theme as Theme);
 		threadView.reset();

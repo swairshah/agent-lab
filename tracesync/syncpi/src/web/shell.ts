@@ -140,7 +140,7 @@ function show(id: string): void {
 	const t = catalog.sessions.find((s) => s.id === id);
 	if (t === undefined) {
 		active = "";
-		for (const frame of frames.values()) frame.hidden = true;
+		for (const frame of frames.values()) hide(frame);
 		$("preparing").hidden = true;
 		$("empty").hidden = false;
 		renderSidebar();
@@ -158,7 +158,10 @@ function show(id: string): void {
 		$("preparing-error").textContent = t.status === "failed" ? (t.error ?? "") : "";
 		$("preparing-retry").hidden = t.status !== "failed" || t.role !== "owner";
 	}
-	for (const [fid, frame] of frames) frame.hidden = fid !== id || !ready;
+	for (const [fid, frame] of frames) {
+		if (fid !== id || !ready) hide(frame);
+		else frame.hidden = false;
+	}
 	if (ready && !frames.has(id)) {
 		const frame = el("iframe", "session-frame");
 		frame.addEventListener("load", () => controls(frame));
@@ -228,12 +231,19 @@ async function pollInbox(): Promise<void> {
 	inbox.update();
 }
 
-/** Runs a command in the open thread's page. */
-function inThread(id: string): boolean {
-	const page = frames.get(active)?.contentWindow as (Window & { syncpiRun?: (id: string) => boolean }) | null | undefined;
+/** Puts a thread's page away: hidden, and with nothing of its own left open (Find). */
+function hide(frame: HTMLIFrameElement): void {
+	if (!frame.hidden) (frame.contentWindow as (Window & { syncpiHidden?: () => void }) | null)?.syncpiHidden?.();
+	frame.hidden = true;
+}
+
+/** Runs a command in the open thread's page (only that one: hidden threads' pages are left alone). `from` says the
+ *  sidebar had focus, for commands that care (Find is then the conversation's). */
+function inThread(id: string, from?: "sidebar"): boolean {
+	const page = frames.get(active)?.contentWindow as (Window & { syncpiRun?: (id: string, from?: "sidebar") => boolean }) | null | undefined;
 	if (page?.syncpiRun === undefined) return false;
 	page.focus();
-	return page.syncpiRun(id);
+	return page.syncpiRun(id, from);
 }
 
 async function refresh(): Promise<void> {
@@ -398,6 +408,10 @@ const commands: Record<string, () => void> = {
 	"palette.commands": () => inThread("palette.commands") || palette.open("commands"),
 	"palette.files": () => inThread("palette.files") || palette.open("files"),
 	"palette.threads": () => inThread("palette.threads") || palette.open("threads"),
+	// Find belongs to the open thread; with none open there's nothing to find in.
+	"find.open": () => inThread("find.open", "sidebar"),
+	"find.next": () => inThread("find.next", "sidebar"),
+	"find.previous": () => inThread("find.previous", "sidebar"),
 	"inbox.toggle": () => {
 		inbox.toggle();
 		// Reading marks: the badge and dots follow when it closes.
@@ -453,7 +467,8 @@ function applyTheme(theme: string | undefined): void {
 const threadRows = (): ThreadRow[] =>
 	grouped().flatMap((g) => g.threads.map((t) => ({ id: t.id, title: titleOf(t), project: project_name(t.dir), current: t.id === active })));
 
-const palette = new Palette({ app: "desktop", handlers: commands, files: () => [], openFile: () => {}, threads: threadRows, openThread: show });
+// The shell's own palette shows when no thread is open, where there's nothing to find in.
+const palette = new Palette({ app: "desktop", handlers: Object.fromEntries(Object.entries(commands).filter(([id]) => !id.startsWith("find."))), files: () => [], openFile: () => {}, threads: threadRows, openThread: show });
 
 window.syncpiShell = {
 	command(id: string): boolean {
@@ -576,10 +591,12 @@ function wire(): void {
 	const keys = commandsFor("desktop").filter((c) => c.keys && commands[c.id]);
 	document.addEventListener("keydown", (event) => {
 		if (event.defaultPrevented || document.querySelector("dialog[open]:not(#palette):not(#inbox)")) return;
+		if (event.isComposing) return;
 		const command = keys.find((c) => matchesKeys(event, c.keys!));
 		if (command === undefined) return;
+		// A command that doesn't apply (Find with no thread open) leaves the key alone.
+		if ((commands[command.id]! as () => unknown)() === false) return;
 		event.preventDefault();
-		commands[command.id]!();
 	});
 }
 

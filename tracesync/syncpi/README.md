@@ -153,7 +153,11 @@ Whoever creates a session is its admin, and can't be removed or demoted. Roles:
 ```bash
 npm run typecheck
 npm run smoke      # local server + scripted model: owner and collaborator, chat, sharing, two-way sync, rejoin
+npm run test:search  # Find and the palette: unit tests, then Chrome on a scripted session and the app's host
 ```
+
+`test:search` drives Google Chrome through Playwright (`channel: "chrome"`); set `PLAYWRIGHT_CHROMIUM` to a Chromium
+binary to use that instead. It builds first, and needs nothing else running.
 
 Verified on 2026-10-27:
 - On a real exe.dev VM with Claude Opus 5.5, a collaborator joined with `--url` and asked the agent to fix a failing test. The fix reached both local folders, and the web view showed the same thread live. Creating the VM and starting the server took about a minute.

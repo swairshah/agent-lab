@@ -171,8 +171,9 @@ export class Find {
 		return true;
 	}
 
-	/** Closes Find: highlights go, folds go back, and focus returns to where it was. */
-	close(): void {
+	/** Closes Find: highlights go, folds go back, and focus returns to where it was (unless `keepFocus`, when the page
+	 *  is being put away). */
+	close(keepFocus = false): void {
 		if (!this.isOpen) return;
 		const target = this.#target;
 		this.#leave();
@@ -180,6 +181,7 @@ export class Find {
 		this.#options.onOpen?.(false);
 		const origin = this.#origin;
 		this.#origin = undefined;
+		if (keepFocus) return;
 		const focus = origin?.focus;
 		if (focus != null && focus.isConnected && focus !== document.body) {
 			focus.focus({ preventScroll: true });

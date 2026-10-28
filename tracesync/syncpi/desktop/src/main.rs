@@ -178,6 +178,10 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     edit.append(&PredefinedMenuItem::paste(app, None)?)?;
     edit.append(&PredefinedMenuItem::select_all(app, None)?)?;
     edit.append(&sep()?)?;
+    for i in pick(&["find.open", "find.next", "find.previous"])? {
+        edit.append(&i)?;
+    }
+    edit.append(&sep()?)?;
     for i in pick(&["file.comment"])? {
         edit.append(&i)?;
     }
