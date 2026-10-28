@@ -28,6 +28,33 @@ fn title(session: &Value) -> String {
 }
 
 impl Desktop {
+    /// Threads in the order the sidebar shows them, for next and previous thread.
+    pub(crate) fn thread_order(&self) -> Vec<String> {
+        let mut threads: Vec<&Value> = self
+            .sessions
+            .iter()
+            .filter(|s| flag(s, "archived") == self.archived)
+            .collect();
+        threads.sort_by_key(|s| (!flag(s, "pinned"), std::cmp::Reverse(recency(s))));
+        let mut projects: Vec<String> = vec![];
+        for s in &threads {
+            let dir = text(s, "dir");
+            if !projects.contains(&dir) {
+                projects.push(dir);
+            }
+        }
+        projects
+            .iter()
+            .filter(|dir| !self.folded.contains(*dir))
+            .flat_map(|dir| {
+                threads
+                    .iter()
+                    .filter(move |s| text(s, "dir") == **dir)
+                    .map(|s| text(s, "id"))
+            })
+            .collect()
+    }
+
     pub(crate) fn sidebar(&self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let p = theme::palette(cx);
         let mut threads: Vec<&Value> = self
@@ -122,9 +149,9 @@ impl Desktop {
                             .ghost()
                             .small()
                             .icon(IconName::Search)
-                            .tooltip("Search threads (⌘K)")
+                            .tooltip("Go to thread (⌘T)")
                             .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_modal("search", window, cx)
+                                this.open_palette(crate::palette::Tab::Threads, window, cx)
                             })),
                     )
                     .child(div().flex_1())

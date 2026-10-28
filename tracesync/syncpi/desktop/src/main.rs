@@ -1,6 +1,8 @@
 mod backend;
 mod icons;
+mod keymap;
 mod message;
+mod palette;
 mod sidebar;
 mod theme;
 mod transcript;
@@ -21,21 +23,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-actions!(
-    syncpi,
-    [
-        NewThread,
-        AddProject,
-        SearchThreads,
-        OpenFiles,
-        OpenTerminal,
-        ReviewChanges,
-        ShareThread,
-        ToggleTheme,
-        StopAgent,
-        Quit
-    ]
-);
+use keymap::RunCommand;
+use palette::{PaletteState, Tab};
 fn text(value: &Value, key: &str) -> String {
     value[key].as_str().unwrap_or("").to_owned()
 }
@@ -101,6 +90,8 @@ struct Desktop {
     folded: HashSet<String>,
     /// The new-thread dialog's extra options are showing.
     advanced: bool,
+    palette: Option<PaletteState>,
+    palette_input: Entity<InputState>,
     thinking: HashSet<String>,
     scroll: ScrollHandle,
     files: Vec<String>,
@@ -148,7 +139,27 @@ impl Desktop {
                 .code_editor("plain")
                 .line_number(true)
         });
+        let palette_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Search commands, threads and files…")
+        });
         let subscriptions = vec![
+            cx.subscribe_in(
+                &palette_input,
+                window,
+                |this, _, event, window, cx| match event {
+                    InputEvent::Change => {
+                        if let Some(state) = this.palette.as_mut() {
+                            state.selected = 0;
+                        }
+                        cx.notify();
+                    }
+                    InputEvent::PressEnter { .. } => {
+                        let index = this.palette.as_ref().map_or(0, |s| s.selected);
+                        this.run_palette_row(index, window, cx);
+                    }
+                    _ => {}
+                },
+            ),
             cx.subscribe_in(
                 &composer,
                 window,
@@ -216,6 +227,8 @@ impl Desktop {
             collapsed: HashSet::new(),
             folded: HashSet::new(),
             advanced: false,
+            palette: None,
+            palette_input,
             thinking: HashSet::new(),
             scroll: ScrollHandle::new(),
             files: vec![],
@@ -698,6 +711,87 @@ impl Desktop {
             | "preview" | "actions" | "file" | "commit" => self.open_modal(name, window, cx),
             _ => {}
         }
+        cx.notify();
+    }
+    /// What each command in src/shared/keymap.json does in the desktop app.
+    pub(crate) fn run_command(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        match id {
+            "palette.all" => self.open_palette(Tab::All, window, cx),
+            "palette.commands" => self.open_palette(Tab::Commands, window, cx),
+            "palette.threads" => self.open_palette(Tab::Threads, window, cx),
+            "palette.files" => self.open_palette(Tab::Files, window, cx),
+            "app.keymap" => self.open_modal("keymap", window, cx),
+            "app.theme" => self.run_action("theme", window, cx),
+            "app.quit" => cx.quit(),
+            "thread.new" => self.run_action("new", window, cx),
+            "project.add" => self.choose_project(window, cx),
+            "thread.share" => self.run_action("share", window, cx),
+            "thread.join" => self.open_modal("join", window, cx),
+            "thread.next" | "thread.previous" => {
+                let order = self.thread_order();
+                if let Some(at) = order.iter().position(|t| *t == self.active) {
+                    let next = if id == "thread.next" {
+                        (at + 1) % order.len()
+                    } else {
+                        (at + order.len() - 1) % order.len()
+                    };
+                    self.select(order[next].clone(), window, cx);
+                } else if let Some(first) = order.first() {
+                    self.select(first.clone(), window, cx);
+                }
+            }
+            "thread.rename" => self.open_modal("rename", window, cx),
+            "thread.title" => self.run_action("title", window, cx),
+            "thread.pin" => self.run_action("pin", window, cx),
+            "thread.archive" => self.run_action("archive", window, cx),
+            "thread.archives" => self.run_action("archives", window, cx),
+            "agent.stop" => {
+                if self.palette.is_some() {
+                    self.close_palette(window, cx);
+                } else if !self.modal.is_empty() {
+                    self.modal.clear();
+                    cx.notify();
+                } else {
+                    self.send(json!({"type":"abort"}));
+                }
+            }
+            "agent.model" => self.open_modal("model", window, cx),
+            "agent.compact" => self.open_modal("compact", window, cx),
+            "agent.newContext" => self.open_modal("reset", window, cx),
+            "agent.branches" => self.open_modal("branches", window, cx),
+            "agent.setup" => self.run_action("setup", window, cx),
+            "view.sidebar" => self.run_action("sidebar", window, cx),
+            "view.changes" => self.set_pane("changes", cx),
+            "view.files" => self.set_pane("files", cx),
+            "view.people" => self.set_pane("people", cx),
+            "view.terminal" => self.run_action("terminal", window, cx),
+            "project.sync" => self.run_action("sync", window, cx),
+            "project.reveal" => self.run_action("reveal", window, cx),
+            "project.zed" => self.run_action("zed", window, cx),
+            "project.web" => {
+                let url = text(&self.selected(), "url");
+                if !url.is_empty() {
+                    cx.open_url(&url);
+                }
+            }
+            _ => {}
+        }
+    }
+    /// Opens a project file in the files pane.
+    pub(crate) fn open_file(&mut self, path: String, cx: &mut Context<Self>) {
+        self.pane = "files".into();
+        if self.files.is_empty() {
+            self.request("files", "GET", "files", None);
+        }
+        let query = reqwest::Url::parse_with_params("http://x", &[("path", &path)])
+            .map(|u| u.query().unwrap_or("").to_owned())
+            .unwrap_or_default();
+        self.request(
+            &format!("file:{path}"),
+            "GET",
+            &format!("file?{query}"),
+            None,
+        );
         cx.notify();
     }
     fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1407,6 +1501,7 @@ impl Desktop {
             "commit" => "Commit staged changes",
             "name" => "Your display name",
             "preview" => "Open a development preview",
+            "keymap" => "Keyboard shortcuts",
             _ => "Thread actions",
         };
         let mut card = div()
@@ -1440,6 +1535,7 @@ impl Desktop {
             );
         let mut content = div().id("modal-content").min_h_0().overflow_y_scroll();
         match kind.as_str() {
+            "keymap" => content = content.child(self.keymap_sheet(cx)),
             "create" => {
                 content = content
                     .child(self.dialog_field("dir", "Project folder"))
@@ -1696,7 +1792,7 @@ impl Desktop {
             _ => {}
         }
         card = card.child(content);
-        if !["search", "share", "actions", "branches", "role"].contains(&kind.as_str()) {
+        if !["search", "share", "actions", "branches", "role", "keymap"].contains(&kind.as_str()) {
             card = card.child(
                 div()
                     .flex()
@@ -1756,6 +1852,7 @@ impl Render for Desktop {
         } else {
             None
         };
+        let palette = self.palette_overlay(window, cx);
         let dialog = if self.modal.is_empty() {
             None
         } else {
@@ -1772,35 +1869,8 @@ impl Render for Desktop {
             .font_family(theme::SANS)
             .font_weight(FontWeight::NORMAL)
             .text_size(px(14.))
-            .on_action(cx.listener(|this, _: &NewThread, window, cx| {
-                this.new_thread(this.current_project(), window, cx)
-            }))
-            .on_action(
-                cx.listener(|this, _: &AddProject, window, cx| this.choose_project(window, cx)),
-            )
-            .on_action(cx.listener(|this, _: &SearchThreads, window, cx| {
-                this.open_modal("search", window, cx)
-            }))
-            .on_action(cx.listener(|this, _: &OpenFiles, _, cx| this.set_pane("files", cx)))
-            .on_action(cx.listener(|this, _: &ReviewChanges, _, cx| this.set_pane("changes", cx)))
-            .on_action(cx.listener(|this, _: &OpenTerminal, window, cx| {
-                this.run_action("terminal", window, cx)
-            }))
-            .on_action(
-                cx.listener(|this, _: &ShareThread, _, _| this.send(json!({"type":"invite"}))),
-            )
-            .on_action(
-                cx.listener(|this, _: &ToggleTheme, window, cx| {
-                    this.run_action("theme", window, cx)
-                }),
-            )
-            .on_action(cx.listener(|this, _: &StopAgent, _, cx| {
-                if !this.modal.is_empty() {
-                    this.modal.clear();
-                    cx.notify();
-                } else {
-                    this.send(json!({"type":"abort"}));
-                }
+            .on_action(cx.listener(|this, action: &RunCommand, window, cx| {
+                this.run_command(&action.id, window, cx)
             }))
             .when(self.sidebar, |d| d.child(self.sidebar(window, cx)))
             .child(
@@ -1822,6 +1892,7 @@ impl Render for Desktop {
                     .children(terminal),
             )
             .children(dialog)
+            .children(palette)
             .when(!self.toast.is_empty(), |d| {
                 d.child(
                     div()
@@ -1855,40 +1926,65 @@ fn main() -> anyhow::Result<()> {
         .run(move |cx| {
             gpui_component::init(cx);
             theme::load_fonts(cx);
-            cx.bind_keys([
-                KeyBinding::new("cmd-n", NewThread, None),
-                KeyBinding::new("cmd-o", AddProject, None),
-                KeyBinding::new("cmd-k", SearchThreads, None),
-                KeyBinding::new("cmd-p", OpenFiles, None),
-                KeyBinding::new("ctrl-`", OpenTerminal, None),
-                KeyBinding::new("cmd-shift-d", ReviewChanges, None),
-                KeyBinding::new("cmd-shift-s", ShareThread, None),
-                KeyBinding::new("cmd-shift-l", ToggleTheme, None),
-                KeyBinding::new("escape", StopAgent, Some("SyncPi")),
-                KeyBinding::new("cmd-q", Quit, None),
-            ]);
-            cx.on_action(|_: &Quit, cx| cx.quit());
+            keymap::bind(cx);
+            cx.on_action(|action: &RunCommand, cx| {
+                if action.id == "app.quit" {
+                    cx.quit();
+                }
+            });
+            let item = |id: &str| {
+                let title = keymap::command(id).map(|c| c.title).unwrap_or_default();
+                MenuItem::action(
+                    title,
+                    RunCommand {
+                        id: id.to_owned().into(),
+                    },
+                )
+            };
             cx.set_menus(vec![
                 Menu {
                     name: "SyncPi".into(),
-                    items: vec![MenuItem::action("Quit SyncPi", Quit)],
+                    items: vec![item("app.keymap"), MenuItem::separator(), item("app.quit")],
                 },
                 Menu {
                     name: "File".into(),
                     items: vec![
-                        MenuItem::action("New Thread", NewThread),
-                        MenuItem::action("Add Project…", AddProject),
-                        MenuItem::action("Search Threads…", SearchThreads),
+                        item("thread.new"),
+                        item("project.add"),
+                        item("thread.join"),
                         MenuItem::separator(),
-                        MenuItem::action("Open Files", OpenFiles),
-                        MenuItem::action("Open Terminal", OpenTerminal),
-                        MenuItem::action("Review Changes", ReviewChanges),
-                        MenuItem::action("Share Thread", ShareThread),
+                        item("thread.share"),
+                        item("thread.rename"),
+                        item("thread.archive"),
                     ],
                 },
                 Menu {
                     name: "View".into(),
-                    items: vec![MenuItem::action("Toggle Light/Dark Theme", ToggleTheme)],
+                    items: vec![
+                        item("palette.all"),
+                        item("palette.commands"),
+                        item("palette.threads"),
+                        item("palette.files"),
+                        MenuItem::separator(),
+                        item("view.sidebar"),
+                        item("view.changes"),
+                        item("view.files"),
+                        item("view.terminal"),
+                        MenuItem::separator(),
+                        item("app.theme"),
+                    ],
+                },
+                Menu {
+                    name: "Agent".into(),
+                    items: vec![
+                        item("agent.model"),
+                        item("agent.compact"),
+                        item("agent.newContext"),
+                        item("agent.branches"),
+                        item("agent.setup"),
+                        MenuItem::separator(),
+                        item("agent.stop"),
+                    ],
                 },
             ]);
             cx.on_window_closed(|cx| {

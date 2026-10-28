@@ -4,7 +4,7 @@
 	{ "id": "palette.files", "title": "Go to file", "group": "General", "keys": "cmd-p", "apps": ["web", "desktop"] },
 	{ "id": "palette.threads", "title": "Go to thread", "group": "General", "keys": "cmd-t", "apps": ["desktop"] },
 	{ "id": "app.keymap", "title": "Keyboard shortcuts", "group": "General", "keys": "cmd-/", "apps": ["web", "desktop"] },
-	{ "id": "app.settings", "title": "Settings", "group": "General", "keys": "cmd-,", "apps": ["web", "desktop"] },
+	{ "id": "app.settings", "title": "Settings", "group": "General", "keys": "cmd-,", "apps": ["web"] },
 	{ "id": "app.theme", "title": "Switch light or dark", "group": "General", "keys": "cmd-shift-l", "apps": ["web", "desktop"] },
 
 	{ "id": "thread.new", "title": "New thread", "group": "Threads", "keys": "cmd-n", "apps": ["desktop"], "quick": true },
