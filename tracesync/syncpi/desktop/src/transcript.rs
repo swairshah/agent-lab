@@ -781,10 +781,8 @@ impl Desktop {
                         model
                     })
                     .disabled(!admin)
-                    .tooltip("Change the agent's model")
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.open_modal("model", window, cx)),
-                    ),
+                    .tooltip("Change model (⌥⌘/)")
+                    .on_click(cx.listener(|this, _, window, cx| this.pick_model(window, cx))),
             )
             .when(editor && self.showing == "main", |d| {
                 d.child(

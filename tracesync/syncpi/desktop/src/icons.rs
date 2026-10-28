@@ -77,3 +77,28 @@ pub fn model_vendor(model: &str) -> Option<(&'static str, String)> {
     };
     find(id).or_else(|| find(&reference))
 }
+
+/// How a provider (the part of a model reference before "/") is named to people, as in src/web/icons.ts.
+pub fn provider_name(provider: &str) -> String {
+    match provider {
+        "anthropic" => "Anthropic".into(),
+        "openai" => "OpenAI".into(),
+        "openai-codex" => "ChatGPT subscription".into(),
+        "openrouter" => "OpenRouter".into(),
+        "exe" => "exe.dev".into(),
+        "google" => "Google".into(),
+        "google-gemini-cli" => "Gemini CLI".into(),
+        "github-copilot" => "GitHub Copilot".into(),
+        "xai" => "xAI".into(),
+        "groq" => "Groq".into(),
+        "mistral" => "Mistral".into(),
+        "faux" => "Test model".into(),
+        other => {
+            let mut chars = other.chars();
+            chars
+                .next()
+                .map(|c| c.to_uppercase().collect::<String>() + chars.as_str())
+                .unwrap_or_default()
+        }
+    }
+}

@@ -92,6 +92,7 @@ struct Desktop {
     advanced: bool,
     palette: Option<PaletteState>,
     palette_input: Entity<InputState>,
+    palette_scroll: ScrollHandle,
     thinking: HashSet<String>,
     scroll: ScrollHandle,
     files: Vec<String>,
@@ -229,6 +230,7 @@ impl Desktop {
             advanced: false,
             palette: None,
             palette_input,
+            palette_scroll: ScrollHandle::new(),
             thinking: HashSet::new(),
             scroll: ScrollHandle::new(),
             files: vec![],
@@ -755,7 +757,7 @@ impl Desktop {
                     self.send(json!({"type":"abort"}));
                 }
             }
-            "agent.model" => self.open_modal("model", window, cx),
+            "agent.model" => self.pick_model(window, cx),
             "agent.compact" => self.open_modal("compact", window, cx),
             "agent.newContext" => self.open_modal("reset", window, cx),
             "agent.branches" => self.open_modal("branches", window, cx),
