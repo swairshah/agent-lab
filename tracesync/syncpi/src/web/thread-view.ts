@@ -15,8 +15,8 @@ import type { SessionClient } from "./session.ts";
 export type ThreadViewOptions = {
 	onOpenArtifact: (artifact: Artifact) => void;
 	onFork: (key: string, text: string) => void;
-	/** Opens a project file in the side panel. */
-	onOpenFile: (path: string) => void;
+	/** Opens a project file in the side panel, with lines selected when given ("12-16"). */
+	onOpenFile: (path: string, lines?: string) => void;
 	loadImage: ImageLoader;
 };
 
@@ -39,6 +39,11 @@ export class ThreadView {
 		this.#scroller = scroller;
 		this.#session = session;
 		this.#options = options;
+		// File links in replies (citations and file names in backticks).
+		box.addEventListener("click", (event) => {
+			const link = (event.target as HTMLElement).closest<HTMLElement>(".cite[data-path]");
+			if (link) options.onOpenFile(link.dataset.path!, link.dataset.lines);
+		});
 	}
 
 	show(conv: "main" | "setup"): void {
@@ -199,11 +204,25 @@ export class ThreadView {
 		if (item.text) {
 			const body = el("div", "msg-body prose");
 			body.innerHTML = renderMarkdown(item.text);
+			this.#linkFileNames(body);
 			content.append(body);
 			if (!item.streaming) this.#upgradeCode(body, item.key, item.text);
 		}
 		if (item.error) content.append(el("div", "msg-error", item.error));
 		return content;
+	}
+
+	/** File names in backticks that are project files become links, as in Delta. */
+	#linkFileNames(body: HTMLElement): void {
+		const files = new Set(this.#session.files);
+		if (files.size === 0) return;
+		for (const code of body.querySelectorAll<HTMLElement>(":not(pre) > code")) {
+			const name = code.textContent?.trim() ?? "";
+			const path = files.has(name) ? name : files.has(name.replace(/^\.\//, "")) ? name.replace(/^\.\//, "") : undefined;
+			if (path === undefined) continue;
+			code.classList.add("cite");
+			code.dataset.path = path;
+		}
 	}
 
 	/** Code blocks get highlighting; HTML and SVG blocks become artifact cards with a live preview; mermaid blocks
