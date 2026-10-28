@@ -57,7 +57,7 @@ Three differences were fixed the same day (commit `fa64459`):
 
 | Delta | syncpi now | What it would take |
 |---|---|---|
-| Changes "Since" Branch / Last Commit / Last Turn, per-file "reviewed" checkboxes | The thread's changes panel; uncommitted git changes (⇧⌘G) | A "since" choice over the git sheet; the files-before-the-last-turn snapshot another session is adding (`src/server/history.ts`) is the Last Turn base. Small to medium. |
+| Changes "Since" Branch / Last Commit / Last Turn, per-file "reviewed" checkboxes | The thread's changes panel; uncommitted git changes (⇧⌘G) | A "since" choice over the git sheet. The Last Turn base exists: each turn snapshots the files (`src/server/history.ts`), and a file tab's version picker already shows "Before last turn". Small to medium. |
 | Review fork running `/explain-change`, a validated change guide, Approve / Request Changes recorded in the parent | Branches (Edit & fork) inside one thread | A "Review changes" command that branches the thread and asks for a change guide (a skill), plus review cards. Medium. |
 | Land Changes driven by a project skill (`metadata: delta-action: land`), landing fork, "Landed" card | Stage and commit in the git sheet; no push | A "Land changes" command that runs the project's `land` skill in a branch, or asks the agent to write one, as Delta does. pi already loads skills. Medium. |
 | A checkout per thread, so threads don't collide and the opened folder stays as it was | One shared copy per thread, synced to everyone | The biggest difference, and a design choice: syncpi's point is that everyone, and the agent, work on the same files live. Per-thread worktrees would need the sync to follow a worktree, not the folder. Large; worth deciding deliberately. |
