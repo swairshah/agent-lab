@@ -23,7 +23,7 @@ await Promise.all([
 		...node,
 		entryPoints: ["src/cli/main.ts"],
 		outfile: "dist/cli.mjs",
-		external: [...node.external, "@earendil-works/pi-env"],
+		external: [...node.external, "@earendil-works/pi-env", "@earendil-works/pi-coding-agent"],
 		banner: { js: `#!/usr/bin/env node\n${node.banner.js}` },
 	}),
 	build({ entryPoints: ["src/web/app.ts"], outfile: "dist/web/app.js", bundle: true, format: "esm", target: "es2022", minify: true, logLevel: "warning" }),

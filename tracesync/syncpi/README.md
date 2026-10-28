@@ -18,6 +18,17 @@ syncpi rm my-project         # forget a session; deletes the VM if you own it
 syncpi update                # after rebuilding, push the new server to the host (starting a session also does)
 ```
 
+## Your pi setup
+
+syncpi's agent is not pi, but it uses your pi setup the way pi would. When you start or join a session from a terminal, syncpi loads your pi resources for that folder with pi's own loaders (`createAgentSessionServices`). That loading runs in a separate process, because it runs your extensions' code.
+
+- **Skills and AGENTS.md:** your skills, and the AGENTS.md / CLAUDE.md files pi would read there (your global `~/.pi/agent/AGENTS.md` included), go into the agent's instructions while one of your requests runs. Skill files stay on your machine; the agent reads them there, because that's where your requests run. Requests from a browser run on the VM and get the project's own AGENTS.md / CLAUDE.md. Each person's setup applies only to their own requests.
+- **Prompt templates:** `/name args` expands before sending, with `$1`…`$n`, `$@` and `$ARGUMENTS`, as in pi. The templates show up in `/` completion.
+- **Models in `--local` sessions:** exactly the models your pi has, including providers your extensions add and your subscription logins. Sessions on the host use the exe.dev LLM integration instead.
+- `--no-pi` turns all of this off.
+
+Not yet: tools from your pi extensions (planned to run on your machine for your requests), and pi's `/tree`, `/new` and `/compact`.
+
 ## Where the agent's tools run
 
 On the machine of whoever asked. A message you send from your terminal runs its tools on your computer, in your copy of the project, with your toolchains (Xcode, simulators, local databases). A message from Bob's terminal runs on Bob's computer. A message from a browser runs on the session VM. The changes sync to everyone either way. `/where vm` (or `/where here`) switches where your messages run.

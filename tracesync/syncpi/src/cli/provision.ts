@@ -145,7 +145,7 @@ async function exe(...args: string[]): Promise<string> {
 }
 
 function vmSsh(vm: string, script: string, input?: string | ChildProcess): Promise<string> {
-	const args = [...SSH_OPTS, `${vm}.exe.xyz`, script];
+	const args = [...SSH_OPTS, "--", `${vm}.exe.xyz`, script];
 	if (input !== undefined) return pipeInto("ssh", args, input);
 	return run("ssh", args, { maxBuffer: 16 * 1024 * 1024 }).then(
 		(r) => r.stdout,
@@ -272,7 +272,7 @@ export async function ensureHost(vm: string, progress: Progress, options: { forc
 		if (installed === version && isHost === "host" && !options.force) return;
 		progress(installed === "none" ? `installing syncpi on ${vm}` : `updating syncpi on ${vm}`);
 		await vmSsh(vm, NODE_SETUP);
-		await pipeInto("ssh", [...SSH_OPTS, `${vm}.exe.xyz`, `mkdir -p ${EXE_HOME}/.syncpi-app ${HOST_SESSIONS} ${HOST_PROJECTS} && chmod 700 ${HOST_SESSIONS} && tar -xzf - -C ${EXE_HOME}/.syncpi-app`], serverBundle());
+		await pipeInto("ssh", [...SSH_OPTS, "--", `${vm}.exe.xyz`, `mkdir -p ${EXE_HOME}/.syncpi-app ${HOST_SESSIONS} ${HOST_PROJECTS} && chmod 700 ${HOST_SESSIONS} && tar -xzf - -C ${EXE_HOME}/.syncpi-app`], serverBundle());
 		await vmSsh(vm, `cat > ~/.syncpi-app/VERSION`, `${version}\n`);
 		await vmSsh(vm, "sudo tee /etc/systemd/system/syncpi.service >/dev/null && sudo systemctl daemon-reload && sudo systemctl enable syncpi && sudo systemctl restart syncpi", hostUnit());
 		for (let attempt = 0; attempt < 60; attempt++) {
@@ -328,7 +328,7 @@ export async function provisionExe(dir: string, config: SessionConfig, vm: strin
 	await Promise.all([
 		vmSsh(vm, NODE_SETUP),
 		projectTar(dir).then((tar) => vmSsh(vm, `mkdir -p ${workdir} && tar -xzf - -C ${workdir}`, tar)),
-		pipeInto("ssh", [...SSH_OPTS, `${vm}.exe.xyz`, `mkdir -p ${EXE_HOME}/.syncpi-app && tar -xzf - -C ${EXE_HOME}/.syncpi-app`], serverBundle()),
+		pipeInto("ssh", [...SSH_OPTS, "--", `${vm}.exe.xyz`, `mkdir -p ${EXE_HOME}/.syncpi-app && tar -xzf - -C ${EXE_HOME}/.syncpi-app`], serverBundle()),
 	]);
 
 	progress("starting the session server");
@@ -339,7 +339,7 @@ export async function provisionExe(dir: string, config: SessionConfig, vm: strin
 
 /** Copies a newly built server to a session's VM and restarts it. Sessions from older versions switch to the gateway. */
 export async function updateServerExe(vm: string): Promise<void> {
-	await pipeInto("ssh", [...SSH_OPTS, `${vm}.exe.xyz`, `tar -xzf - -C ${EXE_HOME}/.syncpi-app && rm -f ${EXE_HOME}/.syncpi/env && sudo systemctl restart syncpi`], serverBundle());
+	await pipeInto("ssh", [...SSH_OPTS, "--", `${vm}.exe.xyz`, `tar -xzf - -C ${EXE_HOME}/.syncpi-app && rm -f ${EXE_HOME}/.syncpi/env && sudo systemctl restart syncpi`], serverBundle());
 }
 
 export async function destroyExe(vm: string): Promise<void> {

@@ -12,7 +12,7 @@ import type { Models } from "@earendil-works/pi-ai";
 import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
 import { createModels, type MutableModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { createAgentSessionServices, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
 	type AgentEvent,
 	type AgentEventStream,
@@ -60,7 +60,8 @@ async function createSessionModels(stateDir: string, auth: "pi" | "exe-gateway")
 	// pi-ai loads OAuth flows (token refresh for pi's subscription logins) through a computed import() that a bundle
 	// cannot follow; register them statically instead, as pi's own standalone binary does.
 	registerBunOAuthFlows();
-	if (auth === "pi") return ModelRuntime.create();
+	// Exactly the models this machine's pi has, including providers its extensions add (kimi, subscription logins…).
+	if (auth === "pi") return (await createAgentSessionServices({ cwd: process.cwd() })).modelRuntime;
 	const dir = join(stateDir, "pi");
 	await mkdir(dir, { recursive: true });
 	const config = {
@@ -353,6 +354,27 @@ export class Session {
 		while (this.#scanning !== undefined) await this.#scanning;
 	}
 
+	/**
+	 * The pi setup that applies to the current run: on a member's machine, their skills and the AGENTS.md / CLAUDE.md
+	 * files their pi would read there; on the VM, the project's own AGENTS.md / CLAUDE.md.
+	 */
+	#piNotes(): string {
+		const target = this.#target;
+		const context = target !== undefined && target !== "vm" ? this.devices.context(target) : undefined;
+		const parts: string[] = [];
+		if (context !== undefined) {
+			const owner = this.state.value.members[target!]?.name ?? "the sender";
+			for (const file of context.agents) parts.push(`Instructions from ${file.path} (${owner}'s pi setup):\n${file.content.trim()}`);
+			if (context.skills) parts.push(`${owner}'s pi skills. Their paths are on ${owner}'s machine, where your tools run now:\n${context.skills.trim()}`);
+		} else {
+			for (const name of ["AGENTS.md", "CLAUDE.md"]) {
+				const file = join(this.workdir, name);
+				if (existsSync(file)) parts.push(`Instructions from the project's ${name}:\n${readFileSync(file, "utf8").slice(0, 64 * 1024).trim()}`);
+			}
+		}
+		return parts.length === 0 ? "" : `\n\n${parts.join("\n\n")}`;
+	}
+
 	get targetLabel(): string {
 		return this.#targetLabel;
 	}
@@ -449,7 +471,7 @@ export class Session {
 					? `The setup agent failed: ${s.setup.error ?? "unknown error"}. Set up what you need yourself.`
 					: "A background setup agent is still installing toolchains and dependencies. If a command is missing, wait a little or install it yourself; notes will appear in .syncpi/ENVIRONMENT.md.";
 		const vm = s.vm === undefined ? "" : ` On the VM (${s.vm}), ports 3000-9999 other than 8000 are reachable by the owner at https://${s.vm}.exe.xyz:<port>/.`;
-		return `People in this session: ${people.join(", ")}.\n\nYour tools now run on ${this.#targetLabel}.${vm}\n\nThe session VM's environment (set up by a background agent; other machines have whatever their owner installed):\n${env}`;
+		return `People in this session: ${people.join(", ")}.\n\nYour tools now run on ${this.#targetLabel}.${vm}\n\nThe session VM's environment (set up by a background agent; other machines have whatever their owner installed):\n${env}${this.#piNotes()}`;
 	}
 
 	async close(): Promise<void> {

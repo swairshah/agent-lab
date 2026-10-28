@@ -29,8 +29,14 @@ export type Presence = { memberId: string; name: string; client: "cli" | "web"; 
  */
 export type Where = "device" | "vm";
 
-/** A terminal client's machine, offered to run that member's requests. */
-export type DeviceInfo = { hostname: string; platform: string; arch: string; dir: string };
+/**
+ * A member's pi setup, as their pi would use it in this folder: the skills block pi puts in its system prompt (paths
+ * are on their machine, where their requests run) and the AGENTS.md / CLAUDE.md files it would read.
+ */
+export type PiContext = { skills: string; skillCount: number; agents: { path: string; content: string }[] };
+
+/** A terminal client's machine, offered to run that member's requests, with their pi setup when they have one. */
+export type DeviceInfo = { hostname: string; platform: string; arch: string; dir: string; context?: PiContext };
 
 export type EnvStatus = {
 	status: "pending" | "running" | "ready" | "failed";
