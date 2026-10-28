@@ -41,6 +41,8 @@ export interface FindTarget {
 }
 
 const HIGHLIGHT = "syncpi-find";
+/** More matches than this, and only those near the view are highlighted. */
+const MANY = 1000;
 const CURRENT = "syncpi-find-current";
 /** The CSS Custom Highlight API, where the webview has it; otherwise boxes are drawn over the visible matches. */
 const highlights = typeof CSS !== "undefined" && "highlights" in CSS && typeof Highlight !== "undefined";
@@ -76,6 +78,8 @@ export class Find {
 	#frame = 0;
 	#slow: ReturnType<typeof setTimeout> | undefined;
 	#layer: HTMLElement | undefined;
+	/** Too many matches to highlight them all: only those near the view are. */
+	#partial = false;
 	/** Bumped when the query or target changes, so an older reveal doesn't scroll. */
 	#generation = 0;
 
@@ -304,15 +308,53 @@ export class Find {
 
 	/** The first match that isn't above the top of the view, or the first. */
 	#firstInView(): number {
-		const target = this.#target!;
-		const top = target.scroller.getBoundingClientRect().top;
+		const top = this.#target!.scroller.getBoundingClientRect().top;
+		// The first block not above the view, then its first match not above it (blocks first: there may be many
+		// thousands of matches).
+		const at = this.#firstBlockBelow(top);
+		if (at >= this.#blocks.length) return 0;
 		for (let n = 0; n < this.#matches.length; n++) {
-			const range = this.#range(this.#matches[n]!);
-			if (range === undefined) continue;
-			const rect = range.getBoundingClientRect();
-			if (rect.height > 0 && rect.bottom >= top) return n;
+			const match = this.#matches[n]!;
+			const order = this.#order.get(match.blockId)!;
+			if (order < at) continue;
+			if (order > at) return n;
+			const rect = this.#range(match)?.getBoundingClientRect();
+			if (rect === undefined || rect.bottom >= top) return n;
 		}
 		return 0;
+	}
+
+	/** The blocks on screen (or within a screen of it), when there are too many matches to highlight them all. */
+	#visibleBlocks(): Set<string> {
+		const frame = this.#target!.scroller.getBoundingClientRect();
+		const out = new Set<string>();
+		for (let n = this.#firstBlockBelow(frame.top - frame.height); n < this.#blocks.length; n++) {
+			const block = this.#blocks[n]!;
+			const rect = blockRect(block);
+			if (rect === undefined) continue;
+			if (rect.top > frame.bottom + frame.height) break;
+			out.add(block.id);
+		}
+		return out;
+	}
+
+	/**
+	 * The first block whose bottom is at or below `y` on screen. Blocks are in page order, so it's a binary search
+	 * (measuring each block would take too long on a long thread); a block not on the page (folded) is skipped for
+	 * the next one that is.
+	 */
+	#firstBlockBelow(y: number): number {
+		let lo = 0;
+		let hi = this.#blocks.length;
+		while (lo < hi) {
+			const mid = (lo + hi) >> 1;
+			let probe = mid;
+			let rect: DOMRect | undefined;
+			while (probe < hi && (rect = blockRect(this.#blocks[probe]!)) === undefined) probe++;
+			if (rect === undefined || rect.bottom >= y) hi = mid;
+			else lo = probe + 1;
+		}
+		return lo;
 	}
 
 	#step(by: number): void {
@@ -372,7 +414,12 @@ export class Find {
 		}
 		const ranges: Range[] = [];
 		let active: Range | undefined;
+		// Past a thousand matches, only those in or near view are highlighted (again as it scrolls); the count still
+		// covers every one.
+		this.#partial = this.#matches.length > MANY;
+		const near = this.#partial ? this.#visibleBlocks() : undefined;
 		for (const match of this.#matches) {
+			if (near !== undefined && match !== current && !near.has(match.blockId)) continue;
 			const range = this.#range(match);
 			if (range === undefined) continue;
 			if (match === current) active = range;
@@ -388,7 +435,9 @@ export class Find {
 					styled.add(root);
 				}
 			}
-			CSS.highlights.set(HIGHLIGHT, new Highlight(...ranges));
+			const all = new Highlight();
+			for (const range of ranges) all.add(range);
+			CSS.highlights.set(HIGHLIGHT, all);
 			if (active) CSS.highlights.set(CURRENT, new Highlight(active));
 		}
 		const layer = this.#layerIn(target.scroller);
@@ -420,10 +469,20 @@ export class Find {
 			this.#layer = document.createElement("div");
 			this.#layer.className = "find-layer";
 			this.#layer.setAttribute("aria-hidden", "true");
-			if (!highlights) {
-				// Boxes follow the view as it scrolls.
-				document.addEventListener("scroll", () => this.isOpen && this.#paint(), { capture: true, passive: true });
-			}
+			// Boxes (without the highlight API), or highlights limited to what's in view, follow the view as it scrolls.
+			let queued = false;
+			document.addEventListener(
+				"scroll",
+				() => {
+					if (!this.isOpen || (highlights && !this.#partial) || queued) return;
+					queued = true;
+					requestAnimationFrame(() => {
+						queued = false;
+						this.#paint();
+					});
+				},
+				{ capture: true, passive: true },
+			);
 		}
 		if (this.#layer.parentElement !== scroller) {
 			if (getComputedStyle(scroller).position === "static") scroller.style.position = "relative";
@@ -439,4 +498,16 @@ export class Find {
 		}
 		this.#layer?.replaceChildren();
 	}
+}
+
+/** Where a block is on screen: from its first to its last text node. None when it has none on the page. */
+function blockRect(block: FindBlock): DOMRect | undefined {
+	const first = block.map.pieces[0];
+	const last = block.map.pieces.at(-1);
+	if (first === undefined || last === undefined || !first.node.isConnected) return undefined;
+	const range = document.createRange();
+	range.setStart(first.node, 0);
+	range.setEnd(last.node, last.node.data.length);
+	const rect = range.getBoundingClientRect();
+	return rect.height === 0 && rect.width === 0 ? undefined : rect;
 }

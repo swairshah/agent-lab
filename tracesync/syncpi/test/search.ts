@@ -121,7 +121,12 @@ try {
 	await until("Find to open", () => page.locator("#find-bar").isVisible());
 	check(await page.evaluate(() => document.activeElement?.id === "find-input"), "Find's input has focus");
 	check((await page.locator("#find-scope").textContent()) === "Conversation", "the scope says Conversation");
-	ok("⌘F opens Find on the conversation, with its input focused");
+	// What a screen reader is given: a search landmark, a named input, named buttons, the count announced.
+	const bar = await page.locator("#find-bar").ariaSnapshot();
+	for (const part of ['search "Find"', 'textbox "Find in conversation"', 'button "Match case"', 'button "Previous match"', 'button "Next match"', 'button "Close Find"'])
+		check(bar.includes(part), `Find bar accessibility: missing ${part} in\n${bar}`);
+	check((await page.locator("#find-count").getAttribute("aria-live")) === "polite", "the count is announced politely");
+	ok("⌘F opens Find on the conversation, with its input focused; the bar is a named search region with named controls");
 
 	// A phrase in several messages; Enter and ⇧Enter step and wrap.
 	await page.keyboard.type("cart total");
@@ -393,7 +398,10 @@ try {
 	check((await page.locator("#palette-heading").textContent()) === "Search commands and files", "titled for what it searches here");
 	const active = await page.locator("#palette-input").getAttribute("aria-activedescendant");
 	check(active !== null && (await page.locator(`#${active}`).getAttribute("aria-selected")) === "true", "the active option is the selected row");
-	ok("⌘K opens the palette on All with its input focused, as a combobox; in a browser there's no Threads tab");
+	const dialog = await page.locator("#palette").ariaSnapshot();
+	for (const part of ['dialog "Search commands and files"', 'combobox "Search commands and files"', 'listbox "Results"', "option"]) check(dialog.includes(part), `palette accessibility: missing ${part} in\n${dialog.slice(0, 600)}`);
+	await until("the count is announced", async () => /\d+ results?/.test((await page.locator("#palette-status").textContent()) ?? ""));
+	ok("⌘K opens the palette on All with its input focused: a named dialog, combobox and listbox, with the count announced; in a browser there's no Threads tab");
 
 	await page.keyboard.press("Escape");
 	await until("closed", async () => !(await page.locator("#palette").isVisible()));
