@@ -111,6 +111,9 @@ export class Composer {
 	readonly #input: HTMLTextAreaElement;
 	readonly #draftKey: string;
 	#attachments: Attachment[] = [];
+	/** The draft the others last saw, and the pending update to it. */
+	#shared = "";
+	#sharing: ReturnType<typeof setTimeout> | undefined;
 	/** Prompt template names offered by an embedding app; they expand there. */
 	prompts: string[] = [];
 
@@ -126,6 +129,11 @@ export class Composer {
 		input.value = storage.get(this.#draftKey) ?? "";
 		this.#fit();
 		window.addEventListener("pagehide", () => this.#saveDraft());
+		// After a (re)connect the server knows no draft of ours: show it again.
+		context.session.on("connection", () => {
+			this.#shared = "";
+			this.#share();
+		});
 
 		input.addEventListener("input", () => {
 			this.#saveDraft();
@@ -296,6 +304,29 @@ export class Composer {
 
 	#saveDraft(): void {
 		storage.set(this.#draftKey, this.#input.value);
+		this.#share();
+	}
+
+	/**
+	 * Others in the thread see the draft as it's written, as in Delta: at most every 120ms while typing, and its end
+	 * at once when it's sent or cleared. Commands (/…, !…) stay private.
+	 */
+	#share(): void {
+		const current = () => (/^\s*[/!]/.test(this.#input.value) ? "" : this.#input.value);
+		const send = (text: string) => {
+			this.#shared = text;
+			this.#c.session.send({ type: "typing", text });
+		};
+		if (current() === "") {
+			clearTimeout(this.#sharing);
+			this.#sharing = undefined;
+			if (this.#shared !== "") send("");
+			return;
+		}
+		this.#sharing ??= setTimeout(() => {
+			this.#sharing = undefined;
+			if (current() !== this.#shared) send(current());
+		}, 120);
 	}
 
 	#complete(): void {

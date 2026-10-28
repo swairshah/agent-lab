@@ -5,7 +5,7 @@ import type { Attachment, BranchInfo, ClientMessage, LineComment, ConvName, EnvS
 import { Thread } from "../shared/thread.ts";
 import { storage } from "./dom.ts";
 
-export type Change = "session" | "thread" | "people" | "env" | "invites" | "branches" | "files" | "connection" | "target";
+export type Change = "session" | "thread" | "people" | "env" | "invites" | "branches" | "files" | "connection" | "target" | "typing";
 
 type Submit = Extract<ClientMessage, { type: "submit" }>;
 
@@ -31,6 +31,8 @@ export class SessionClient {
 	connection: "connecting" | "open" | "reconnecting" | "removed" = "connecting";
 	/** Messages sent but not yet acknowledged by the server; resent after a reconnect, kept across reloads. */
 	readonly outbox = new Map<string, Submit>();
+	/** Other people's unsent drafts, live, by member id. */
+	readonly typing = new Map<string, { name: string; text: string }>();
 	/** Current names by member id, so a renamed person shows under their new name everywhere. */
 	names = new Map<string, string>();
 
@@ -155,6 +157,8 @@ export class SessionClient {
 	#receive(message: ServerMessage): void {
 		switch (message.type) {
 			case "welcome":
+				// The server sends the drafts in progress again after this.
+				this.typing.clear();
 				this.info = message.session;
 				this.me = message.me;
 				this.#setMembers(message.members);
@@ -167,6 +171,11 @@ export class SessionClient {
 				this.threads[message.conv].prepend(message.entries);
 				this.#arrived();
 				return this.#emit("thread");
+			case "typing":
+				if (message.memberId === this.me?.id) return;
+				if (message.text === "") this.typing.delete(message.memberId);
+				else this.typing.set(message.memberId, { name: message.name, text: message.text });
+				return this.#emit("typing");
 			case "presence":
 				this.online = message.online;
 				this.#setMembers(message.members);

@@ -31,6 +31,8 @@ type Client = {
 	ws: WebSocket;
 	watches: Partial<Record<ConvName, AgentEventStream>>;
 	device?: DeviceClient & { label: string };
+	/** What they're writing now, shown live to the others. */
+	draft?: string;
 };
 
 const RANK: Record<Role, number> = { viewer: 0, editor: 1, admin: 2 };
@@ -188,6 +190,14 @@ export class Room {
 		for (const client of this.#clients) this.#send(client, message);
 	}
 
+	/** Tells the others in the thread what `client` is writing ("" when they stopped). */
+	#typing(client: Client, text: string): void {
+		if ((client.draft ?? "") === text) return;
+		client.draft = text || undefined;
+		const message: ServerMessage = { type: "typing", memberId: client.member.id, name: client.member.name, text };
+		for (const other of this.#clients) if (other !== client) this.#send(other, message);
+	}
+
 	#presence(): ServerMessage {
 		const online: Presence[] = [...this.#clients].map((c) => ({ memberId: c.member.id, name: c.member.name, client: c.kind, device: c.device?.label }));
 		return { type: "presence", online, members: this.state.members() };
@@ -319,6 +329,10 @@ export class Room {
 			case "ping":
 				this.#send(client, { type: "pong" });
 				return;
+			case "typing":
+				if (!atLeast(member, "editor")) return;
+				this.#typing(client, typeof message.text === "string" ? message.text.slice(0, 4000) : "");
+				return;
             case "configure":
                 if (!atLeast(member, "admin")) return this.#error(client, "only admins can change the model");
                 await this.session.configure(message.model, message.thinkingLevel);
@@ -390,6 +404,11 @@ export class Room {
 	async connect(ws: WebSocket, member: StoredMember, kind: "cli" | "web"): Promise<void> {
 		const client: Client = { member, kind, ws, watches: {} };
 		this.#clients.add(client);
+		// What the client sends while its thread is still being loaded (a message resent from its outbox the moment it
+		// connects) is held until then, not dropped.
+		const early: [WebSocket.RawData, boolean][] = [];
+		let receive = (data: WebSocket.RawData, isBinary: boolean) => void early.push([data, isBinary]);
+		ws.on("message", (data, isBinary) => receive(data, isBinary));
 		this.#lastActive = Date.now();
 		const s = this.state.value;
 		const me = { id: member.id, name: member.name, email: member.email, role: member.role, creator: member.creator };
@@ -400,7 +419,8 @@ export class Room {
 		this.#send(client, { type: "branches", branches: this.session.branches(), current: this.session.branchId });
 		this.#broadcast(this.#presence());
 		this.#send(client, { type: "target", label: this.session.targetLabel });
-		ws.on("message", (data, isBinary) => {
+		for (const other of this.#clients) if (other.draft) this.#send(client, { type: "typing", memberId: other.member.id, name: other.member.name, text: other.draft });
+		receive = (data, isBinary) => {
 			if (isBinary) {
 				if (client.device === undefined) return;
 				const { channel, bytes } = parseChannelFrame(data as Buffer);
@@ -414,8 +434,10 @@ export class Room {
 				return;
 			}
 			void this.#onMessage(client, message).catch((error) => this.#send(client, { type: "error", message: String(error) }));
-		});
+		};
+		for (const [data, isBinary] of early.splice(0)) receive(data, isBinary);
 		ws.on("close", () => {
+			this.#typing(client, "");
 			this.#clients.delete(client);
 			this.#lastActive = Date.now();
 			if (client.device !== undefined) this.devices.unregister(client.device);

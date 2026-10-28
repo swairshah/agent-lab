@@ -113,6 +113,8 @@ export type ClientMessage =
 	/** Admins: switch the thread back to another branch. */
 	| { type: "switchBranch"; id: number }
 	| { type: "configure"; model: string; thinkingLevel?: string }
+	/** What this person is writing, as they write it, for the others in the thread; "" when they stop. Never stored. */
+	| { type: "typing"; text: string }
 	| { type: "ping" };
 
 export type ServerMessage =
@@ -126,6 +128,8 @@ export type ServerMessage =
 	 */
 	| { type: "history"; conv: ConvName; entries: unknown[] }
 	| { type: "presence"; online: Presence[]; members: Member[] }
+	/** Someone's unsent draft, live; "" when they sent or cleared it, or left. */
+	| { type: "typing"; memberId: string; name: string; text: string }
 	| { type: "env"; env: EnvStatus }
 	/**
 	 * Files the server saw change since the previous frame (hash null = deleted). The first frame after connecting is

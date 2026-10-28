@@ -151,7 +151,7 @@ export class ThreadView {
 			if (before && after && have?.key === unit.key && unit.tools.length > 0 && settled && before.dataset.settled === "true") after.open = before.open;
 			if (have === undefined) {
 				// New items go above the messages still waiting to be sent.
-				const pending = box.querySelector(":scope > .pending");
+				const pending = box.querySelector(":scope > .pending, :scope > .typing");
 				if (pending !== null) pending.before(node);
 				else box.append(node);
 			} else {
@@ -165,7 +165,26 @@ export class ThreadView {
 			extra.el.remove();
 		}
 		this.#renderPending();
+		this.#renderTyping();
 		if (follow) scroller.scrollTop = scroller.scrollHeight;
+	}
+
+	/** Others' drafts as they write them, at the end of the thread, as in Delta. */
+	renderTyping(): void {
+		const scroller = this.#scroller;
+		const follow = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 160;
+		this.#renderTyping();
+		if (follow) scroller.scrollTop = scroller.scrollHeight;
+	}
+
+	#renderTyping(): void {
+		for (const old of this.#box.querySelectorAll(":scope > .typing")) old.remove();
+		if (this.#conv !== "main") return;
+		for (const [memberId, draft] of this.#session.typing) {
+			const node = this.#user(this.#session.nameOf(memberId, draft.name), draft.text, [], "typing…");
+			node.classList.add("typing");
+			this.#box.append(node);
+		}
 	}
 
 	/** Messages sent from this browser that the server hasn't acknowledged yet. */

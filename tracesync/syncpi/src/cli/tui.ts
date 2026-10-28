@@ -248,6 +248,8 @@ export class App {
 	#session: SessionInfo | undefined;
 	#me: Member | undefined;
 	#online: Presence[] = [];
+	/** Who is writing a message right now (from the web or desktop app), by member id. */
+	#typing = new Map<string, string>();
 	#members: Member[] = [];
 	#env: EnvStatus = { status: "pending" };
 	#connState: ConnectionState = "connecting";
@@ -369,6 +371,7 @@ export class App {
 				this.#target = message.label;
 				break;
 			case "welcome":
+				this.#typing.clear();
 				this.#session = message.session;
 				this.#me = message.me;
 				this.#setMembers(message.members);
@@ -381,6 +384,11 @@ export class App {
 				this.#threads[message.conv].prepend(message.entries);
 				if (message.conv === "main") this.#numberArtifacts();
 				this.#view.invalidate();
+				break;
+			case "typing":
+				if (message.memberId === this.#me?.id) break;
+				if (message.text === "") this.#typing.delete(message.memberId);
+				else this.#typing.set(message.memberId, message.name);
 				break;
 			case "presence":
 				this.#online = message.online;
@@ -710,6 +718,7 @@ export class App {
 			parts.push(c.gray(`yours run ${this.#where === "device" ? "here" : "on the VM"}`));
 			if (thread.busy && this.#target) parts.push(this.#localTools > 0 ? c.accent(`tools on this machine`) : c.gray(`tools on ${this.#target}`));
 		}
+		if (this.#typing.size > 0) parts.push(c.gray(`${[...this.#typing.values()].join(", ")} ${this.#typing.size === 1 ? "is" : "are"} typing…`));
 		if (thread.cost > 0) parts.push(c.gray(`$${thread.cost.toFixed(2)}`));
 		if (thread.model) parts.push(c.gray(thread.model));
 		this.#status.lines = ["", parts.join(c.gray(" · "))];

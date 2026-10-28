@@ -250,6 +250,7 @@ async function main(): Promise<void> {
 		$("sync-status").addEventListener("click", () => app.command("project.sync"));
 	}
 
+	session.on("typing", () => threadView.renderTyping());
 	session.on("thread", () => {
 		threadView.render();
 		panel.update();
