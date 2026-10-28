@@ -84,9 +84,13 @@ export class Thread {
 	#live: AssistantItem | undefined;
 	#liveContent: Block[] = [];
 	#tools = new Map<string, ToolItem>();
+	/** Whether entries from before what's shown may still be missing (the server sent a page of them, not all). */
+	partial = false;
 
-	/** Puts earlier entries (from before the current context) in front of what is shown. */
-	prepend(entries: readonly unknown[]): void {
+	/** Puts earlier entries (from before the current context) in front of what is shown. `complete` says whether
+	 *  they reach the start of the conversation. */
+	prepend(entries: readonly unknown[], complete = true): void {
+		this.partial = !complete;
 		const earlier = new Thread();
 		for (const entry of entries) earlier.#entry(entry as Entry);
 		const shown = new Set(this.state.items.map((i) => i.key));
@@ -124,6 +128,7 @@ export class Thread {
 		switch (event.type) {
 			case "snapshot": {
 				this.state = { ...emptyThread(), rev: s.rev };
+				this.partial = false;
 				this.#tools.clear();
 				this.#live = undefined;
 				for (const entry of event.entries) this.#entry(entry as Entry);

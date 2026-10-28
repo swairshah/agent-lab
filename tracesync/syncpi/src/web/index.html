@@ -81,6 +81,22 @@
       <div id="setup-banner" class="setup-banner" hidden>
         <span id="side-title">Setup agent's thread</span><button id="land-stop" type="button" class="link" hidden>Stop</button><button id="setup-back" type="button" class="link">Back to the thread</button>
       </div>
+      <div id="find-bar" class="find-bar" role="search" aria-label="Find" hidden>
+        <span id="find-scope" class="find-scope"></span>
+        <input id="find-input" class="find-input" type="text" placeholder="Find" autocomplete="off" spellcheck="false" aria-describedby="find-count find-note">
+        <span id="find-count" class="find-count" aria-live="polite">0/0</span>
+        <span id="find-note" class="find-note"></span>
+        <button id="find-case" type="button" class="find-button find-case" aria-pressed="false" title="Match case" aria-label="Match case">Aa</button>
+        <button id="find-prev" type="button" class="find-button" title="Previous match (⇧↩, ⇧⌘G)" aria-label="Previous match">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 12 4-4 4 4"/></svg>
+        </button>
+        <button id="find-next" type="button" class="find-button" title="Next match (↩, ⌘G)" aria-label="Next match">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg>
+        </button>
+        <button id="find-close" type="button" class="find-button" title="Close (Esc)" aria-label="Close Find">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 6 8 8M14 6l-8 8"/></svg>
+        </button>
+      </div>
       <div id="scroller" class="scroller">
         <div id="thread" class="thread" aria-live="off"></div>
         <form id="composer" class="msg composer">

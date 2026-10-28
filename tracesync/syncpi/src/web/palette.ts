@@ -49,7 +49,7 @@ export class Palette {
 	readonly #list: HTMLElement;
 	readonly #status: HTMLElement;
 	readonly #commands: Command[];
-	readonly #handlers: Record<string, () => void>;
+	readonly #handlers: Record<string, () => void | boolean>;
 	readonly #files: () => string[];
 	readonly #openFile: (path: string) => void;
 	readonly #threads: (() => ThreadRow[]) | undefined;
@@ -72,7 +72,8 @@ export class Palette {
 	#announce: ReturnType<typeof setTimeout> | undefined;
 
 	constructor(options: {
-		handlers: Record<string, () => void>;
+		/** What each command does; one returning false didn't apply here (its key goes on to the page). */
+		handlers: Record<string, () => void | boolean>;
 		files: () => string[];
 		openFile: (path: string) => void;
 		app?: App;
@@ -197,7 +198,7 @@ export class Palette {
 	}
 
 	/** What command `id` does here, if this app does it. */
-	handler(id: string): (() => void) | undefined {
+	handler(id: string): (() => void | boolean) | undefined {
 		return this.#commands.some((c) => c.id === id) || id.startsWith("palette.") ? this.#handlers[id] : undefined;
 	}
 
@@ -206,8 +207,8 @@ export class Palette {
 		if (event.isComposing) return false;
 		const command = this.#commands.find((c) => c.keys !== undefined && matchesKeys(event, c.keys));
 		if (command === undefined) return false;
+		if (this.#handlers[command.id]!() === false) return false;
 		event.preventDefault();
-		this.#handlers[command.id]!();
 		return true;
 	}
 
@@ -229,7 +230,7 @@ export class Palette {
 			const group = fuzzy(c.group, query);
 			const score = Math.max(title.score, group.score >= 0 ? group.score - 10 : -1);
 			if (score < 0) return [];
-			const row: Row = { key: c.id, title: c.title, detail: c.group, keys: c.keys, section, run: () => this.#handlers[c.id]!() };
+			const row: Row = { key: c.id, title: c.title, detail: c.group, keys: c.keys, section, run: () => void this.#handlers[c.id]!() };
 			if (title.score >= 0 && title.score >= group.score - 10) row.titleMarks = title.positions;
 			else row.detailMarks = group.positions;
 			return [{ row, score, label: c.title, id: c.id }];
@@ -321,7 +322,7 @@ export class Palette {
 		else if (query === "") {
 			const quick = this.#commands.filter((c) => c.quick);
 			this.#rows = [
-				...quick.map((c) => ({ key: c.id, title: c.title, keys: c.keys, section: "Quick actions", run: () => this.#handlers[c.id]!() })),
+				...quick.map((c) => ({ key: c.id, title: c.title, keys: c.keys, section: "Quick actions", run: () => void this.#handlers[c.id]!() })),
 				...this.#commandRows("", "Commands").filter((r) => !quick.some((c) => c.id === r.key)),
 			];
 		} else {

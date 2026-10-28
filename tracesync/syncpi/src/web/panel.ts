@@ -7,6 +7,8 @@ import { fileKey } from "../shared/drafts.ts";
 import { artifactCard, type CommentHandler, disposeWithin, type ImageLoader } from "./artifacts.ts";
 import { $, el, escapeHtml, storage } from "./dom.ts";
 import { FilesTree } from "./files-tree.ts";
+import type { FindTarget } from "./find.ts";
+import { rangeOf, readText, type TextMap } from "./find-text.ts";
 import type { SessionClient } from "./session.ts";
 import { TextBinding } from "./text-binding.ts";
 
@@ -314,6 +316,63 @@ export class ArtifactPanel {
 		$("panel-file").querySelector<HTMLButtonElement>(".file-editor-bar .button")?.click();
 	}
 
+	/**
+	 * Find's view of the open tab (find.ts): the file or change as it's shown, at the version showing, in the view
+	 * showing (source, rendered Markdown, the diff), or the text being edited, unsaved edits and all. Previews and
+	 * images can't be searched.
+	 */
+	findTarget(): FindTarget | undefined {
+		const changes = this.#active === CHANGES;
+		const view = changes ? $("panel-view") : $("panel-file");
+		const card = view.querySelector<HTMLElement>(":scope > .artifact");
+		const body = card?.querySelector<HTMLElement>(":scope > .artifact-body");
+		if (card == null || body == null) return undefined;
+		const tab = this.#tabs.find((t) => t.path === this.#active);
+		const artifact = changes ? this.#artifacts.find((a) => a.key === this.#selected) : undefined;
+		const area = body.querySelector<HTMLTextAreaElement>(":scope > textarea.file-editor") ?? undefined;
+		const mode = area !== undefined ? "edit" : (card.querySelector<HTMLElement>(".artifact-tabs [aria-selected='true']")?.dataset.view ?? "view");
+		const id = `${changes ? `change:${this.#selected}` : `file:${tab?.path}@${tab?.version}`}:${mode}`;
+		const label = changes ? (artifact?.title ?? "Change") : `${tab?.path ?? "File"}${tab?.version === "before" ? " · before the last turn" : ""}${area !== undefined ? " · editing" : ""}`;
+		const searchable = area !== undefined || body.querySelector(".pierre-host, .markdown-preview") !== null;
+		let map: TextMap = { text: "", pieces: [], mapped: true };
+		let revision = 0;
+		const current = () => {
+			const now = view.querySelector<HTMLElement>(":scope > .artifact");
+			const nowArea = now?.querySelector(":scope > .artifact-body > textarea.file-editor") ?? undefined;
+			const nowMode = nowArea !== undefined ? "edit" : (now?.querySelector<HTMLElement>(".artifact-tabs [aria-selected='true']")?.dataset.view ?? "view");
+			return now === card && nowMode === mode && (changes ? this.#active === CHANGES : this.#active === tab?.path);
+		};
+		return {
+			id,
+			label,
+			inputLabel: "Find in file",
+			unavailable: searchable ? undefined : "Find isn't available for this view.",
+			barBefore: view,
+			scroller: body,
+			textarea: area,
+			blocks: () => {
+				// The text area's text as it is now, saved or not; otherwise the view as drawn.
+				map = area !== undefined ? { text: area.value, pieces: [], mapped: false } : readText(body);
+				return [{ id: "file", revision: ++revision, text: map.text, map }];
+			},
+			reveal: (match) => {
+				if (area === undefined) return rangeOf(map, match.start, match.end);
+				// Select it (without taking focus from the Find bar) and scroll it to the middle.
+				area.setSelectionRange(match.start, match.end);
+				const at = caretRect(area, match.start, match.end);
+				if (at !== undefined) area.scrollTop += at.top - area.getBoundingClientRect().top - area.clientHeight / 2;
+				return undefined;
+			},
+			rects: (match) => {
+				const at = area === undefined ? undefined : caretRect(area, match.start, match.end);
+				return at === undefined ? [] : [at];
+			},
+			alive: () => current(),
+			restore: () => {},
+			pending: () => body.querySelector(".pierre-host") !== null && map.text === "",
+		};
+	}
+
 	/** The open tab: "changes", a file's path, or null when the panel is closed. */
 	get shown(): string | null {
 		return document.documentElement.classList.contains("panel-open") ? this.#active : null;
@@ -527,4 +586,24 @@ export class ArtifactPanel {
 			list.append(section);
 		}
 	}
+}
+
+/** Where text in a text area is on screen: measured on a copy laid out the same way (a text area has no ranges). */
+function caretRect(area: HTMLTextAreaElement, start: number, end: number): DOMRect | undefined {
+	if (!area.isConnected) return undefined;
+	const style = getComputedStyle(area);
+	const mirror = document.createElement("div");
+	for (const prop of ["font", "lineHeight", "letterSpacing", "tabSize", "paddingLeft", "paddingRight", "paddingTop", "textIndent", "wordSpacing"] as const) mirror.style[prop] = style[prop];
+	// The same width for text as the area's (inside its padding, beside any scrollbar), so lines wrap alike.
+	const inner = area.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+	Object.assign(mirror.style, { position: "absolute", visibility: "hidden", whiteSpace: "pre-wrap", overflowWrap: "break-word", boxSizing: "content-box", border: "0", width: `${inner}px`, top: "0", left: "-9999px" });
+	mirror.textContent = area.value.slice(0, start);
+	const mark = document.createElement("span");
+	mark.textContent = area.value.slice(start, end) || "\u200b";
+	mirror.append(mark);
+	document.body.append(mirror);
+	const box = area.getBoundingClientRect();
+	const rect = new DOMRect(box.left + area.clientLeft + mark.offsetLeft - area.scrollLeft, box.top + area.clientTop + mark.offsetTop - area.scrollTop, mark.offsetWidth, mark.offsetHeight);
+	mirror.remove();
+	return rect;
 }

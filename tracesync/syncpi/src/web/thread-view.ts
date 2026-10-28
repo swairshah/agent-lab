@@ -8,6 +8,8 @@ import type { Item, ToolItem, UserItem } from "../shared/thread.ts";
 import { isQuietTool, type Milestone, milestoneOf, toolGroupSummary, toolSummary } from "../shared/thread.ts";
 import { artifactCard, type CommentHandler, disposeWithin, type ImageLoader, renderCode } from "./artifacts.ts";
 import { renderDiagram } from "./diagrams.ts";
+import type { FindBlock, FindTarget } from "./find.ts";
+import { rangeOf, readText, setFolded, setSource, type TextMap } from "./find-text.ts";
 import { el, escapeHtml, initials, personColor } from "./dom.ts";
 import { modelAvatar, whereMark } from "./icons.ts";
 import { renderMarkdown } from "./markdown.ts";
@@ -74,6 +76,14 @@ export class ThreadView {
 	readonly #options: ThreadViewOptions;
 	#rendered: { key: string; sig: string; el: HTMLElement }[] = [];
 	#conv: ConvName = "main";
+	/** Set while Find is open: new replies don't scroll the thread away from what's being read. */
+	#hold = false;
+	/** Find's reading of each searchable part, kept until the part is redrawn (a new element). */
+	readonly #texts = new WeakMap<Element, { map: TextMap; revision: number }>();
+	#revision = 0;
+	/** Folds Find opened, by row and position in it (which survive a redraw). Closing Find closes them again, unless
+	 *  the person closed one meanwhile. */
+	readonly #opened = new Set<string>();
 
 	constructor(box: HTMLElement, scroller: HTMLElement, session: SessionClient, options: ThreadViewOptions) {
 		this.#box = box;
@@ -85,6 +95,7 @@ export class ThreadView {
 			const link = (event.target as HTMLElement).closest<HTMLElement>(".cite[data-path]");
 			if (link) options.onOpenFile(link.dataset.path!, link.dataset.lines);
 		});
+
 	}
 
 	show(conv: ConvName): void {
@@ -105,6 +116,92 @@ export class ThreadView {
 		void node.offsetWidth;
 		node.classList.add("flash");
 		return true;
+	}
+
+	/** Find's view of the thread showing (find.ts): the searchable parts of its rows, in order. A part is read once
+	 *  per drawing of its row (rows are replaced when they change), except text not all on the page yet. */
+	findTarget(barBefore: Element): FindTarget {
+		const conv = this.#conv;
+		const branch = this.#session.currentBranch;
+		const partial = this.#session.threads[conv].partial;
+		const name = conv === "setup" ? "Setup agent's thread" : conv === "land" ? "Land thread" : "Conversation";
+		return {
+			id: `conversation:${conv}:${branch}`,
+			label: partial ? `Loaded ${name.toLowerCase()} · earlier messages aren't searched` : name,
+			inputLabel: "Find in conversation",
+			barBefore,
+			scroller: this.#scroller,
+			blocks: () => {
+				const out: FindBlock[] = [];
+				for (const { el: row } of this.#rendered) {
+					if (row.hidden) continue;
+					const unit = row.dataset.unit ?? "";
+					const parts = this.#parts(row);
+					parts.forEach((part, n) => {
+						let read = this.#texts.get(part);
+						if (read === undefined) {
+							read = { map: readText(part), revision: ++this.#revision };
+							// Text that isn't all on the page yet is read again next time (it may be drawn by then).
+							if (read.map.mapped) this.#texts.set(part, read);
+						}
+						out.push({ id: `${unit}#${n}`, revision: read.revision, text: read.map.text, map: read.map });
+					});
+				}
+				return out;
+			},
+			reveal: (match) => {
+				const [unit, n] = [match.blockId.slice(0, match.blockId.lastIndexOf("#")), Number(match.blockId.slice(match.blockId.lastIndexOf("#") + 1))];
+				const row = this.#box.querySelector<HTMLElement>(`:scope > [data-unit="${CSS.escape(unit)}"]`);
+				const part = row === null ? undefined : this.#parts(row)[n];
+				if (row === null || part === undefined) return undefined;
+				// Open every fold around it, remembering which were closed.
+				for (let fold = part.closest("details"); fold !== null && row.contains(fold); fold = fold.parentElement?.closest("details") ?? null) {
+					if (fold.open) continue;
+					const key = this.#foldKey(fold);
+					if (key !== undefined) this.#opened.add(key);
+					fold.open = true;
+				}
+				let read = this.#texts.get(part);
+				if (read === undefined || !read.map.mapped) {
+					// A cut-short output shows all of it, then is read again.
+					const fold = [part, ...part.querySelectorAll("*")].map((e) => e as HTMLElement).find((e) => e.matches("pre.tool-output") && e.previousElementSibling?.matches(".tool-more"));
+					(fold?.previousElementSibling as HTMLButtonElement | null)?.click();
+					read = { map: readText(part), revision: ++this.#revision };
+					if (read.map.mapped) this.#texts.set(part, read);
+				}
+				return rangeOf(read.map, match.start, match.end);
+			},
+			alive: () => this.#conv === conv && this.#session.currentBranch === branch && this.#box.isConnected,
+			restore: () => {
+				for (const key of this.#opened) {
+					const fold = this.#foldAt(key);
+					if (fold !== undefined) fold.open = false;
+				}
+				this.#opened.clear();
+			},
+			hold: (on) => void (this.#hold = on),
+		};
+	}
+
+	/** A row's searchable parts, outermost only. */
+	#parts(row: HTMLElement): HTMLElement[] {
+		return [...row.querySelectorAll<HTMLElement>("[data-find]")].filter((part) => {
+			const outer = part.parentElement?.closest("[data-find]");
+			return outer == null || !row.contains(outer);
+		});
+	}
+
+	/** A fold by its row and its position among the row's folds, which survive the row being redrawn. */
+	#foldKey(fold: HTMLDetailsElement): string | undefined {
+		const row = fold.closest<HTMLElement>("[data-unit]");
+		if (row === null) return undefined;
+		return `${row.dataset.unit}|${[...row.querySelectorAll("details")].indexOf(fold)}`;
+	}
+
+	#foldAt(key: string): HTMLDetailsElement | undefined {
+		const bar = key.lastIndexOf("|");
+		const row = this.#box.querySelector<HTMLElement>(`:scope > [data-unit="${CSS.escape(key.slice(0, bar))}"]`);
+		return row?.querySelectorAll("details")[Number(key.slice(bar + 1))];
 	}
 
 	/** "@Name" for members of the session, in a message's text: marked, and more strongly when it's you. */
@@ -146,7 +243,7 @@ export class ThreadView {
 	render(): void {
 		const box = this.#box;
 		const scroller = this.#scroller;
-		const follow = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 160;
+		const follow = !this.#hold && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 160;
 		const items = this.#session.threads[this.#conv].state.items;
 		const units = displayUnits(items);
 		// Comments on messages, by the message they're on: they show there, inline, as in Delta.
@@ -167,6 +264,7 @@ export class ThreadView {
 			const node = unit.tools.length > 1 ? this.#agentRow(this.#group(unit.tools, unit.key), this.#modelBefore(items, unit.index), false) : this.#item(items[unit.index]!, items, unit.index);
 			// Messages can be commented on by selecting their text (quote-comments.ts).
 			if (unit.tools.length === 0) node.dataset.key = unit.key;
+			node.dataset.unit = unit.key;
 			for (const mark of marks.get(unit.key) ?? []) this.#mark(node, mark);
 			// A folded row keeps its open/closed state across updates once its tool has finished; not the state it had
 			// while running (an edit has no diff to show until it's done, and opens then).
@@ -198,7 +296,7 @@ export class ThreadView {
 	/** Others' drafts as they write them, at the end of the thread, as in Delta. */
 	renderTyping(): void {
 		const scroller = this.#scroller;
-		const follow = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 160;
+		const follow = !this.#hold && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 160;
 		this.#renderTyping();
 		if (follow) scroller.scrollTop = scroller.scrollHeight;
 	}
@@ -272,7 +370,7 @@ export class ThreadView {
 				return this.#agentRow(this.#tool(item), this.#modelBefore(items, index), false);
 			}
 			case "notice": {
-				const node = el("div", "notice", item.text);
+				const node = findable(el("div", "notice", item.text));
 				// A land's progress opens its thread.
 				if (item.land !== undefined && this.#conv === "main") {
 					const open = el("button", "link notice-link", "Open");
@@ -333,6 +431,7 @@ export class ThreadView {
 	/** A comment on file lines, as Delta shows it: the file and lines (opening the file), the lines, the note. */
 	#comment(c: LineComment, name: string): HTMLElement {
 		const card = el("div", "comment-card");
+		card.dataset.find = "";
 		// On part of a message: the quote and the note.
 		if (c.message !== undefined) {
 			card.append(el("div", "comment-on", "On a message"), el("blockquote", "quote-excerpt", c.excerpt));
@@ -370,6 +469,7 @@ export class ThreadView {
 		if (body !== null) {
 			this.#linkFileNames(body);
 			this.#markMentions(body);
+			body.dataset.find = "";
 		}
 		if (comments.length > 0) {
 			const box = el("details", "fold comments");
@@ -386,6 +486,7 @@ export class ThreadView {
 				if (a.url !== undefined) box.append(Object.assign(el("img"), { src: a.url, alt: a.name, title: a.name }));
 				else box.append(el("span", "file-chip", a.name));
 			}
+			box.dataset.find = "";
 			node.querySelector(".msg-content")!.append(box);
 		}
 		return node;
@@ -445,11 +546,12 @@ export class ThreadView {
 		const content = el("div");
 		if (item.thinking) {
 			const thinking = el("details", "fold thinking");
-			thinking.innerHTML = `<summary>${item.streaming && !item.text ? "Thinking…" : "Thinking"}</summary><div class="thinking-body">${escapeHtml(item.thinking)}</div>`;
+			thinking.innerHTML = `<summary>${item.streaming && !item.text ? "Thinking…" : "Thinking"}</summary><div class="thinking-body" data-find>${escapeHtml(item.thinking)}</div>`;
 			content.append(thinking);
 		}
 		if (item.text) {
 			const body = el("div", "msg-body prose");
+			body.dataset.find = "";
 			// A reply to several comments answers each under it (<reply to="n">); the rest reads as usual.
 			const sections = asked === undefined ? [] : replySections(item.text);
 			if (sections.some((s) => s.to !== undefined)) {
@@ -462,7 +564,7 @@ export class ThreadView {
 			content.append(body);
 			if (!item.streaming) this.#upgradeCode(body, item.key, item.text);
 		}
-		if (item.error) content.append(el("div", "msg-error", item.error));
+		if (item.error) content.append(findable(el("div", "msg-error", item.error)));
 		return content;
 	}
 
@@ -498,6 +600,7 @@ export class ThreadView {
 			} else if (lang !== "" && code.split("\n").length > 1) {
 				const host = el("div", "code-block");
 				slot.replaceWith(host);
+				setSource(host, code.replace(/\n$/, ""));
 				renderCode(host, `snippet.${lang}`, code.replace(/\n$/, ""));
 				host.append(copyButton(code.replace(/\n$/, "")));
 			} else slot.append(copyButton(code.replace(/\n$/, "")));
@@ -525,8 +628,8 @@ export class ThreadView {
 				const link = el("button", "file-link", path);
 				link.type = "button";
 				link.onclick = () => this.#options.onOpenFile(path);
-				line.append(link);
-			} else line.append(el("span", "tool-arg", target));
+				line.append(findable(link));
+			} else line.append(findable(el("span", "tool-arg", target)));
 			list.append(line);
 		}
 		node.append(list);
@@ -585,7 +688,7 @@ export class ThreadView {
 		const artifacts = toolArtifacts(item);
 		const diff = artifacts.find((a) => a.kind === "diff");
 		const stats = diff ? patchStats(diff.content) : undefined;
-		node.innerHTML = `<summary><span class="tool-verb">${escapeHtml(verb)}</span><span class="tool-arg">${escapeHtml(toolSummary(item))}</span>${
+		node.innerHTML = `<summary><span class="tool-verb">${escapeHtml(verb)}</span><span class="tool-arg" data-find>${escapeHtml(toolSummary(item))}</span>${
 			stats ? `<span class="diff-stats"><span class="added">+${stats.added}</span> <span class="removed">−${stats.removed}</span></span>` : ""
 		}</summary>`;
 		const body = el("div", "tool-body");
@@ -594,12 +697,12 @@ export class ThreadView {
 		if (shot?.image) {
 			// A picture the agent took on the VM (and looked at), shown open.
 			body.append(this.#screenshot(shot.image, toolSummary(item)));
-			if (shot.error) body.append(el("div", "tool-note", `A step failed: ${shot.error}`));
+			if (shot.error) body.append(findable(el("div", "tool-note", `A step failed: ${shot.error}`)));
 			node.open = true;
 		} else if (recording?.video) {
 			// A video the agent recorded on the VM, shown open: it's the point of the call.
 			body.append(this.#video(recording.video, recording.poster));
-			if (recording.error) body.append(el("div", "tool-note", `Stopped early: ${recording.error}`));
+			if (recording.error) body.append(findable(el("div", "tool-note", `Stopped early: ${recording.error}`)));
 			node.open = true;
 		} else if (artifacts.length > 0) {
 			for (const artifact of artifacts) body.append(artifactCard(artifact, { size: "inline", onOpen: this.#options.onOpenArtifact, loadImage: this.#options.loadImage, onComment: this.#options.onComment }));
@@ -611,7 +714,7 @@ export class ThreadView {
 		} else if (item.output.trim()) {
 			// Long output shows its end, where the result is, as in Delta; the rest is a click away.
 			const lines = item.output.trimEnd().slice(-20_000).split("\n");
-			const pre = el("pre", "tool-output");
+			const pre = findable(el("pre", "tool-output"));
 			const TAIL = 10;
 			if (lines.length > TAIL + 3) {
 				const more = el("button", "tool-more", `Show ${lines.length - TAIL} more lines`);
@@ -622,6 +725,8 @@ export class ThreadView {
 					more.remove();
 				});
 				pre.textContent = lines.slice(-TAIL).join("\n");
+				// Find searches all of it, and shows all of it to reveal a match above the tail.
+				setFolded(pre, { text: lines.join("\n"), expand: () => more.click() });
 				body.append(more, pre);
 			} else {
 				pre.textContent = lines.join("\n");
@@ -635,12 +740,18 @@ export class ThreadView {
 	}
 }
 
+/** Marks an element as text Find searches (see findTarget). */
+function findable<T extends HTMLElement>(node: T): T {
+	node.dataset.find = "";
+	return node;
+}
+
 export const FLAG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/></svg>`;
 
 /** A milestone the agent marked: a flag, its title and what changed. */
 function milestoneCard(milestone: Milestone): HTMLElement {
 	const node = el("div", "milestone");
-	node.innerHTML = `${FLAG}<div><div class="milestone-title">${escapeHtml(milestone.title)}</div>${milestone.summary ? `<div class="milestone-summary">${escapeHtml(milestone.summary)}</div>` : ""}</div>`;
+	node.innerHTML = `${FLAG}<div><div class="milestone-title" data-find>${escapeHtml(milestone.title)}</div>${milestone.summary ? `<div class="milestone-summary" data-find>${escapeHtml(milestone.summary)}</div>` : ""}</div>`;
 	return node;
 }
 

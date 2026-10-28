@@ -34,6 +34,7 @@ import { ThreadMap } from "./thread-map.ts";
 import { Follow } from "./follow.ts";
 import { mentionsOf } from "../shared/mentions.ts";
 import { Git } from "./git.ts";
+import { Find, type FindTarget } from "./find.ts";
 
 type Theme = "system" | "light" | "dark";
 
@@ -178,6 +179,34 @@ async function main(): Promise<void> {
 	};
 	const threadView = new ThreadView($("thread"), $("scroller"), session, { onOpenArtifact: (a) => panel.open(a), onFork: fork, onOpenFile: (path, lines) => void openFile(path, lines), loadImage, loadRecording, onComment: sendComment, onShowLand: () => show("land"), draftOwner: () => composer.owner, onJoinDraft: (owner) => composer.join(owner) });
 	const threadMap = new ThreadMap(session, $("scroller"), $("thread"));
+	// Find (⌘F) searches the pane last used: the conversation, or the file open in the panel. The project tree, the
+	// sidebar and the composer count as the conversation.
+	let pane: "conversation" | "panel" = "conversation";
+	const notePane = (event: Event) => {
+		const target = event.target as Element | null;
+		if (target?.closest?.("#find-bar") || !(target instanceof Element)) return;
+		pane = target.closest(".panel-main") !== null ? "panel" : "conversation";
+	};
+	document.addEventListener("focusin", notePane, true);
+	document.addEventListener("pointerdown", notePane, true);
+	const findTarget = (): FindTarget | undefined => {
+		if (pane === "panel" && panel.shown !== null) {
+			const target = panel.findTarget();
+			if (target !== undefined) return target;
+		}
+		return threadView.findTarget($("scroller"));
+	};
+	const find = new Find({ target: findTarget, onOpen: (open) => void (follow.paused = open) });
+	// Rows replaced (a reply streaming, a theme change) or the panel's view redrawn: Find counts again.
+	const changed = (records: MutationRecord[]) => {
+		if (records.every((r) => (r.target as Element).closest?.(".find-layer") || [...r.addedNodes, ...r.removedNodes].every((n) => (n as Element).classList?.contains("find-layer") || (n as Element).classList?.contains("find-box")))) return;
+		find.refresh();
+	};
+	new MutationObserver(changed).observe($("thread"), { childList: true });
+	new MutationObserver(changed).observe($("panel-file"), { childList: true, subtree: true });
+	new MutationObserver(changed).observe($("panel-view"), { childList: true, subtree: true });
+	/** A terminal has its own keys (⌘F, ⌘K); another dialog keeps its own input. */
+	const findBlocked = () => document.activeElement?.closest(".terminal") != null || document.querySelector("dialog[open]") !== null;
 	const follow = new Follow({ session, scroller: $("scroller"), box: $("thread"), panel, showing: () => showing, show: (conv) => show(conv), notify: toast });
 	const settings = new Settings(session, {
 		onTheme: (theme) => {
@@ -471,6 +500,9 @@ async function main(): Promise<void> {
 			"view.people": () => settings.open("people"),
 			...(git ? { "view.git": () => git.toggle() } : {}),
 			...(terminals ? { "view.terminal": () => (session.role === "viewer" ? toast("Viewers can't run commands.", "error") : terminals.toggle()) } : {}),
+			"find.open": () => !findBlocked() && find.open(),
+			"find.next": () => !findBlocked() && find.next(),
+			"find.previous": () => !findBlocked() && find.previous(),
 			"file.comment": editor(() => commentOnSelection() || toast("Select lines in a file or diff (click or drag their numbers) to comment on them.")),
 		},
 	});
@@ -488,8 +520,7 @@ async function main(): Promise<void> {
 	run.syncpiRun = (id) => {
 		const handler = palette.handler(id);
 		if (handler === undefined) return false;
-		handler();
-		return true;
+		return handler() !== false;
 	};
 	run.syncpiTheme = (theme) => {
 		applyTheme(theme as Theme);

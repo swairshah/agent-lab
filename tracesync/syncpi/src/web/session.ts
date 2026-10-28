@@ -255,7 +255,7 @@ export class SessionClient {
 				this.#arrived();
 				return this.#emit("thread");
 			case "history":
-				this.threads[message.conv].prepend(message.entries);
+				this.threads[message.conv].prepend(message.entries, message.complete === true);
 				this.#arrived();
 				return this.#emit("thread");
 			case "draft": {

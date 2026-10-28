@@ -158,7 +158,8 @@ export type ServerMessage =
 	 * Entries from before the snapshot's context (before a /new or a summary), oldest first. The model no longer sees
 	 * them, but people still do. Sent right after a snapshot.
 	 */
-	| { type: "history"; conv: ConvName; entries: unknown[] }
+	/** Entries from before the snapshot's; `complete` when they go back to the start (else the client has a page). */
+	| { type: "history"; conv: ConvName; entries: unknown[]; complete?: boolean }
 	| { type: "presence"; online: Presence[]; members: Member[] }
 	/**
 	 * A change to `owner`'s unsent draft, live; all of each draft right after connecting. `sent`: the member who sent

@@ -750,3 +750,27 @@ html[data-desktop="true"] .statusbar { height: 30px; padding: 0 6px 0 16px; }
 
 /* Room for the timeline beside the thread (after the app's own padding, which it overrides). */
 @media (pointer: fine) { html.thread-map-on .scroller { padding-right: 46px; } }
+
+/* ---------- Find (⌘F): a bar at the top of the conversation or the open file ---------- */
+
+.find-bar { display: flex; align-items: center; gap: 6px; padding: 6px 10px 6px 14px; border-bottom: 1px solid var(--rule); background: var(--surface); font-size: 12.5px; }
+.find-scope { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; flex: 0 1 auto; }
+.find-input { flex: 1; min-width: 120px; padding: 4px 8px; font-size: 13px; }
+.find-count { font: 12px var(--mono); color: var(--muted); min-width: 4.5ch; text-align: right; }
+.find-note { color: var(--muted); white-space: nowrap; }
+.find-note:empty { display: none; }
+.find-button { display: inline-grid; place-items: center; min-width: 26px; height: 26px; padding: 0 5px; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--ink-2); cursor: pointer; font: 600 12px var(--sans); }
+.find-button:hover { background: var(--sunken); }
+.find-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.find-case[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+:root { --find: rgb(255 208 64 / .45); --find-current: rgb(255 140 40 / .55); }
+::highlight(syncpi-find) { background-color: var(--find); color: inherit; }
+::highlight(syncpi-find-current) { background-color: var(--find-current); color: inherit; }
+/* The current match also gets a box around it; without the highlight API, every match in view gets a tint. */
+.find-layer { position: absolute; inset: 0 auto auto 0; width: 0; height: 0; pointer-events: none; z-index: 3; }
+.find-box { position: absolute; border-radius: 2px; background: var(--find); mix-blend-mode: multiply; }
+.find-box.current { background: none; outline: 2px solid var(--accent); outline-offset: 1px; mix-blend-mode: normal; }
+@supports not (selector(::highlight(x))) { .find-box.current { background: var(--find-current); } }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --find: rgb(255 200 60 / .3); --find-current: rgb(255 140 40 / .45); } :root:not([data-theme="light"]) .find-box { mix-blend-mode: screen; } }
+:root[data-theme="dark"] { --find: rgb(255 200 60 / .3); --find-current: rgb(255 140 40 / .45); }
+:root[data-theme="dark"] .find-box { mix-blend-mode: screen; }

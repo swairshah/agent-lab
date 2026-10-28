@@ -80,9 +80,12 @@ export class Follow {
 		this.#render();
 	}
 
+	/** Set while this person is using Find: where its matches take them isn't shared. */
+	paused = false;
+
 	/** Where this person is now, for anyone following them; sent when it changes, a few times a second at most. */
 	share(): void {
-		if (this.#timer !== undefined) return;
+		if (this.#timer !== undefined || this.paused) return;
 		this.#timer = setTimeout(() => {
 			this.#timer = undefined;
 			const view = JSON.stringify(this.#mine());

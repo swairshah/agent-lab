@@ -712,7 +712,7 @@ export class Room {
 		if (Number.isFinite(oldest) && oldest > 1) {
 			const page = await this.session.conversation(conv).entries({ maxEntryId: (oldest - 1) as never, order: "descending" }, HISTORY, undefined, context);
 			const entries = page.items.filter((e) => e.kind !== "pi.system").reverse();
-			if (entries.length > 0) this.#send(client, { type: "history", conv, entries });
+			if (entries.length > 0) this.#send(client, { type: "history", conv, entries, complete: page.items.length < HISTORY });
 		}
 		watch.start(async (events) => {
 			const out = slim(events);
