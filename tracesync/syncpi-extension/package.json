@@ -1,0 +1,23 @@
+{
+  "name": "syncpi-extension",
+  "version": "0.1.0",
+  "description": "Join and start syncpi sessions from inside pi: a shared, synced agent thread with collaborators",
+  "type": "module",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@earendil-works/pi-env": "1.4.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-durable": "1.4.0",
+    "@earendil-works/pi-tui": "1.4.0",
+    "@types/node": "^24",
+    "typescript": "^5.9"
+  }
+}
