@@ -164,6 +164,19 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .prose table { border-collapse: collapse; font-size: 13px; margin: .8em 0; }
 .prose th, .prose td { border: 1px solid var(--rule); padding: 5px 9px; text-align: left; }
 .prose ul, .prose ol { padding-left: 1.4em; }
+.diagram { margin: .8em 0; padding: 14px; border: 1px solid var(--rule); border-radius: 10px; background: var(--raised); overflow-x: auto; text-align: center; }
+/* Icons share a global svg rule; diagrams are drawings, so undo it. */
+.diagram svg { width: 100%; height: auto; fill: initial; stroke: initial; stroke-width: initial; stroke-linecap: initial; stroke-linejoin: initial; }
+.diagram-error { color: var(--muted); font-size: 12.5px; text-align: left; margin-bottom: 6px; }
+.diagram-source { text-align: left; margin: 0; }
+.alert { margin: .8em 0; padding: 8px 14px; border-left: 3px solid var(--alert, var(--muted)); background: color-mix(in srgb, var(--alert, var(--muted)) 7%, transparent); border-radius: 0 8px 8px 0; }
+.alert p { margin: .3em 0; }
+.alert-title { font: 600 12px/1.4 var(--sans); color: var(--alert, var(--muted)); text-transform: uppercase; letter-spacing: .06em; }
+.alert-note { --alert: #3b6fb6; }
+.alert-tip { --alert: var(--ok); }
+.alert-important { --alert: #7c4dbd; }
+.alert-warning { --alert: var(--warn); }
+.alert-caution { --alert: var(--removed); }
 .code-block { margin: .8em 0; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; font-size: 12.5px; }
 
 /* Thinking, tool calls: one quiet line each, opened on demand. */

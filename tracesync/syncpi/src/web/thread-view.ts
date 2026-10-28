@@ -5,6 +5,7 @@ import { type Artifact, kindOfPath, patchStats, replyArtifacts, toolArtifacts } 
 import type { Item, ToolItem, UserItem } from "../shared/thread.ts";
 import { toolSummary } from "../shared/thread.ts";
 import { artifactCard, disposeWithin, type ImageLoader, renderCode } from "./artifacts.ts";
+import { renderDiagram } from "./diagrams.ts";
 import { el, escapeHtml, initials, personColor } from "./dom.ts";
 import { modelAvatar } from "./icons.ts";
 import { renderMarkdown } from "./markdown.ts";
@@ -172,7 +173,8 @@ export class ThreadView {
 		return content;
 	}
 
-	/** Code blocks get highlighting; HTML and SVG blocks become artifact cards with a live preview. */
+	/** Code blocks get highlighting; HTML and SVG blocks become artifact cards with a live preview; mermaid blocks
+	 *  become diagrams. */
 	#upgradeCode(body: HTMLElement, key: string, text: string): void {
 		const artifacts = replyArtifacts(key, text);
 		let next = 0;
@@ -181,7 +183,11 @@ export class ThreadView {
 			const code = slot.textContent ?? "";
 			const isArtifact = lang === "html" || lang === "svg" || (lang === "" && /^\s*<svg[\s>]/i.test(code));
 			const artifact = isArtifact ? artifacts[next++] : undefined;
-			if (artifact !== undefined) {
+			if (lang === "mermaid") {
+				const host = el("div");
+				slot.replaceWith(host);
+				renderDiagram(host, code);
+			} else if (artifact !== undefined) {
 				slot.replaceWith(artifactCard(artifact, { size: "inline", onOpen: this.#options.onOpenArtifact, loadImage: this.#options.loadImage }));
 			} else if (lang !== "" && code.split("\n").length > 1) {
 				const host = el("div", "code-block");
