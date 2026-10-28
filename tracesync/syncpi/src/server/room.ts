@@ -24,10 +24,19 @@ import { type DeviceClient, Devices } from "./devices.ts";
 import { context, Session } from "./session.ts";
 import { StateFile, type StoredMember, token } from "./state.ts";
 
-type Client = { member: StoredMember; kind: "cli" | "web"; ws: WebSocket; watches: AgentEventStream[]; device?: DeviceClient & { label: string } };
+type Client = {
+	member: StoredMember;
+	kind: "cli" | "web";
+	ws: WebSocket;
+	watches: Partial<Record<ConvName, AgentEventStream>>;
+	device?: DeviceClient & { label: string };
+};
 
 const RANK: Record<Role, number> = { viewer: 0, editor: 1, admin: 2 };
 const atLeast = (member: StoredMember, role: Role) => RANK[member.role] >= RANK[role];
+
+/** How many entries from before the current context a client gets when it attaches. */
+const HISTORY = 500;
 
 /** WebSocket close code for a member who was removed; clients stop reconnecting. */
 export const REMOVED = 4001;
@@ -137,6 +146,7 @@ export class Room {
 			target: (label) => this.#broadcast({ type: "target", label }),
 			env: (env) => this.#broadcast({ type: "env", env }),
 			files: (version, changed) => this.#broadcast({ type: "files", version, changed }),
+			branch: () => void this.#rewatchMain(),
 		});
 	}
 
@@ -207,11 +217,19 @@ export class Room {
 		client.member = member;
 		switch (message.type) {
 			case "submit": {
-				if (!atLeast(member, "editor")) return this.#error(client, "viewers can't talk to the agent; ask an admin for the editor role");
+				if (!atLeast(member, "editor")) return this.#send(client, { type: "error", requestId: message.requestId, message: "viewers can't talk to the agent; ask an admin for the editor role" });
 				const text = message.text.trim();
-				if (text.length === 0) return;
+				if (text.length === 0 && !(Array.isArray(message.attachments) && message.attachments.length > 0)) return;
 				try {
-					await this.session.submit(member, message.requestId, text, message.mode === "steer" ? "steer" : "followUp", message.where === "device" ? "device" : "vm");
+					await this.session.submit(
+						member,
+						message.requestId,
+						text,
+						message.mode === "steer" ? "steer" : "followUp",
+						message.where === "device" ? "device" : "vm",
+						Array.isArray(message.attachments) ? message.attachments : [],
+					);
+                    this.#send(client, { type: "accepted", requestId: message.requestId });
 				} catch (error) {
 					this.#send(client, { type: "error", message: String((error as Error).message ?? error), requestId: message.requestId });
 				}
@@ -298,6 +316,38 @@ export class Room {
 			case "ping":
 				this.#send(client, { type: "pong" });
 				return;
+            case "configure":
+                if (!atLeast(member, "admin")) return this.#error(client, "only admins can change the model");
+                await this.session.configure(message.model, message.thinkingLevel);
+                await this.session.notice(`${member.name} selected ${message.model}`);
+                return;
+			case "compact":
+				if (!atLeast(member, "editor")) return this.#error(client, "viewers can't change the agent's context");
+				await this.session.compact(message.instructions?.trim().slice(0, 2000) || undefined);
+				await this.session.notice(`${member.name} asked the agent to summarize older messages`);
+				return;
+			case "new":
+				if (!atLeast(member, "admin")) return this.#error(client, "only admins can start a new context");
+				await this.session.newContext();
+				await this.session.notice(`${member.name} started a new context; the agent no longer sees the messages above`);
+				return;
+			case "branches":
+				this.#send(client, { type: "branches", branches: this.session.branches(), current: this.session.branchId });
+				return;
+			case "fork": {
+				if (!atLeast(member, "admin")) return this.#error(client, "only admins can branch the thread");
+				const before = Number(message.before);
+				if (!Number.isInteger(before)) return this.#error(client, "that message can't be branched from");
+				const info = await this.session.fork(before, member.id);
+				await this.session.notice(`${member.name} branched the thread (${info.label}); /tree switches between branches`);
+				return;
+			}
+			case "switchBranch": {
+				if (!atLeast(member, "admin")) return this.#error(client, "only admins can switch branches");
+				const info = await this.session.switchBranch(message.id);
+				await this.session.notice(`${member.name} switched the thread to ${info.label}`);
+				return;
+			}
 			case "device": {
 				// Only an editor's terminal runs that editor's requests; the path is theirs, on their machine.
 				if (client.kind !== "cli" || !atLeast(member, "editor")) return;
@@ -335,7 +385,7 @@ export class Room {
 	}
 
 	async connect(ws: WebSocket, member: StoredMember, kind: "cli" | "web"): Promise<void> {
-		const client: Client = { member, kind, ws, watches: [] };
+		const client: Client = { member, kind, ws, watches: {} };
 		this.#clients.add(client);
 		this.#lastActive = Date.now();
 		const s = this.state.value;
@@ -343,15 +393,8 @@ export class Room {
 		this.#send(client, { type: "welcome", me, session: { id: s.id, name: s.name, url: s.url, workdir: s.workdir, model: s.model, vm: s.vm }, members: this.state.members() });
 		this.#send(client, { type: "env", env: this.session.envStatus() });
 		this.#send(client, { type: "files", version: this.session.filesVersion, full: true, changed: this.session.manifest() });
-		for (const conv of ["main", "setup"] as ConvName[]) {
-			const watch = await this.session.watch(conv);
-			client.watches.push(watch);
-			this.#send(client, { type: "events", conv, events: slim([watch.snapshot]) });
-			watch.start(async (events) => {
-				const out = slim(events);
-				if (out.length > 0) this.#send(client, { type: "events", conv, events: out });
-			});
-		}
+		for (const conv of ["main", "setup"] as ConvName[]) await this.#watch(client, conv);
+		this.#send(client, { type: "branches", branches: this.session.branches(), current: this.session.branchId });
 		this.#broadcast(this.#presence());
 		this.#send(client, { type: "target", label: this.session.targetLabel });
 		ws.on("message", (data, isBinary) => {
@@ -373,15 +416,40 @@ export class Room {
 			this.#clients.delete(client);
 			this.#lastActive = Date.now();
 			if (client.device !== undefined) this.devices.unregister(client.device);
-			for (const watch of client.watches) void watch.stop();
+			for (const watch of Object.values(client.watches)) void watch?.stop();
 			this.#broadcast(this.#presence());
 		});
+	}
+
+	/** Attaches a client to a conversation: a fresh snapshot (which replaces what it shows), then every later batch. */
+	async #watch(client: Client, conv: ConvName): Promise<void> {
+		await client.watches[conv]?.stop();
+		const watch = await this.session.watch(conv);
+		client.watches[conv] = watch;
+		this.#send(client, { type: "events", conv, events: slim([watch.snapshot]) });
+		// People see the whole thread, also what came before a /new or a summary; the model only sees the context.
+		const oldest = watch.snapshot.entries.reduce((min, e) => Math.min(min, e.id as number), Number.POSITIVE_INFINITY);
+		if (Number.isFinite(oldest) && oldest > 1) {
+			const page = await this.session.conversation(conv).entries({ maxEntryId: (oldest - 1) as never, order: "descending" }, HISTORY, undefined, context);
+			const entries = page.items.filter((e) => e.kind !== "pi.system").reverse();
+			if (entries.length > 0) this.#send(client, { type: "history", conv, entries });
+		}
+		watch.start(async (events) => {
+			const out = slim(events);
+			if (out.length > 0) this.#send(client, { type: "events", conv, events: out });
+		});
+	}
+
+	/** The thread switched branches: everyone now sees, and talks to, the new one. */
+	async #rewatchMain(): Promise<void> {
+		for (const client of this.#clients) await this.#watch(client, "main").catch(() => {});
+		this.#broadcast({ type: "branches", branches: this.session.branches(), current: this.session.branchId });
 	}
 
 	async #serveStatic(res: ServerResponse, name: string): Promise<void> {
 		try {
 			let bytes: Buffer | string = await readFile(join(this.#webDir, name));
-			// The page's relative URLs (app.js, api/…, ws) resolve against this room's base.
+			// The page's relative URLs (main.js, api/…, ws) resolve against this room's base.
 			if (name === "index.html") bytes = bytes.toString("utf8").replace("__BASE__", `${this.base}/`);
 			res.writeHead(200, { "content-type": MIME[extname(name)] ?? "application/octet-stream", "cache-control": "no-cache" });
 			res.end(bytes);
@@ -518,7 +586,15 @@ export class Room {
 		if (req.method === "GET" && path === "/api/info") {
 			return json(res, 200, { id: state.value.id, name: state.value.name, url: state.value.url, workdir: state.value.workdir, vm: state.value.vm, me: { id: member.id, name: member.name, role: member.role } });
 		}
-		if (req.method === "GET" && path === "/api/manifest") return json(res, 200, { version: session.filesVersion, files: session.manifest() });
+		if (req.method === "POST" && path === "/api/title") {
+            if (!atLeast(member, "admin")) return json(res, 403, { error: "only admins can generate thread titles" });
+            return json(res, 200, { title: await session.title() });
+        }
+        if (req.method === "GET" && path === "/api/models") {
+            const models = await session.models.getAvailable();
+            return json(res, 200, { models: models.map(m => ({ id: `${m.provider}/${m.id}`, name: m.name, reasoning: m.reasoning })) });
+        }
+        if (req.method === "GET" && path === "/api/manifest") return json(res, 200, { version: session.filesVersion, files: session.manifest() });
 		if (req.method === "GET" && path === "/api/snapshot.tgz") return this.#snapshot(res);
 
 		if (path === "/api/file") {
