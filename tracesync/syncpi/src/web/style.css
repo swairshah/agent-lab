@@ -164,11 +164,20 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .prose table { border-collapse: collapse; font-size: 13px; margin: .8em 0; }
 .prose th, .prose td { border: 1px solid var(--rule); padding: 5px 9px; text-align: left; }
 .prose ul, .prose ol { padding-left: 1.4em; }
-.diagram { margin: .8em 0; padding: 14px; border: 1px solid var(--rule); border-radius: 10px; background: var(--raised); overflow-x: auto; text-align: center; }
-/* Icons share a global svg rule; diagrams are drawings, so undo it. */
-.diagram svg { width: 100%; height: auto; fill: initial; stroke: initial; stroke-width: initial; stroke-linecap: initial; stroke-linejoin: initial; }
-.diagram-error { color: var(--muted); font-size: 12.5px; text-align: left; margin-bottom: 6px; }
-.diagram-source { text-align: left; margin: 0; }
+/* Mermaid diagrams: a viewer with Preview and Source, pan and zoom. Icons share a global svg rule; the drawing
+   is not an icon, so it undoes that rule. */
+.viewer { margin: .8em 0; border: 1px solid var(--rule); border-radius: 10px; background: var(--raised); overflow: hidden; }
+.viewer-head { display: flex; align-items: center; gap: 2px; padding: 6px 8px; border-bottom: 1px solid var(--rule); background: var(--surface); }
+.viewer-button { display: inline-grid; place-items: center; width: 26px; height: 26px; border: none; background: none; border-radius: 6px; color: var(--muted); cursor: pointer; }
+.viewer-button:hover { background: var(--sunken); color: var(--ink); }
+.viewer-button svg { width: 15px; height: 15px; }
+.viewer-button.done { color: var(--ok); }
+.viewer-stage { position: relative; overflow: hidden; cursor: grab; touch-action: none; background: var(--raised); min-height: 120px; }
+.viewer-stage.dragging { cursor: grabbing; }
+.viewer-canvas { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.viewer-canvas svg { display: block; fill: initial; stroke: initial; stroke-width: initial; stroke-linecap: initial; stroke-linejoin: initial; }
+.viewer-source { max-height: 520px; overflow: auto; font-size: 12.5px; }
+.diagram-error { color: var(--muted); font-size: 12.5px; padding: 8px 12px 0; }
 .alert { margin: .8em 0; padding: 8px 14px; border-left: 3px solid var(--alert, var(--muted)); background: color-mix(in srgb, var(--alert, var(--muted)) 7%, transparent); border-radius: 0 8px 8px 0; }
 .alert p { margin: .3em 0; }
 .alert-title { font: 600 12px/1.4 var(--sans); color: var(--alert, var(--muted)); text-transform: uppercase; letter-spacing: .06em; }
