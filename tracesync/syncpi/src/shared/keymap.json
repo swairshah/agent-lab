@@ -1,0 +1,41 @@
+[
+	{ "id": "palette.all", "title": "Search everything", "group": "General", "keys": "cmd-k", "apps": ["web", "desktop"] },
+	{ "id": "palette.commands", "title": "Show all commands", "group": "General", "keys": "cmd-shift-p", "apps": ["web", "desktop"] },
+	{ "id": "palette.files", "title": "Go to file", "group": "General", "keys": "cmd-p", "apps": ["web", "desktop"] },
+	{ "id": "palette.threads", "title": "Go to thread", "group": "General", "keys": "cmd-t", "apps": ["desktop"] },
+	{ "id": "app.keymap", "title": "Keyboard shortcuts", "group": "General", "keys": "cmd-/", "apps": ["web", "desktop"] },
+	{ "id": "app.settings", "title": "Settings", "group": "General", "keys": "cmd-,", "apps": ["web", "desktop"] },
+	{ "id": "app.theme", "title": "Switch light or dark", "group": "General", "keys": "cmd-shift-l", "apps": ["web", "desktop"] },
+
+	{ "id": "thread.new", "title": "New thread", "group": "Threads", "keys": "cmd-n", "apps": ["desktop"], "quick": true },
+	{ "id": "project.add", "title": "Open a project", "group": "Threads", "keys": "cmd-o", "apps": ["desktop"], "quick": true },
+	{ "id": "thread.share", "title": "Share thread", "group": "Threads", "keys": "cmd-shift-s", "apps": ["web", "desktop"], "quick": true },
+	{ "id": "thread.join", "title": "Join a shared thread", "group": "Threads", "apps": ["desktop"] },
+	{ "id": "thread.next", "title": "Next thread", "group": "Threads", "keys": "cmd-}", "apps": ["desktop"] },
+	{ "id": "thread.previous", "title": "Previous thread", "group": "Threads", "keys": "cmd-{", "apps": ["desktop"] },
+	{ "id": "thread.rename", "title": "Rename thread", "group": "Threads", "keys": "f2", "apps": ["desktop"] },
+	{ "id": "thread.title", "title": "Regenerate thread title", "group": "Threads", "apps": ["desktop"] },
+	{ "id": "thread.pin", "title": "Pin or unpin thread", "group": "Threads", "keys": "cmd-alt-p", "apps": ["desktop"] },
+	{ "id": "thread.archive", "title": "Archive or restore thread", "group": "Threads", "apps": ["desktop"] },
+	{ "id": "thread.archives", "title": "Show archived threads", "group": "Threads", "keys": "cmd-y", "apps": ["desktop"] },
+
+	{ "id": "agent.stop", "title": "Stop the agent", "group": "Agent", "keys": "escape", "apps": ["web", "desktop"] },
+	{ "id": "agent.model", "title": "Change model", "group": "Agent", "keys": "cmd-alt-/", "apps": ["web", "desktop"] },
+	{ "id": "agent.compact", "title": "Summarize older messages", "group": "Agent", "apps": ["web", "desktop"] },
+	{ "id": "agent.newContext", "title": "Start a new context", "group": "Agent", "apps": ["web", "desktop"] },
+	{ "id": "agent.branches", "title": "Thread branches", "group": "Agent", "apps": ["web", "desktop"] },
+	{ "id": "agent.setup", "title": "Show the setup agent's thread", "group": "Agent", "apps": ["web", "desktop"] },
+
+	{ "id": "view.sidebar", "title": "Toggle sidebar", "group": "View", "keys": "cmd-b", "apps": ["desktop"] },
+	{ "id": "view.changes", "title": "Review changes", "group": "View", "keys": "cmd-shift-d", "apps": ["web", "desktop"] },
+	{ "id": "view.files", "title": "Show files", "group": "View", "keys": "cmd-shift-e", "apps": ["desktop"] },
+	{ "id": "view.people", "title": "People and invites", "group": "View", "apps": ["web", "desktop"] },
+	{ "id": "view.terminal", "title": "Toggle terminal", "group": "View", "keys": "ctrl-`", "apps": ["desktop"] },
+
+	{ "id": "project.sync", "title": "Sync the project now", "group": "Project", "apps": ["desktop"] },
+	{ "id": "project.reveal", "title": "Reveal the project in Finder", "group": "Project", "apps": ["desktop"] },
+	{ "id": "project.zed", "title": "Open the project in Zed", "group": "Project", "apps": ["desktop"] },
+	{ "id": "project.web", "title": "Open the thread in a browser", "group": "Project", "apps": ["desktop"] },
+
+	{ "id": "app.quit", "title": "Quit SyncPi", "group": "General", "keys": "cmd-q", "apps": ["desktop"] }
+]

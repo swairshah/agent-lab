@@ -1,13 +1,14 @@
 // Small confirmations and the share link. Everything else lives in settings.
+import { type App, commandsFor, formatKeys } from "../shared/keymap.ts";
 import type { InviteInfo } from "../shared/protocol.ts";
 import { $ } from "./dom.ts";
 import type { SessionClient } from "./session.ts";
 
-export type DialogId = "compact" | "reset" | "share";
+export type DialogId = "compact" | "reset" | "share" | "keymap";
 
 export class Dialogs {
 	constructor(session: SessionClient) {
-		for (const id of ["compact", "reset", "share"] as DialogId[]) {
+		for (const id of ["compact", "reset", "share", "keymap"] as DialogId[]) {
 			const dialog = this.#dialog(id);
 			dialog.querySelector("[data-close]")?.addEventListener("click", () => dialog.close());
 		}
@@ -30,6 +31,19 @@ export class Dialogs {
 
 	open(id: DialogId): void {
 		this.#dialog(id).showModal();
+	}
+
+	/** Every shortcut this app has, grouped as in the palette. */
+	keymap(app: App): void {
+		const groups = new Map<string, string[]>();
+		for (const c of commandsFor(app)) {
+			if (c.keys === undefined) continue;
+			groups.set(c.group, [...(groups.get(c.group) ?? []), `<div class="keymap-row"><span>${c.title}</span><kbd>${formatKeys(c.keys)}</kbd></div>`]);
+		}
+		const extra = `<div class="keymap-row"><span>Send a message</span><kbd>${formatKeys("cmd-enter")}</kbd></div><div class="keymap-row"><span>New line</span><kbd>${formatKeys("enter")}</kbd></div>`;
+		$("keymap-list").innerHTML =
+			[...groups].map(([group, rows]) => `<section><h3>${group}</h3>${rows.join("")}</section>`).join("") + `<section><h3>Composer</h3>${extra}</section>`;
+		this.open("keymap");
 	}
 
 	share(url: string, invite: InviteInfo): void {

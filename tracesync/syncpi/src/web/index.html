@@ -185,6 +185,18 @@
     </button>
   </dialog>
 
+  <dialog id="palette" class="palette" aria-label="Command palette">
+    <input id="palette-input" autocomplete="off" spellcheck="false" aria-label="Search">
+    <div id="palette-tabs" class="palette-tabs" role="tablist"></div>
+    <div id="palette-list" class="palette-list" role="listbox"></div>
+  </dialog>
+
+  <dialog id="keymap-dialog" class="keymap">
+    <h2>Keyboard shortcuts</h2>
+    <div id="keymap-list" class="keymap-list"></div>
+    <div class="dialog-actions"><button type="button" class="button" data-close>Close</button></div>
+  </dialog>
+
   <dialog id="share-dialog">
     <form method="dialog">
       <h2>Share this session</h2>
