@@ -219,6 +219,7 @@ const COMMANDS = [
 	{ name: "web", description: "Open this session in your browser" },
 	{ name: "env", description: "Show or hide the setup agent's thread" },
 	{ name: "steer", description: "Send a message that joins the agent's current run", argumentHint: "<message>" },
+	{ name: "remote", description: "Run this request on the session VM; it keeps going if you quit", argumentHint: "<task>" },
 	{ name: "stop", description: "Stop the agent (also Esc)" },
 	{ name: "sync", description: "File sync status" },
 	{ name: "where", description: "Run your requests here (your machine) or on the session VM", argumentHint: "here|vm" },
@@ -501,6 +502,10 @@ export class App {
 				this.#note([c.bold("people"), ...lines].join("\n"), 20_000);
 				return;
 			}
+			case "remote":
+				if (arg.length === 0) return this.#note(c.gray("usage: /remote <task>"), 4_000);
+				this.#conn.send({ type: "submit", requestId: randomUUID(), text: arg, mode: "followUp", where: "vm" });
+				return;
 			case "steer":
 				if (arg.length === 0) return this.#note(c.gray("usage: /steer <message>"), 4_000);
 				this.#conn.send({ type: "submit", requestId: randomUUID(), text: arg, mode: "steer", where: this.#where });

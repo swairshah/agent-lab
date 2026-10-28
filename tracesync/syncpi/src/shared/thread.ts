@@ -350,6 +350,7 @@ function totalCost(usage: { models: Record<string, { cost?: { total?: number } }
 /** A one-line description of a tool call, e.g. `bash  npm test` or `edit  src/app.ts`. */
 export function toolSummary(tool: Pick<ToolItem, "name" | "args">): string {
 	const a = tool.args as Record<string, unknown>;
+	if (tool.name === "record_browser" && typeof a.title === "string") return a.title;
 	const pick = a.command ?? a.path ?? a.file_path ?? a.url ?? a.pattern;
 	const detail = typeof pick === "string" ? pick : Object.keys(a).length > 0 ? JSON.stringify(a) : "";
 	return detail.replace(/\s+/g, " ").trim();

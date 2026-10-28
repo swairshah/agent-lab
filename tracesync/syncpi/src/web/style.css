@@ -635,3 +635,8 @@ html[data-desktop="true"] .msg > .avatar svg { width: 14px; height: 14px; }
 html[data-desktop="true"] .prose { line-height: 1.55; }
 html[data-desktop="true"] .composer { margin-top: 18px; }
 html[data-desktop="true"] .statusbar { height: 30px; padding: 0 6px 0 16px; }
+
+/* A recording the agent made on the VM. */
+.recording { position: relative; margin: 6px 0 4px; }
+.recording video { display: block; width: 100%; max-width: 720px; border-radius: 8px; border: 1px solid var(--rule); background: #000; }
+.recording-download { display: inline-block; margin-top: 4px; font-size: 12.5px; color: var(--muted); }

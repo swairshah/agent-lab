@@ -38,6 +38,7 @@ import { ATTACHMENT_LIMITS, type Attachment, type BranchInfo, type ConvName, typ
 import { Thread, toolSummary } from "../shared/thread.ts";
 import type { Devices } from "./devices.ts";
 import { History } from "./history.ts";
+import { remoteTools } from "./remote-tools.ts";
 import type { StateFile, StoredMember } from "./state.ts";
 
 export const context: Context = BACKGROUND_CONTEXT;
@@ -169,6 +170,14 @@ function installFaux(models: MutableModels): void {
 				const reads = look[1]!.split(/\s+/).map((path) => fauxToolCall("read", { path }));
 				return fauxAssistantMessage([fauxToolCall("bash", { command: "ls" }), ...reads], { stopReason: "toolUse" });
 			}
+			const record = body.match(/^record (\S+)$/);
+			if (record)
+				return fauxAssistantMessage(
+					[fauxToolCall("record_browser", { title: "A quick look", url: record[1]!, steps: [{ action: "caption", text: "Looking around" }, { action: "scroll", y: 400 }, { action: "wait", ms: 500 }] })],
+					{ stopReason: "toolUse" },
+				);
+			const remote = body.match(/^remote (.+)$/);
+			if (remote) return fauxAssistantMessage([fauxToolCall("remote_bash", { command: remote[1]! })], { stopReason: "toolUse" });
 			const run = body.match(/^run ([\s\S]+)$/);
 			if (run) return fauxAssistantMessage([fauxToolCall("bash", { command: run[1]! })], { stopReason: "toolUse" });
 			return fauxAssistantMessage(`(faux) ${body}`);
@@ -257,10 +266,11 @@ export class Session {
 			sections: [section("syncpi", () => this.#projectNotes(), { tag: true })],
 		});
 		const registry = createRegistry();
+		const env = shellEnv(s.vm);
 		registry.install(CodingTools);
 		registry.install(Syncpi);
-
-		const env = shellEnv(s.vm);
+		// Every agent's tools to do things on the VM (deploy, host, record), wherever its other tools run.
+		registry.install(remoteTools(this.workdir, () => env));
 		this.harness = await Harness.open(
 			await openNodeSqliteStorage(join(this.stateDir, "session.sqlite")),
 			{
@@ -689,7 +699,9 @@ Everyone has a synced copy of the project. Files you change show up in everyone'
 
 People read your replies as Markdown, in a terminal and in the web and desktop apps. Write <, > and & literally, not as HTML entities. Put file paths, commands and code names in backticks. A \`\`\`mermaid block is drawn as a diagram (flowchart, sequence, class, state, ER, gantt, pie, mindmap, timeline); quote labels that contain punctuation, leave HTML, colors, classDef and init directives out (diagrams take the app's colors), and prefer top-to-bottom layouts, since the column is narrow. An \`\`\`html or \`\`\`svg block shows as a live preview beside its code; use one for a small visual result, not for code people should read. When you mention a project file, link it so people can open it: [the cart](src/cart.ts), with lines when they matter: [calculateTotal](src/cart.ts#L12-L16). Tables render as tables. Use GitHub alerts (> [!WARNING]) only for something the reader has to act on now.
 
-Run long-lived processes (dev servers, watchers) in the background with output to a log file, for example \`nohup npm run dev > /tmp/dev.log 2>&1 &\`, and on the VM never on port 8000, which serves this session. Keep answers short; people see your tool calls as they happen.`;
+Run long-lived processes (dev servers, watchers) in the background with output to a log file, for example \`nohup npm run dev > /tmp/dev.log 2>&1 &\`, and on the VM never on port 8000, which serves this session.
+
+Two tools always run on the session's VM, wherever your other tools are: remote_bash (deploying, hosting something for everyone, long jobs that must outlive someone's laptop) and record_browser (a real browser on the VM goes through steps while it's recorded, and the video appears in the thread). When someone asks you to show, demo or prove that something works in a UI, build or start it on the VM, then record it, with short captions saying what's happening. A request sent with /remote runs entirely on the VM. Keep answers short; people see your tool calls as they happen.`;
 }
 
 function setupInstructions(name: string, workdir: string): string {

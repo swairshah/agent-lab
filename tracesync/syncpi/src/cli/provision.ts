@@ -187,8 +187,33 @@ export function vmName(project: string): string {
 
 export type Progress = (step: string) => void;
 
+/**
+ * The agent's tools on a VM (src/server/remote-tools.ts): Playwright, its Chromium and the system libraries it needs,
+ * next to the server in ~/.syncpi-app/tools. Installed once per Playwright version, in the background (it takes a few
+ * minutes the first time), so a session doesn't wait for it; record_browser says so if it's used before it's ready.
+ */
+const PLAYWRIGHT = "1.64.1";
+const TOOLS_DIR = `${EXE_HOME}/.syncpi-app/tools`;
+const TOOLS_SCRIPT = `set -e
+cd ${TOOLS_DIR}
+[ -f package.json ] || echo '{"name":"syncpi-tools","private":true}' > package.json
+npm install --no-audit --no-fund playwright@${PLAYWRIGHT}
+sudo npx playwright install-deps chromium
+npx playwright install chromium
+command -v ffmpeg >/dev/null || sudo apt-get install -y ffmpeg
+touch .ready-${PLAYWRIGHT}
+`;
+/** Writes the install script and starts it detached, unless it's done or already running. */
+function installAgentTools(vm: string): Promise<string> {
+	return vmSsh(
+		vm,
+		`mkdir -p ${TOOLS_DIR} && cat > ${TOOLS_DIR}/install.sh && if [ ! -f ${TOOLS_DIR}/.ready-${PLAYWRIGHT} ] && ! pgrep -f "${TOOLS_DIR}/install.sh" >/dev/null; then setsid nohup bash ${TOOLS_DIR}/install.sh > ${TOOLS_DIR}/install.log 2>&1 < /dev/null & fi`,
+		TOOLS_SCRIPT,
+	);
+}
+
 function serverBundle(): ChildProcess {
-	return spawn("tar", ["-czf", "-", "server.mjs", "relay.mjs", "web"], { cwd: appDir(), env: { ...process.env, COPYFILE_DISABLE: "1" } });
+	return spawn("tar", ["-czf", "-", "server.mjs", "relay.mjs", "recorder.mjs", "web"], { cwd: appDir(), env: { ...process.env, COPYFILE_DISABLE: "1" } });
 }
 
 // ---------- the shared host ----------
@@ -276,12 +301,13 @@ export async function ensureHost(vm: string, progress: Progress, options: { forc
 		const [installed, single, isHost, listeners] = probe.trim().split("\n");
 		if (single === "single") throw new Error(`${vm} runs a single syncpi session; pick another VM with --vm`);
 		if (isHost !== "host" && Number(listeners) > 0) throw new Error(`${vm} already serves something on port 8000; pick another VM with --vm`);
-		if (installed === version && isHost === "host" && !options.force) return;
+		if (installed === version && isHost === "host" && !options.force) return void (await installAgentTools(vm).catch(() => {}));
 		progress(installed === "none" ? `installing syncpi on ${vm}` : `updating syncpi on ${vm}`);
 		await vmSsh(vm, NODE_SETUP);
 		await pipeInto("ssh", [...SSH_OPTS, "--", `${vm}.exe.xyz`, `mkdir -p ${EXE_HOME}/.syncpi-app ${HOST_SESSIONS} ${HOST_PROJECTS} && chmod 700 ${HOST_SESSIONS} && tar -xzf - -C ${EXE_HOME}/.syncpi-app`], serverBundle());
 		await vmSsh(vm, `cat > ~/.syncpi-app/VERSION`, `${version}\n`);
 		await vmSsh(vm, "sudo tee /etc/systemd/system/syncpi.service >/dev/null && sudo systemctl daemon-reload && sudo systemctl enable syncpi && sudo systemctl restart syncpi", hostUnit());
+		await installAgentTools(vm);
 		for (let attempt = 0; attempt < 60; attempt++) {
 			const ok = await fetch(`https://${vm}.exe.xyz/healthz`, { signal: AbortSignal.timeout(5_000) })
 				.then(async (r) => r.ok && ((await r.json()) as { host?: boolean }).host === true)
@@ -341,6 +367,7 @@ export async function provisionExe(dir: string, config: SessionConfig, vm: strin
 	progress("starting the session server");
 	await vmSsh(vm, `umask 077 && mkdir -p ${EXE_HOME}/.syncpi && cat > ${EXE_HOME}/.syncpi/server.json`, serverJson({ ...config, url, workdir, vm, auth: "exe-gateway" }));
 	await vmSsh(vm, "sudo tee /etc/systemd/system/syncpi.service >/dev/null && sudo systemctl daemon-reload && sudo systemctl enable --now syncpi", unit());
+	await installAgentTools(vm);
 	await waitHealthy(url, progress);
 }
 

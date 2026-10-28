@@ -18,11 +18,13 @@ export type ThreadViewOptions = {
 	/** Opens a project file in the side panel, with lines selected when given ("12-16"). */
 	onOpenFile: (path: string, lines?: string) => void;
 	loadImage: ImageLoader;
+	/** A recording the agent made on the VM (by file name), as a URL this page can play; undefined if it's gone. */
+	loadRecording: (name: string) => Promise<string | undefined>;
 	/** Sends a comment on lines of a file, from a diff or file in the thread. */
 	onComment: CommentHandler;
 };
 
-const TOOL_VERB: Record<string, string> = { bash: "Ran", edit: "Edited", write: "Wrote", read: "Read" };
+const TOOL_VERB: Record<string, string> = { bash: "Ran", edit: "Edited", write: "Wrote", read: "Read", remote_bash: "Ran on the VM", record_browser: "Recorded" };
 
 export function avatarHtml(name: string): string {
 	return `<span class="avatar" style="--person:${personColor(name)}" title="${escapeHtml(name)}">${escapeHtml(initials(name))}</span>`;
@@ -414,6 +416,31 @@ export class ThreadView {
 		return content;
 	}
 
+	/** A recording from the VM: loaded with this member's credentials (it isn't public), played inline. */
+	#video(path: string, poster?: string): HTMLElement {
+		const name = (p: string) => p.split("/").pop()!;
+		const box = el("div", "recording");
+		box.contentEditable = "false";
+		const video = el("video");
+		video.controls = true;
+		video.playsInline = true;
+		video.preload = "metadata";
+		box.append(video);
+		void this.#options.loadRecording(name(path)).then((url) => {
+			if (url) video.src = url;
+			else box.replaceChildren(el("div", "tool-note", "The recording isn't on the VM any more."));
+		});
+		if (poster) void this.#options.loadRecording(name(poster)).then((url) => url && (video.poster = url));
+		const link = el("a", "recording-download", "Download");
+		void this.#options.loadRecording(name(path)).then((url) => {
+			if (!url) return;
+			link.href = url;
+			link.download = name(path);
+		});
+		box.append(link);
+		return box;
+	}
+
 	#tool(item: ToolItem): HTMLElement {
 		const content = el("div");
 		const node = el("details", `fold tool tool-${item.status}`);
@@ -425,7 +452,13 @@ export class ThreadView {
 			stats ? `<span class="diff-stats"><span class="added">+${stats.added}</span> <span class="removed">−${stats.removed}</span></span>` : ""
 		}</summary>`;
 		const body = el("div", "tool-body");
-		if (artifacts.length > 0) {
+		const recording = item.name === "record_browser" ? (item.details as { video?: string; poster?: string; error?: string } | undefined) : undefined;
+		if (recording?.video) {
+			// A video the agent recorded on the VM, shown open: it's the point of the call.
+			body.append(this.#video(recording.video, recording.poster));
+			if (recording.error) body.append(el("div", "tool-note", `Stopped early: ${recording.error}`));
+			node.open = true;
+		} else if (artifacts.length > 0) {
 			for (const artifact of artifacts) body.append(artifactCard(artifact, { size: "inline", onOpen: this.#options.onOpenArtifact, loadImage: this.#options.loadImage, onComment: this.#options.onComment }));
 			// Changes are what people come to see: shown open.
 			node.open = true;

@@ -22,6 +22,8 @@ await Promise.all([
     build({ ...node, entryPoints: ["src/desktop/context.ts"], outfile: "dist/pi-context.mjs", external: [...node.external, "@earendil-works/pi-coding-agent"] }),
 	build({ ...node, entryPoints: ["src/server/main.ts"], outfile: "dist/server.mjs" }),
 	build({ ...node, entryPoints: ["src/server/relay.ts"], outfile: "dist/relay.mjs" }),
+	// Records a browser for the agent; Playwright is installed next to it on a VM (src/cli/provision.ts).
+	build({ ...node, entryPoints: ["src/server/recorder.ts"], outfile: "dist/recorder.mjs", external: [...node.external, "playwright", "playwright-core"] }),
 	// pi-env stays a package import in the CLI: it finds its daemon binaries relative to itself.
 	build({
 		...node,

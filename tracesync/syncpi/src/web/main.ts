@@ -157,7 +157,19 @@ async function main(): Promise<void> {
 		if (file === undefined) return toast(`Couldn't open ${path}`, "error");
 		panel.openFile(file);
 	};
-	const threadView = new ThreadView($("thread"), $("scroller"), session, { onOpenArtifact: (a) => panel.open(a), onFork: fork, onOpenFile: (path, lines) => void openFile(path, lines), loadImage, onComment: sendComment });
+	// Recordings are fetched once with this member's credentials and played from memory.
+	const recordings = new Map<string, Promise<string | undefined>>();
+	const loadRecording = (name: string) => {
+		if (!recordings.has(name))
+			recordings.set(
+				name,
+				fetch(`api/recording?name=${encodeURIComponent(name)}`, { headers: { authorization: `Bearer ${token}` } })
+					.then(async (res) => (res.ok ? URL.createObjectURL(await res.blob()) : undefined))
+					.catch(() => undefined),
+			);
+		return recordings.get(name)!;
+	};
+	const threadView = new ThreadView($("thread"), $("scroller"), session, { onOpenArtifact: (a) => panel.open(a), onFork: fork, onOpenFile: (path, lines) => void openFile(path, lines), loadImage, loadRecording, onComment: sendComment });
 	const settings = new Settings(session, {
 		onTheme: (theme) => {
 			applyTheme(theme as Theme);

@@ -91,7 +91,7 @@ no API keys are copied anywhere.
   --no-pi           don't offer your pi setup (skills, AGENTS.md, prompt templates)
   --name <name>     your display name (default: git user.name)
 
-inside: /session-share  /web  /env  /who  /steer  /stop  /sync  /ssh  /quit`);
+inside: /session-share  /web  /env  /who  /remote  /steer  /stop  /sync  /ssh  /quit`);
 }
 
 function here(): string {

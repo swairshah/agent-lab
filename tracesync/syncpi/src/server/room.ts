@@ -21,6 +21,7 @@ import { WebSocket } from "ws";
 import { hashBytes, listFiles, MAX_FILE_BYTES, safePath } from "../shared/files.ts";
 import { type ClientMessage, type ConvName, type InviteInfo, type PiContext, type Presence, parseChannelFrame, ROLES, type Role, type ServerMessage } from "../shared/protocol.ts";
 import { type DeviceClient, Devices } from "./devices.ts";
+import { RECORDINGS } from "./remote-tools.ts";
 import { context, Session } from "./session.ts";
 import { StateFile, type StoredMember, token } from "./state.ts";
 
@@ -596,6 +597,18 @@ export class Room {
             const models = await session.models.getAvailable();
             return json(res, 200, { models: models.map(m => ({ id: `${m.provider}/${m.id}`, name: m.name, reasoning: m.reasoning })) });
         }
+		// A recording the agent made on the VM (remote-tools.ts), for the thread's video player.
+		if (req.method === "GET" && path === "/api/recording") {
+			const name = url.searchParams.get("name") ?? "";
+			if (!/^[\w.-]+\.(mp4|webm|png)$/.test(name)) return json(res, 400, { error: "bad name" });
+			try {
+				const bytes = await readFile(join(session.workdir, RECORDINGS, name));
+				res.writeHead(200, { "content-type": name.endsWith(".png") ? "image/png" : name.endsWith(".webm") ? "video/webm" : "video/mp4", "cache-control": "private, max-age=86400" });
+				return void res.end(bytes);
+			} catch {
+				return json(res, 404, { error: "not found" });
+			}
+		}
         if (req.method === "GET" && path === "/api/manifest") return json(res, 200, { version: session.filesVersion, files: session.manifest() });
 		if (req.method === "GET" && path === "/api/snapshot.tgz") return this.#snapshot(res);
 

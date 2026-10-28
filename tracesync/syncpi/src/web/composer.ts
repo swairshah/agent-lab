@@ -57,6 +57,10 @@ const COMMANDS: Command[] = [
 	} },
 	{ name: "model", description: "Change the agent's model (admins)", run: (_a, _w, c) => c.openSettings("general") },
 	{ name: "settings", description: "Settings (⌘,)", run: (_a, _w, c) => c.openSettings() },
+	{ name: "remote", description: "Run this request on the session VM (keeps going if you close the app): /remote <task>", run: (arg, _w, c) => {
+		if (!arg) return c.notify("Say what to do: /remote <task>");
+		c.session.submit(arg, "followUp", "vm");
+	} },
 	{ name: "steer", description: "Join the current run instead of queueing", run: (arg, _w, c) => arg && c.session.submit(arg, "steer", c.where()) },
 	{ name: "stop", description: "Stop the agent", run: (_a, _w, c) => c.session.send({ type: "abort" }) },
 	{ name: "env", description: "The setup agent's thread", run: (_a, _w, c) => c.showSetup() },

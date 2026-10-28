@@ -177,7 +177,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' }); return void res.end(html);
     }
     if (WEB_ASSET.test(rest!)) return staticFile(res, join(webDir, rest!));
-    if (!/^api\/(info|manifest|models|file|title)$/.test(rest!)) return json(res, { error: 'Unknown route' }, 404);
+    if (!/^api\/(info|manifest|models|file|title|recording)$/.test(rest!)) return json(res, { error: 'Unknown route' }, 404);
     const live = await runtime.open(id!);
     const upstream = await fetch(`${live.record.url}/${rest}${url.search}`, { method: req.method, headers: { authorization: `Bearer ${live.record.token}` }, body: ['PUT', 'POST'].includes(req.method || '') ? new Uint8Array(await body(req)) : undefined, signal: AbortSignal.timeout(60_000), redirect: 'error' });
     const headers: Record<string, string> = { 'content-type': upstream.headers.get('content-type') || 'application/json', 'cache-control': 'no-store' };
