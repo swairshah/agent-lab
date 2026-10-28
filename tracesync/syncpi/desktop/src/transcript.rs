@@ -64,7 +64,7 @@ fn row(avatar: Option<Div>, content: impl IntoElement) -> Div {
 }
 
 /// Lines added and removed in a unified patch.
-fn patch_stats(patch: &str) -> (usize, usize) {
+pub(crate) fn patch_stats(patch: &str) -> (usize, usize) {
     patch.lines().fold((0, 0), |(a, r), line| {
         if line.starts_with("+++") || line.starts_with("---") {
             (a, r)
@@ -79,11 +79,12 @@ fn patch_stats(patch: &str) -> (usize, usize) {
 }
 
 /// A unified patch as a diff: added and removed lines tinted, with old and new line numbers.
-fn diff_view(id: String, patch: &str, p: &Palette) -> Stateful<Div> {
+pub(crate) fn diff_view(id: String, patch: &str, p: &Palette) -> Stateful<Div> {
     let (mut old, mut new, mut hunks) = (0usize, 0usize, 0usize);
     let mut lines = div().flex().flex_col().min_w_full();
     for line in patch.lines().take(600) {
-        if line.starts_with("+++") || line.starts_with("---") || line.starts_with("diff ") || line.starts_with("index ") {
+        // Everything before the first hunk is metadata: file names, modes, index lines.
+        if hunks == 0 && !line.starts_with("@@") {
             continue;
         }
         if let Some(header) = line.strip_prefix("@@") {
@@ -602,4 +603,41 @@ impl Desktop {
             .when(failed, |d| d.child(Button::new("retry").mt_2().label("Retry setup").on_click(cx.listener(|this, _, window, cx| this.run_action("retry", window, cx)))))
             .into_any_element()
     }
+}
+
+/// `git diff` output as one block per file: its path, lines added and removed, and the diff.
+pub(crate) fn file_diffs(id: &str, diff: &str, p: &Palette) -> Vec<Div> {
+    let mut sections: Vec<(String, String)> = vec![];
+    for line in diff.lines() {
+        if let Some(rest) = line.strip_prefix("diff --git ") {
+            let path = rest.rsplit(" b/").next().unwrap_or(rest).to_owned();
+            sections.push((path, String::new()));
+        } else if let Some((_, patch)) = sections.last_mut() {
+            patch.push_str(line);
+            patch.push('\n');
+        }
+    }
+    sections
+        .into_iter()
+        .enumerate()
+        .map(|(n, (path, patch))| {
+            let (added, removed) = patch_stats(&patch);
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .font_family(MONO)
+                        .text_size(px(12.))
+                        .child(div().flex_1().min_w_0().truncate().text_color(p.ink).child(path))
+                        .child(div().text_color(p.added).child(format!("+{added}")))
+                        .child(div().text_color(p.removed).child(format!("−{removed}"))),
+                )
+                .child(diff_view(format!("{id}-{n}"), &patch, p))
+        })
+        .collect()
 }

@@ -351,6 +351,10 @@ impl Desktop {
                         }
                     }
                 }
+                // Not every project uses git; the changes pane says so instead of an error.
+                Event::Error(error) if error.contains("not a git repository") => {
+                    self.git = json!({ "notGit": true });
+                }
                 Event::Error(error) => {
                     self.busy = false;
                     if error != self.last_error {
@@ -1232,6 +1236,14 @@ impl Desktop {
                         );
                 }
             }
+            "changes" if flag(&self.git, "notGit") => {
+                body = body.child(
+                    label("This project isn't a git repository, so there's nothing to review here. The agent's edits show in the thread.")
+                        .p_4()
+                        .text_size(px(13.))
+                        .text_color(muted),
+                );
+            }
             "changes" => {
                 body = body.child(
                     div()
@@ -1299,24 +1311,16 @@ impl Desktop {
                     if diff.is_empty() {
                         body = body.child(label("No changes").p_3().text_xs().text_color(muted));
                     } else {
-                        for (n, line) in diff.lines().enumerate() {
-                            let color: Hsla = if line.starts_with('+') {
-                                rgb(0x438858).into()
-                            } else if line.starts_with('-') {
-                                rgb(0xb85a5a).into()
-                            } else {
-                                cx.theme().foreground
-                            };
-                            body = body.child(
-                                div()
-                                    .id(eid(format!("{key}-{n}")))
-                                    .px_3()
-                                    .text_xs()
-                                    .font_family("Menlo")
-                                    .text_color(color)
-                                    .child(line.to_owned()),
-                            );
-                        }
+                        let palette = theme::palette(cx);
+                        body = body.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_4()
+                                .px_3()
+                                .pb_3()
+                                .children(transcript::file_diffs(key, &diff, &palette)),
+                        );
                     }
                 }
             }
@@ -2034,18 +2038,18 @@ impl Render for Desktop {
             .children(dialog)
             .when(!self.toast.is_empty(), |d| {
                 d.child(
-                    div()
-                        .absolute()
-                        .bottom(px(42.))
-                        .left(px(300.))
-                        .right(px(35.))
-                        .rounded_lg()
-                        .px_4()
-                        .py_3()
-                        .bg(cx.theme().foreground)
-                        .text_color(cx.theme().background)
-                        .text_sm()
-                        .child(self.toast.clone()),
+                    div().absolute().bottom(px(48.)).left_0().right_0().flex().justify_center().child(
+                        div()
+                            .max_w(px(520.))
+                            .rounded(px(8.))
+                            .px(px(14.))
+                            .py(px(9.))
+                            .shadow_lg()
+                            .bg(cx.theme().foreground)
+                            .text_color(cx.theme().background)
+                            .text_size(px(13.))
+                            .child(self.toast.clone()),
+                    ),
                 )
             })
     }
