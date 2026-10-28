@@ -41,8 +41,34 @@ export function score(text: string, query: string): number {
 		last = found;
 		i = found + 1;
 	}
-	return points;
+	// Letters scattered across the text match nearly anything; keep runs and word starts.
+	return points >= q.length * 3 ? points : -1;
 }
+
+/** The positions in `text` that `query` matched, as score() matches them, for highlighting. */
+export function matchPositions(text: string, query: string): number[] {
+	if (query === "") return [];
+	const t = text.toLowerCase();
+	const q = query.toLowerCase();
+	const at = t.indexOf(q);
+	if (at >= 0) return [...q].map((_, n) => at + n);
+	const out: number[] = [];
+	let i = 0;
+	for (const ch of q) {
+		const found = t.indexOf(ch, i);
+		if (found < 0) return [];
+		out.push(found);
+		i = found + 1;
+	}
+	return out;
+}
+
+function highlight(text: string, query: string): string {
+	const marks = new Set(matchPositions(text, query));
+	return [...text].map((ch, n) => (marks.has(n) ? `<mark>${escapeHtml(ch)}</mark>` : escapeHtml(ch))).join("");
+}
+
+const FILE_ICON = '<svg viewBox="0 0 24 24"><path d="m8 7-5 5 5 5M16 7l5 5-5 5"/></svg>';
 
 export class Palette {
 	readonly #dialog: HTMLDialogElement;
@@ -171,7 +197,7 @@ export class Palette {
 			.slice(0, limit)
 			.map(({ path }) => {
 				const slash = path.lastIndexOf("/");
-				return { key: `file:${path}`, title: path.slice(slash + 1), detail: slash > 0 ? path.slice(0, slash) : undefined, section: "Files", run: () => this.#openFile(path) };
+				return { key: `file:${path}`, title: path.slice(slash + 1), detail: slash > 0 ? `${path.slice(0, slash)}/` : undefined, section: "Files", icon: FILE_ICON, run: () => this.#openFile(path) };
 			});
 	}
 
@@ -227,7 +253,7 @@ export class Palette {
 			item.setAttribute("role", "option");
 			item.setAttribute("aria-selected", String(n === this.#selected));
 			// row.icon is one of our bundled vendor marks, not user content.
-			item.innerHTML = `${row.icon !== undefined ? `<span class="palette-icon">${row.icon}</span>` : ""}<span class="palette-title">${escapeHtml(row.title)}</span>${
+			item.innerHTML = `${row.icon !== undefined ? `<span class="palette-icon">${row.icon}</span>` : ""}<span class="palette-title">${highlight(row.title, query)}</span>${
 				row.detail ? `<span class="palette-detail">${escapeHtml(row.detail)}</span>` : ""
 			}${row.keys ? `<kbd>${escapeHtml(formatKeys(row.keys))}</kbd>` : ""}${row.current ? `<span class="palette-check">✓</span>` : ""}`;
 			this.#list.append(item);
