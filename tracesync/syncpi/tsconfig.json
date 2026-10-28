@@ -9,7 +9,8 @@
     "skipLibCheck": true,
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["node"],
-    "noUncheckedIndexedAccess": true
+    "noUncheckedIndexedAccess": true,
+    "resolveJsonModule": true
   },
   "include": ["src"]
 }

@@ -9,6 +9,8 @@ export class ArtifactPanel {
 	readonly #session: SessionClient;
 	readonly #loadImage: ImageLoader;
 	#artifacts: Artifact[] = [];
+	/** Project files opened by hand (Go to file), listed with the thread's artifacts. */
+	#files: Artifact[] = [];
 	#selected: string | undefined;
 	#signature = "";
 
@@ -33,6 +35,13 @@ export class ArtifactPanel {
 		this.toggle(true);
 	}
 
+	/** Shows a project file, e.g. one picked in the palette. */
+	openFile(file: Artifact): void {
+		this.#files = [...this.#files.filter((f) => f.key !== file.key), file];
+		this.#signature = "";
+		this.open(file);
+	}
+
 	select(key: string): void {
 		const artifact = this.#artifacts.find((a) => a.key === key);
 		if (artifact === undefined) return;
@@ -50,7 +59,7 @@ export class ArtifactPanel {
 
 	/** Re-reads the thread's artifacts; cheap when nothing changed. */
 	update(): void {
-		const artifacts = threadArtifacts(this.#session.threads.main.state.items);
+		const artifacts = [...threadArtifacts(this.#session.threads.main.state.items), ...this.#files];
 		const signature = artifacts.map((a) => a.key).join("|");
 		if (signature === this.#signature) return;
 		this.#signature = signature;
@@ -83,7 +92,7 @@ export class ArtifactPanel {
 				row.dataset.artifact = artifact.key;
 				row.setAttribute("aria-current", String(artifact.key === this.#selected));
 				const stats = artifact.kind === "diff" ? patchStats(artifact.content) : undefined;
-				const label = artifact.source === "reply" ? artifact.title : artifact.kind === "diff" ? "Edit" : "Written";
+				const label = artifact.source === "reply" ? artifact.title : artifact.source === "file" ? "Current file" : artifact.kind === "diff" ? "Edit" : "Written";
 				row.innerHTML = `<span class="panel-row-kind kind-${artifact.kind}"></span><span class="panel-row-label">${escapeHtml(label)}${
 					n === 0 && artifacts.length > 1 ? ' <span class="muted">latest</span>' : ""
 				}</span>${stats ? `<span class="diff-stats"><span class="added">+${stats.added}</span> <span class="removed">−${stats.removed}</span></span>` : ""}`;

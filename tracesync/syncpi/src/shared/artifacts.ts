@@ -18,7 +18,8 @@ export type Artifact = {
 	/** Language for highlighting, from the file name or the code fence. */
 	lang?: string;
 	/** Where it came from: an edit or write by the agent, or a block in a reply. */
-	source: "edit" | "write" | "reply";
+	/** "file" is a project file someone opened, not something the agent produced. */
+	source: "edit" | "write" | "reply" | "file";
 };
 
 const EXTENSION_KIND: Record<string, ArtifactKind> = {

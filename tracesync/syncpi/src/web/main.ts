@@ -8,14 +8,17 @@
 //   panel.ts        the changes panel
 //   composer.ts     writing, attachments, completion and slash commands
 //   settings.ts     settings (⌘,): you, people, branches, environment, session
-//   dialogs.ts      share link and confirmations
+//   palette.ts      the command palette (⌘K, ⌘⇧P, ⌘P); commands and shortcuts are in src/shared/keymap.json
+//   dialogs.ts      share link, keyboard shortcuts and confirmations
 //   bridge.ts       talking to an app that embeds this view
+import { kindOfPath } from "../shared/artifacts.ts";
 import type { Where } from "../shared/protocol.ts";
 import { signIn, TOKEN_KEY } from "./auth.ts";
 import { embedded, onHostAction, toHost } from "./bridge.ts";
 import { Composer } from "./composer.ts";
 import { Dialogs } from "./dialogs.ts";
 import { $, initials, personColor, storage } from "./dom.ts";
+import { Palette } from "./palette.ts";
 import { ArtifactPanel } from "./panel.ts";
 import { SessionClient } from "./session.ts";
 import { Settings } from "./settings.ts";
@@ -199,11 +202,48 @@ async function main(): Promise<void> {
 	$("scroller").addEventListener("click", (event) => {
 		if (event.target === event.currentTarget && window.getSelection()?.isCollapsed) composer.focus();
 	});
+	const openFile = async (path: string) => {
+		const res = await fetch(`api/file?path=${encodeURIComponent(path)}`, { headers: { authorization: `Bearer ${token}` } }).catch(() => undefined);
+		if (!res?.ok) return toast(`Couldn't open ${path}`, "error");
+		const kind = kindOfPath(path);
+		const content = kind === "image" ? "" : await res.text();
+		panel.openFile({ key: `file:${path}`, kind, title: path, path, content, lang: path.split(".").pop(), source: "file" });
+	};
+	const admin = (run: () => void) => () => (session.role === "admin" ? run() : toast("Only admins can do that."));
+	// What each command in src/shared/keymap.json does here.
+	const palette = new Palette({
+		files: () => session.files,
+		openFile: (path) => void openFile(path),
+		handlers: {
+			"palette.all": () => palette.open("all"),
+			"palette.commands": () => palette.open("commands"),
+			"palette.files": () => palette.open("files"),
+			"app.keymap": () => dialogs.keymap("web"),
+			"app.settings": () => settings.toggle(),
+			"app.theme": () => {
+				const dark = document.documentElement.dataset.theme === "dark" || (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
+				applyTheme(dark ? "light" : "dark");
+				threadView.reset();
+				panel.refresh();
+			},
+			"thread.share": admin(() => session.send({ type: "invite" })),
+			"agent.stop": () => session.send({ type: "abort" }),
+			"agent.model": admin(() => settings.open("general")),
+			"agent.compact": () => dialogs.open("compact"),
+			"agent.newContext": admin(() => dialogs.open("reset")),
+			"agent.branches": () => settings.open("branches"),
+			"agent.setup": () => show(showing === "setup" ? "main" : "setup"),
+			"view.changes": () => panel.toggle(),
+			"view.people": () => settings.open("people"),
+		},
+	});
 	document.addEventListener("keydown", (event) => {
-		if ((event.metaKey || event.ctrlKey) && event.key === ",") {
-			event.preventDefault();
-			settings.toggle();
-		}
+		// Esc belongs to whatever has focus: dialogs close, the composer stops the agent.
+		if (event.key === "Escape" || event.defaultPrevented) return;
+		// With a dialog open only the palette and settings shortcuts apply, so typing there stays typing.
+		const dialog = document.querySelector("dialog[open]");
+		if (dialog !== null && dialog.id !== "palette" && dialog.id !== "settings-dialog") return;
+		palette.handleKey(event);
 	});
 
 	onHostAction((action, data) => {
