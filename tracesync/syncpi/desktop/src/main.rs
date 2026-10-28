@@ -1,6 +1,7 @@
 mod backend;
 mod icons;
 mod message;
+mod sidebar;
 mod theme;
 mod transcript;
 use backend::{Backend, Event};
@@ -91,12 +92,13 @@ struct Desktop {
     modal: String,
     pane: String,
     project: String,
-    filter: String,
     archived: bool,
     showing: String,
     where_vm: bool,
     steer: bool,
     collapsed: HashSet<String>,
+    /// Projects folded in the sidebar.
+    folded: HashSet<String>,
     thinking: HashSet<String>,
     scroll: ScrollHandle,
     files: Vec<String>,
@@ -205,12 +207,12 @@ impl Desktop {
             modal: String::new(),
             pane: String::new(),
             project: String::new(),
-            filter: "all".into(),
             archived: false,
             showing: "main".into(),
             where_vm: false,
             steer: false,
             collapsed: HashSet::new(),
+            folded: HashSet::new(),
             thinking: HashSet::new(),
             scroll: ScrollHandle::new(),
             files: vec![],
@@ -824,288 +826,6 @@ impl Desktop {
                         cx.listener(move |this, _, window, cx| this.run_action(action, window, cx)),
                     )
             }))
-            .into_any_element()
-    }
-    fn sidebar(&self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let mut directories: Vec<(String, String)> = vec![];
-        for s in &self.sessions {
-            let dir = text(s, "dir");
-            if !directories.iter().any(|(d, _)| d == &dir) {
-                directories.push((dir, text(s, "name")));
-            }
-        }
-        let mut shown: Vec<_> = self
-            .sessions
-            .iter()
-            .filter(|s| {
-                flag(s, "archived") == self.archived
-                    && (self.project.is_empty() || text(s, "dir") == self.project)
-                    && (self.filter != "saved" || flag(s, "bookmarked"))
-            })
-            .cloned()
-            .collect();
-        shown.sort_by_key(|s| {
-            (
-                !flag(s, "pinned"),
-                std::cmp::Reverse(
-                    s[if self.filter == "recent" {
-                        "lastOpened"
-                    } else {
-                        "createdAt"
-                    }]
-                    .as_u64()
-                    .unwrap_or_default(),
-                ),
-            )
-        });
-        let border = cx.theme().border;
-        let muted = cx.theme().muted_foreground;
-        let surface = theme::palette(cx).surface;
-        div()
-            .w(px(252.))
-            .h_full()
-            .flex_shrink_0()
-            .flex()
-            .flex_col()
-            .bg(surface)
-            .border_r_1()
-            .border_color(border)
-            .child(
-                div()
-                    .h(px(49.))
-                    .flex()
-                    .items_center()
-                    .pl(px(91.))
-                    .pr_2()
-                    .gap_1()
-                    .border_b_1()
-                    .border_color(border)
-                    .child(
-                        Button::new("search")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Search)
-                            .tooltip("Search threads")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_modal("search", window, cx)
-                            })),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("archives")
-                            .ghost()
-                            .small()
-                            .icon(icons::icon("archive"))
-                            .tooltip("Archived threads")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.run_action("archives", window, cx)
-                            })),
-                    ),
-            )
-            .child(
-                div()
-                    .id("sidebar-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .px_2()
-                    .pt_4()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .px_2()
-                            .text_xs()
-                            .text_color(muted)
-                            .child("Projects")
-                            .child(
-                                Button::new("add-project")
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(IconName::Plus)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.choose_project(window, cx)
-                                    })),
-                            ),
-                    )
-                    .children(directories.into_iter().map(|(dir, name)| {
-                        let current = dir == self.project;
-                        div()
-                            .id(eid(format!("project-{dir}")))
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .px_3()
-                            .py_2()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .when(current, |s| s.bg(cx.theme().selection))
-                            .hover(|s| s.bg(cx.theme().muted))
-                            .child(Icon::new(IconName::Folder).size_4().text_color(muted))
-                            .child(name)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.project = if this.project == dir {
-                                    String::new()
-                                } else {
-                                    dir.clone()
-                                };
-                                cx.notify();
-                            }))
-                    }))
-                    .child(
-                        div()
-                            .mt_6()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .px_2()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(if self.archived {
-                                "Archived threads"
-                            } else {
-                                "Threads"
-                            })
-                            .child(
-                                Button::new("new-thread")
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(IconName::Plus)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.open_modal("create", window, cx)
-                                    })),
-                            ),
-                    )
-                    .child(
-                        div().flex().gap_1().mt_2().mb_2().children(
-                            [("all", "All"), ("saved", "Saved"), ("recent", "Recent")]
-                                .into_iter()
-                                .map(|(filter, title)| {
-                                    Button::new(filter)
-                                        .ghost()
-                                        .xsmall()
-                                        .label(title)
-                                        .when(self.filter == filter, |b| b.bg(cx.theme().muted))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.filter = filter.into();
-                                            cx.notify();
-                                        }))
-                                }),
-                        ),
-                    )
-                    .child(
-                        Button::new("new-thread-row")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Plus)
-                            .label("New thread")
-                            .w_full()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_modal("create", window, cx)
-                            })),
-                    )
-                    .children(shown.into_iter().map(|s| {
-                        let id = text(&s, "id");
-                        let selected = id == self.active;
-                        let title = text(&s, "title");
-                        let name = if title.is_empty() {
-                            text(&s, "name")
-                        } else {
-                            title
-                        };
-                        let symbol = if flag(&s, "pinned") {
-                            icons::icon("pin")
-                        } else if flag(&s, "bookmarked") {
-                            icons::icon("bookmark")
-                        } else if s["status"] == "provisioning" {
-                            Icon::new(IconName::LoaderCircle)
-                        } else {
-                            icons::icon("message-square")
-                        };
-                        div()
-                            .id(eid(format!("thread-{id}")))
-                            .flex()
-                            .gap_2()
-                            .items_center()
-                            .py_2()
-                            .px_3()
-                            .my_1()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .when(selected, |s| s.bg(cx.theme().selection))
-                            .hover(|s| s.bg(cx.theme().muted))
-                            .child(symbol.size_4().text_color(muted).flex_shrink_0())
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .overflow_hidden()
-                                    .child(label(name).text_sm().whitespace_nowrap())
-                                    .when(!array(&s, "tags").is_empty(), |d| {
-                                        d.child(
-                                            label(
-                                                array(&s, "tags")
-                                                    .iter()
-                                                    .filter_map(Value::as_str)
-                                                    .collect::<Vec<_>>()
-                                                    .join(" · "),
-                                            )
-                                            .text_xs()
-                                            .text_color(muted),
-                                        )
-                                    }),
-                            )
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.select(id.clone(), window, cx)
-                            }))
-                    })),
-            )
-            .child(
-                div()
-                    .h(px(46.))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_3()
-                    .border_t_1()
-                    .border_color(border)
-                    .child(
-                        {
-                            let name = text(&self.catalog["identity"], "name");
-                            let color = theme::person_color(&name);
-                            div()
-                                .size_6()
-                                .rounded_full()
-                                .bg(color.opacity(0.16))
-                                .text_color(color)
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .text_size(px(10.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(theme::initials(&name))
-                        },
-                    )
-                    .child(
-                        label(text(&self.catalog["identity"], "name"))
-                            .flex_1()
-                            .text_sm(),
-                    )
-                    .child(
-                        Button::new("theme")
-                            .ghost()
-                            .small()
-                            .icon(if self.prefs.dark {
-                                IconName::Sun
-                            } else {
-                                IconName::Moon
-                            })
-                            .tooltip("Toggle theme")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.run_action("theme", window, cx)
-                            })),
-                    ),
-            )
             .into_any_element()
     }
     fn inspector(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
