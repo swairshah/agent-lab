@@ -13,6 +13,8 @@ export class ArtifactPanel {
 	/** Project files opened by hand (Go to file), listed with the thread's artifacts. */
 	#files: Artifact[] = [];
 	#selected: string | undefined;
+	/** The list of changes is showing; it folds away while one is open, so the change gets the room. */
+	#browsing = true;
 	#signature = "";
 
 	constructor(session: SessionClient, loadImage: ImageLoader, onComment: CommentHandler) {
@@ -24,6 +26,7 @@ export class ArtifactPanel {
 			if (key !== undefined) this.select(key);
 		});
 		$("panel-close").addEventListener("click", () => this.toggle(false));
+		$("panel-browse").addEventListener("click", () => this.#browse(!this.#browsing));
 	}
 
 	toggle(open?: boolean): void {
@@ -44,10 +47,18 @@ export class ArtifactPanel {
 		this.open(file);
 	}
 
+	#browse(open: boolean): void {
+		// Nothing open: the list is all there is to show.
+		this.#browsing = open || this.#selected === undefined;
+		$("panel-list").hidden = !this.#browsing;
+		$("panel-browse").setAttribute("aria-expanded", String(this.#browsing));
+	}
+
 	select(key: string): void {
 		const artifact = this.#artifacts.find((a) => a.key === key);
 		if (artifact === undefined) return;
 		this.#selected = key;
+		this.#browse(false);
 		for (const row of $("panel-list").querySelectorAll<HTMLElement>("[data-artifact]")) row.setAttribute("aria-current", String(row.dataset.artifact === key));
 		const view = $("panel-view");
 		disposeWithin(view);
@@ -67,9 +78,13 @@ export class ArtifactPanel {
 		this.#signature = signature;
 		this.#artifacts = artifacts;
 		$("panel-count").textContent = artifacts.length === 0 ? "" : String(artifacts.length);
+		$("panel-browse-count").textContent = artifacts.length === 0 ? "" : String(artifacts.length);
 		$("panel-toggle").hidden = artifacts.length === 0;
 		this.#renderList();
-		if (this.#selected !== undefined && !artifacts.some((a) => a.key === this.#selected)) this.#selected = undefined;
+		if (this.#selected !== undefined && !artifacts.some((a) => a.key === this.#selected)) {
+			this.#selected = undefined;
+			this.#browse(true);
+		}
 	}
 
 	/** Grouped by file, newest change first; snippets from replies at the end. */
