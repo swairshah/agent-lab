@@ -28,6 +28,8 @@ import { SessionClient } from "./session.ts";
 import { Settings } from "./settings.ts";
 import { avatarHtml, ThreadView } from "./thread-view.ts";
 import { applyZoom, dragWindow, SHELL_COMMANDS, shell } from "./shell-api.ts";
+import { Terminals } from "./terminal.ts";
+import { Git } from "./git.ts";
 
 type Theme = "system" | "light" | "dark";
 
@@ -84,6 +86,13 @@ async function main(): Promise<void> {
 		return { key: `file:${path}`, kind, title: path, path, content, lang: path.split(".").pop(), source: "file" as const, lines, hash: res.headers.get("x-hash") ?? undefined };
 	};
 	const panel = new ArtifactPanel(session, loadImage, sendComment, loadFile);
+	// Terminals on this machine, in the app.
+	const terminals = app ? new Terminals(threadId) : undefined;
+	const git = app ? new Git(threadId, sendComment, toast) : undefined;
+	$("git-toggle").hidden = git === undefined;
+	$("terminal-toggle").hidden = terminals === undefined;
+	$("git-toggle").addEventListener("click", () => git?.toggle());
+	$("terminal-toggle").addEventListener("click", () => palette.handler("view.terminal")?.());
 	const quotes = new QuoteComments($("thread"), sendComment, () => composer.focus());
 	// Up from the composer's first line moves the cursor into the thread, as in Delta.
 	$("input").addEventListener("keydown", (event) => {
@@ -134,6 +143,13 @@ async function main(): Promise<void> {
 		updateComposer();
 	};
 
+	// A new, empty project file (from the palette's Files tab), opened to edit.
+	const createFile = async (path: string) => {
+		if (session.role === "viewer") return toast("Viewers can't change files.", "error");
+		const res = await fetch(`api/file?path=${encodeURIComponent(path)}&base=none`, { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: "" }).catch(() => undefined);
+		if (!res?.ok) return toast(res?.status === 409 ? `${path} already exists.` : `Couldn't create ${path}.`, "error");
+		await openFile(path);
+	};
 	const openFile = async (path: string, lines?: string) => {
 		const file = await loadFile(path, lines);
 		if (file === undefined) return toast(`Couldn't open ${path}`, "error");
@@ -160,6 +176,9 @@ async function main(): Promise<void> {
 			openSettings: (section) => settings.open(section),
 			confirm: (id) => dialogs.open(id),
 			toHost: (action, data) => toHost("action", { action, data }),
+			terminal: terminals && ((command) => (session.role === "viewer" ? toast("Viewers can't run commands.", "error") : void terminals.add(command))),
+			app: app && ((command) => void app.command(command)),
+			vm: () => app?.session(threadId)?.vm,
 			fork,
 			where: () => where,
 			setWhere,
@@ -168,6 +187,7 @@ async function main(): Promise<void> {
 	);
 	setWhere(where);
 	$("where-label").hidden = !embedded;
+	$("where-label").addEventListener("click", () => setWhere(where === "device" ? "vm" : "device"));
 	$<HTMLSelectElement>("where").addEventListener("change", (event) => setWhere((event.target as HTMLSelectElement).value as Where));
 
 	const updateComposer = () => {
@@ -307,6 +327,7 @@ async function main(): Promise<void> {
 		files: () => session.files,
 		openFile: (path) => void openFile(path),
 		threads: app ? () => app.threads() : undefined,
+		createFile: (path) => void createFile(path),
 		openThread: (id) => app?.open(id),
 		handlers: {
 			...fromShell,
@@ -332,6 +353,8 @@ async function main(): Promise<void> {
 			"view.changes": () => panel.toggle(),
 			"view.files": () => panel.toggleTree(),
 			"view.people": () => settings.open("people"),
+			...(git ? { "view.git": () => git.toggle() } : {}),
+			...(terminals ? { "view.terminal": () => (session.role === "viewer" ? toast("Viewers can't run commands.", "error") : terminals.toggle()) } : {}),
 			"file.comment": () => commentOnSelection() || toast("Select lines in a file or diff (click or drag their numbers) to comment on them."),
 		},
 	});

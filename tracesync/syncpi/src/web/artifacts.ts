@@ -6,7 +6,7 @@
 // in an opaque origin with no access to this page, its storage, or the session's token.
 import { type Artifact, patchStats } from "../shared/artifacts.ts";
 import type { LineComment } from "../shared/protocol.ts";
-import { el, escapeHtml } from "./dom.ts";
+import { el, escapeHtml, storage } from "./dom.ts";
 import { renderMarkdown } from "./markdown.ts";
 
 type Pierre = typeof import("@pierre/diffs");
@@ -320,22 +320,39 @@ export function artifactCard(artifact: Artifact, options: CardOptions): HTMLElem
 	if (options.extra !== undefined) head.append(options.extra);
 	const tabBar = el("div", "artifact-tabs");
 	// A project file can be edited and saved, as on the desktop. The save is refused if the file changed meanwhile.
+	// Unsaved edits are kept in this browser until saved or dropped, and come back when the file is edited again.
 	if (options.onSave !== undefined && artifact.source === "file" && artifact.path !== undefined && artifact.kind !== "image") {
-		const editButton = el("button", "artifact-open", "Edit");
+		const draftKey = `syncpi-file-draft:${document.baseURI}${artifact.path}`;
+		const draft = () => {
+			const saved = storage.get(draftKey);
+			if (saved === undefined) return undefined;
+			try {
+				const parsed = JSON.parse(saved) as { text: string; base: string };
+				return parsed.base === (artifact.hash ?? "none") ? parsed.text : undefined;
+			} catch {
+				return undefined;
+			}
+		};
+		const editButton = el("button", "artifact-open", draft() !== undefined ? "Edit (unsaved changes)" : "Edit");
 		editButton.type = "button";
 		editButton.onclick = () => {
 			const area = el("textarea", "file-editor");
-			area.value = artifact.content;
+			area.value = draft() ?? artifact.content;
+			area.addEventListener("input", () => {
+				if (area.value === artifact.content) storage.remove(draftKey);
+				else storage.set(draftKey, JSON.stringify({ text: area.value, base: artifact.hash ?? "none" }));
+			});
 			area.spellcheck = false;
 			const save = el("button", "button primary", "Save");
 			save.type = "button";
 			const cancel = el("button", "text-button", "Cancel");
 			cancel.type = "button";
 			const bar = el("div", "file-editor-bar");
-			bar.append(el("span", "muted", "⌘S to save, Esc to cancel"), cancel, save);
+			bar.append(el("span", "spacer"), cancel, save);
 			const done = () => {
 				body.classList.remove("editing");
 				editButton.hidden = false;
+				editButton.textContent = draft() !== undefined ? "Edit (unsaved changes)" : "Edit";
 				select(tabs.includes("code") ? "code" : tabs[0]!);
 			};
 			const doSave = async () => {
@@ -345,10 +362,15 @@ export function artifactCard(artifact: Artifact, options: CardOptions): HTMLElem
 				if (hash === undefined) return;
 				artifact.content = area.value;
 				artifact.hash = hash;
+				storage.remove(draftKey);
 				done();
 			};
+			// Cancel drops the unsaved edits; Esc only leaves the editor, keeping them.
 			save.onclick = () => void doSave();
-			cancel.onclick = done;
+			cancel.onclick = () => {
+				storage.remove(draftKey);
+				done();
+			};
 			area.addEventListener("keydown", (event) => {
 				if ((event.metaKey || event.ctrlKey) && event.key === "s") {
 					event.preventDefault();

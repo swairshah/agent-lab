@@ -101,7 +101,7 @@ export class QuoteComments {
 	/** Controls and rendered blocks inside the thread are not part of its text. */
 	#islands(): void {
 		for (const node of this.#thread.querySelectorAll<HTMLElement>(
-			".artifact, .fold summary, .tool-group-list, .msg-meta, .avatar, .msg-action, .comment-card, .attached, .viewer, .code-block, .quote-box, .quote-pill-row, .file-link, button, .notice",
+			".artifact, .fold summary, .tool-group-list, .msg-meta, .avatar, .msg-action, .comment-card, .attached, .viewer, .code-block, .quote-box, .quote-pill-row, .file-link, button, .notice, .copy-code",
 		)) {
 			if (node.contentEditable !== "false") node.contentEditable = "false";
 		}

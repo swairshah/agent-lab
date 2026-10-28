@@ -84,6 +84,7 @@ export class Palette {
 	readonly #files: () => string[];
 	readonly #openFile: (path: string) => void;
 	readonly #threads: (() => ThreadRow[]) | undefined;
+	readonly #createFile: ((path: string) => void) | undefined;
 	readonly #openThread: (id: string) => void;
 	readonly #tabs: { tab: Tab; label: string }[];
 	#tab: Tab = "all";
@@ -101,7 +102,9 @@ export class Palette {
 		app?: App;
 		threads?: () => ThreadRow[];
 		openThread?: (id: string) => void;
+		createFile?: (path: string) => void;
 	}) {
+		this.#createFile = options.createFile;
 		this.#handlers = options.handlers;
 		this.#files = options.files;
 		this.#openFile = options.openFile;
@@ -260,7 +263,13 @@ export class Palette {
 		const query = this.#input.value.trim();
 		if (this.#pick !== undefined) this.#rows = this.#modelRows(query);
 		else if (this.#tab === "commands") this.#rows = this.#commandRows(query, "Commands");
-		else if (this.#tab === "files") this.#rows = this.#fileRows(query, 60);
+		else if (this.#tab === "files") {
+			this.#rows = this.#fileRows(query, 60);
+			// A path that isn't a file yet can be made.
+			const path = query.replace(/^\/+/, "");
+			if (this.#createFile !== undefined && path && !path.endsWith("/") && !this.#files().includes(path))
+				this.#rows.push({ key: `new:${path}`, title: `Create ${path}`, section: "New file", icon: FILE_ICON, run: () => this.#createFile!(path) });
+		}
 		else if (this.#tab === "threads") this.#rows = this.#threadRows(query, 80);
 		else if (query === "") {
 			const quick = this.#commands.filter((c) => c.quick);

@@ -34,6 +34,7 @@ export type ShellThread = {
 	id: string;
 	dir: string;
 	role: string;
+	vm?: string;
 	sync?: { pushed: number; pulled: number; conflicts: string[]; error: string };
 };
 

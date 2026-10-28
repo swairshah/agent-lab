@@ -51,6 +51,12 @@
     <button id="share" type="button" class="text-button" hidden>
       <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M3 10h14M10 3c2 2 2.8 4.4 2.8 7S12 15 10 17M10 3c-2 2-2.8 4.4-2.8 7S8 15 10 17"/></svg>Share
     </button>
+    <button id="git-toggle" type="button" class="icon-button" aria-label="Uncommitted changes (⇧⌘G)" title="Uncommitted changes (⇧⌘G)" hidden>
+      <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="6" cy="5" r="1.8"/><circle cx="6" cy="15" r="1.8"/><circle cx="14" cy="8" r="1.8"/><path d="M6 6.8v6.4M14 9.8c0 2.6-3 2.6-6.4 3.8"/></svg>
+    </button>
+    <button id="terminal-toggle" type="button" class="icon-button" aria-label="Terminal (⌃`)" title="Terminal (⌃`)" hidden>
+      <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="4" width="15" height="12" rx="2"/><path d="m6 8.5 2.5 2-2.5 2M10.5 13h3.5"/></svg>
+    </button>
     <button id="panel-toggle" type="button" class="icon-button" aria-label="Changes" title="Changes">
       <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="M12 4v12"/></svg>
       <span id="panel-count" class="badge"></span>
@@ -79,8 +85,13 @@
         <div id="completions" class="completions" role="listbox" hidden></div>
       </div>
       <div id="drop" class="drop" hidden><span>Drop to add to your message</span></div>
+      <section id="terminal" class="terminal" aria-label="Terminals" hidden>
+        <div id="terminal-resize" class="terminal-resize"></div>
+        <header id="terminal-tabs" class="terminal-tabs"></header>
+        <div id="terminal-views" class="terminal-views"></div>
+      </section>
       <footer class="statusbar">
-        <span id="where-label" class="status-item" hidden></span>
+        <button id="where-label" type="button" class="status-item status-button" title="Where your requests run. Click to switch." hidden></button>
         <button id="sync-status" type="button" class="status-item status-button sync-status" hidden></button>
         <button id="branch-chip" type="button" class="status-item status-button branch" hidden>main</button>
         <span class="spacer"></span>
@@ -96,6 +107,25 @@
         </button>
       </footer>
     </main>
+
+    <aside id="git" class="git" aria-label="Uncommitted changes" hidden>
+      <header class="git-head">
+        <h2>Uncommitted changes</h2>
+        <span id="git-branch" class="muted small"></span>
+        <span class="spacer"></span>
+        <button id="git-refresh" type="button" class="icon-button small" title="Refresh" aria-label="Refresh">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16 10a6 6 0 0 1-10.7 3.7M4 10a6 6 0 0 1 10.7-3.7M15 3v3.5h-3.5M5 17v-3.5h3.5"/></svg>
+        </button>
+        <button id="git-close" type="button" class="icon-button small" aria-label="Close">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg>
+        </button>
+      </header>
+      <div id="git-files" class="git-files"></div>
+      <form id="git-commit" class="git-commit">
+        <input id="git-message" placeholder="Commit message" aria-label="Commit message" autocomplete="off">
+        <button type="submit" class="button primary">Commit staged</button>
+      </form>
+    </aside>
 
     <aside class="panel" aria-label="Changes and files">
       <section class="panel-main">

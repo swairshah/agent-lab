@@ -16,14 +16,19 @@ export type CommandContext = {
 	togglePanel(): void;
 	openSettings(section?: Section): void;
 	confirm(id: "compact" | "reset"): void;
-	/** Asks the embedding app to do something only it can (open a terminal). */
+	/** Asks the embedding app to do something only it can. */
 	toHost(action: string, data?: unknown): void;
+	/** In the app: runs a command in a new terminal (`!cmd`), and runs the app's own commands (`/sync`, `/quit`, …). */
+	terminal?: (command: string) => void;
+	app?: (command: string) => void;
+	/** In the app: the VM this thread's server runs on, for /ssh. */
+	vm?: () => string | undefined;
 	fork(key: string, text: string): void;
 	where(): Where;
 	setWhere(where: Where): void;
 };
 
-type Command = { name: string; description: string; run(arg: string, words: string[], c: CommandContext): void };
+type Command = { name: string; description: string; app?: boolean; run(arg: string, words: string[], c: CommandContext): void };
 
 const COMMANDS: Command[] = [
 	{ name: "invite", description: "Invite by email, or make a link: [email] [role] [7d|never]", run: (arg, _w, c) => {
@@ -56,6 +61,14 @@ const COMMANDS: Command[] = [
 	{ name: "stop", description: "Stop the agent", run: (_a, _w, c) => c.session.send({ type: "abort" }) },
 	{ name: "env", description: "The setup agent's thread", run: (_a, _w, c) => c.showSetup() },
 	{ name: "changes", description: "Changes and artifacts", run: (_a, _w, c) => c.togglePanel() },
+	{ name: "sync", description: "Sync the project with this machine now", app: true, run: (_a, _w, c) => c.app?.("project.sync") },
+	{ name: "web", description: "Open the thread in a browser", app: true, run: (_a, _w, c) => c.app?.("project.web") },
+	{ name: "ssh", description: "A terminal on the thread's VM", app: true, run: (_a, _w, c) => {
+		const vm = c.vm?.();
+		if (vm) c.terminal?.(`ssh ${vm}.exe.xyz`);
+		else c.notify("This thread runs on this machine, not a VM.");
+	} },
+	{ name: "quit", description: "Quit SyncPi", app: true, run: (_a, _w, c) => c.app?.("app.quit") },
 	{ name: "where", description: "Run your requests here or on the VM", run: (arg, _w, c) => {
 		if (arg === "vm") c.setWhere("vm");
 		else if (c.embedded && (arg === "here" || arg === "device")) c.setWhere("device");
@@ -186,14 +199,19 @@ export class Composer {
 		this.#input.focus();
 	}
 
+	/** The slash commands here: the app's own only in the app. */
+	#commands(): Command[] {
+		return COMMANDS.filter((c) => !c.app || this.#c.app !== undefined);
+	}
+
 	submit(): void {
 		const text = this.#input.value.trim();
 		if (!text && this.#attachments.length === 0) return;
-		if (text.startsWith("!") && this.#c.embedded) {
-			this.#c.toHost("terminal", text.slice(1).trim());
+		if (text.startsWith("!") && this.#c.terminal) {
+			this.#c.terminal(text.slice(1).trim());
 		} else if (text.startsWith("/") && this.#attachments.length === 0) {
 			const [name = "", ...words] = text.slice(1).split(/\s+/);
-			const command = COMMANDS.find((c) => c.name === name);
+			const command = this.#commands().find((c) => c.name === name);
 			// Prompt templates expand in an embedding app; elsewhere an unknown command stays in the box.
 			if (command === undefined && !this.prompts.includes(name)) return this.#c.notify(`Unknown command /${name}. Type / to see commands.`, "error");
 			if (command !== undefined) command.run(words.join(" "), words, this.#c);
@@ -285,7 +303,7 @@ export class Composer {
 		const options: { name: string; description: string }[] =
 			match[1] === "@"
 				? this.#c.session.files.filter((f) => f.toLowerCase().includes(query)).slice(0, 40).map((name) => ({ name, description: "" }))
-				: [...COMMANDS.map(({ name, description }) => ({ name, description })), ...this.prompts.map((name) => ({ name, description: "prompt template" }))].filter((c) =>
+				: [...this.#commands().map(({ name, description }) => ({ name, description })), ...this.prompts.map((name) => ({ name, description: "prompt template" }))].filter((c) =>
 						c.name.toLowerCase().startsWith(query),
 					);
 		if (options.length === 0) return this.#hideCompletions();

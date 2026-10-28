@@ -552,3 +552,41 @@ body.shell { overflow: hidden; }
 /* A thread inside the app: its top bar is also the window's title bar. */
 html[data-desktop="true"] .topbar { -webkit-user-select: none; user-select: none; }
 html.window-controls .topbar { padding-left: 84px; }
+
+/* Terminals (the app): tabs under the thread, a drag handle on top. */
+.terminal { position: relative; display: flex; flex-direction: column; height: 280px; flex: none; border-top: 1px solid var(--rule); background: var(--sunken); }
+.terminal-resize { position: absolute; top: -3px; left: 0; right: 0; height: 6px; cursor: row-resize; z-index: 2; }
+.terminal-tabs { display: flex; align-items: center; gap: 2px; height: 32px; padding: 0 6px; border-bottom: 1px solid var(--rule); flex: none; }
+.terminal-tab { display: flex; align-items: center; border-radius: 5px; color: var(--muted); }
+.terminal-tab[aria-selected="true"] { background: var(--raised); color: var(--ink); }
+.terminal-tab[data-closed="true"] .terminal-name { text-decoration: line-through; }
+.terminal-name, .terminal-close { border: none; background: none; color: inherit; font: 12px var(--mono); padding: 3px 4px 3px 8px; cursor: default; }
+.terminal-close { padding: 3px 6px; visibility: hidden; }
+.terminal-tab:hover .terminal-close { visibility: visible; }
+.terminal-views { position: relative; flex: 1; min-height: 0; padding: 4px 0 0 8px; }
+.terminal-view { position: absolute; inset: 4px 0 0 8px; }
+
+/* Uncommitted changes in git (the app): a sheet over the right side. */
+.git { position: fixed; top: 44px; right: 0; bottom: 0; z-index: 12; width: var(--panel-wide); display: flex; flex-direction: column; background: var(--surface); border-left: 1px solid var(--rule); box-shadow: var(--shadow); }
+.git-head { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--rule); flex: none; }
+.git-head h2 { margin: 0; font-size: 13.5px; font-weight: 600; }
+.git-files { flex: 1; overflow-y: auto; padding: 8px 12px 16px; }
+.git-empty { padding: 12px 4px; }
+.git-file { margin-bottom: 14px; }
+.git-file-head { display: flex; align-items: center; gap: 8px; padding: 4px 2px; font-size: 13px; }
+.git-status { width: 18px; text-align: center; font: 600 11.5px var(--mono); color: var(--warn); }
+.git-status[data-status="A"], .git-status[data-status="?"] { color: var(--added); }
+.git-status[data-status="D"] { color: var(--removed); }
+.git-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-staged { font-size: 11.5px; color: var(--ok); }
+.git-stage { padding: 2px 9px; font-size: 12px; }
+.git-diff { border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
+.git-commit { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--rule); flex: none; }
+.git-commit input { flex: 1; }
+
+/* Copying a code block. */
+.code-block, .code-slot { position: relative; }
+.copy-code { -webkit-user-select: none; user-select: none; position: absolute; top: 6px; right: 6px; z-index: 2; padding: 2px 8px; border: 1px solid var(--rule); border-radius: 5px; background: var(--raised); color: var(--muted); font-size: 11.5px; opacity: 0; transition: opacity .12s; cursor: pointer; }
+.code-block:hover .copy-code, .code-slot:hover .copy-code, .copy-code:focus-visible { opacity: 1; }
+.copy-code:hover { color: var(--ink); }
+.terminal-view .xterm, .terminal-view .xterm-viewport { background-color: var(--sunken) !important; }

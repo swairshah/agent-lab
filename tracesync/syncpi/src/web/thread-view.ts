@@ -28,6 +28,20 @@ export function avatarHtml(name: string): string {
 	return `<span class="avatar" style="--person:${personColor(name)}" title="${escapeHtml(name)}">${escapeHtml(initials(name))}</span>`;
 }
 
+/** Copies a code block's text; shows on hover in its corner. */
+function copyButton(code: string): HTMLButtonElement {
+	const button = el("button", "copy-code", "Copy");
+	button.type = "button";
+	button.contentEditable = "false";
+	button.addEventListener("click", () => {
+		void navigator.clipboard?.writeText(code).then(() => {
+			button.textContent = "Copied";
+			setTimeout(() => (button.textContent = "Copy"), 1200);
+		});
+	});
+	return button;
+}
+
 export class ThreadView {
 	readonly #box: HTMLElement;
 	readonly #scroller: HTMLElement;
@@ -152,7 +166,7 @@ export class ThreadView {
 		if (body === null) return;
 		// The text nodes of the message, as one string with offsets back into them.
 		const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
-			acceptNode: (n) => (n.parentElement?.closest(".inline-comment, pre, .artifact, .viewer") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+			acceptNode: (n) => (n.parentElement?.closest(".inline-comment, pre, .artifact, .viewer, .copy-code") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
 		});
 		const nodes: { node: Text; start: number }[] = [];
 		let full = "";
@@ -319,7 +333,8 @@ export class ThreadView {
 				const host = el("div", "code-block");
 				slot.replaceWith(host);
 				renderCode(host, `snippet.${lang}`, code.replace(/\n$/, ""));
-			}
+				host.append(copyButton(code.replace(/\n$/, "")));
+			} else slot.append(copyButton(code.replace(/\n$/, "")));
 		}
 	}
 
