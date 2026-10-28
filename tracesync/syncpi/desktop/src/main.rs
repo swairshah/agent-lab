@@ -1,4 +1,5 @@
 mod backend;
+mod diagram;
 mod icons;
 mod keymap;
 mod message;

@@ -16,6 +16,7 @@ smol = "2"
 uuid = { version = "1", features = ["v4"] }
 tungstenite = "0.26"
 vt100 = "0.15"
+merman = { version = "=0.6.0", features = ["render"] }
 
 [profile.dev]
 debug = 0
