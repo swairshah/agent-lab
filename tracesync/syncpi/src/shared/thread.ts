@@ -21,6 +21,8 @@ export type UserItem = {
 	comments?: LineComment[];
 	/** When it was sent (ms since the epoch), for messages sent since syncpi recorded it. */
 	at?: number;
+	/** The sender's request ID, so their client knows the message arrived even if the acknowledgment didn't. */
+	requestId?: string;
 	rev: number;
 };
 /** `model` is the `provider/model` that wrote it, when known. */
@@ -311,14 +313,14 @@ export class Thread {
 				this.#push({ kind: "notice", key, text: String((entry.data as { text?: string })?.text ?? ""), rev: 0 });
 				return;
 			case "syncpi.message": {
-				const data = entry.data as { author?: string; memberId?: string; text?: string; attachments?: { name: string; kind: "image" | "text" }[]; comments?: LineComment[]; at?: number };
+				const data = entry.data as { author?: string; memberId?: string; text?: string; attachments?: { name: string; kind: "image" | "text" }[]; comments?: LineComment[]; at?: number; requestId?: string };
 				const images = Array.isArray(message?.content) ? message.content.filter((b) => b.type === "image") : [];
 				let image = 0;
 				const attachments = data.attachments?.map((a) => {
 					const block = a.kind === "image" ? (images[image++] as { data?: string; mimeType?: string } | undefined) : undefined;
 					return block?.data ? { ...a, url: `data:${block.mimeType};base64,${block.data}` } : a;
 				});
-				this.#push({ kind: "user", key, author: data.author, memberId: data.memberId, text: data.text ?? textOf(message?.content), attachments, comments: data.comments, at: data.at, rev: 0 });
+				this.#push({ kind: "user", key, author: data.author, memberId: data.memberId, text: data.text ?? textOf(message?.content), attachments, comments: data.comments, at: data.at, requestId: data.requestId, rev: 0 });
 				return;
 			}
 			default:

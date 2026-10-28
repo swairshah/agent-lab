@@ -73,8 +73,17 @@ export class DesktopRuntime {
   }
   async open(id: string): Promise<LiveSession> {
     const existing = this.live.get(id);
-    // A thread watched in the background (for the inbox) starts syncing and running tools once it's opened.
-    if (existing) { if (!existing.full) { existing.start(); this.decorate(id, { lastOpened: Date.now() }); } return existing; }
+    // A thread followed in the background (for the inbox) starts syncing and running tools once it's opened, with its
+    // local server started if it isn't running.
+    if (existing) {
+      if (!existing.full) {
+        existing.full = true;
+        if (existing.record.compute === 'local') await ensureLocalRunning(existing.record.localRoot!, existing.record.url, () => {}).catch(() => {});
+        existing.start();
+        this.decorate(id, { lastOpened: Date.now() });
+      }
+      return existing;
+    }
     const s = loadSession(id);
     if (!s) throw new Error('No such session');
     const live = new LiveSession(s, this.contextHelper);

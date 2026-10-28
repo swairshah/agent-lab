@@ -449,7 +449,7 @@ export class Session {
 				// The route is part of the request ID, so it is stored with the submission and survives restarts.
 				requestId: `${member.id}:${destination}:${requestId}`,
 				whenBusy: mode,
-				entry: { kind: "syncpi.message", data: { author: member.name, memberId: member.id, text, at: Date.now(), ...(shown.length > 0 ? { attachments: shown } : {}), ...(checked.length > 0 ? { comments: checked } : {}) } },
+				entry: { kind: "syncpi.message", data: { author: member.name, memberId: member.id, text, at: Date.now(), requestId, ...(shown.length > 0 ? { attachments: shown } : {}), ...(checked.length > 0 ? { comments: checked } : {}) } },
 			},
 			context,
 		);

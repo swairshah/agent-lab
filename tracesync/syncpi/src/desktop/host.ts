@@ -18,7 +18,10 @@ import { mentionsOf } from '../shared/mentions.ts';
 
 const run = promisify(execFile);
 const appDir = dirname(fileURLToPath(import.meta.url));
-const { values: args } = parseArgs({ options: { port: { type: 'string', default: '0' }, faux: { type: 'boolean', default: false } } });
+// A fixed port by default, so the pages' origin, and with it what they keep in storage (theme, drafts, what you've
+// read), is the same every launch; another free port when it's taken.
+const STABLE_PORT = 47390;
+const { values: args } = parseArgs({ options: { port: { type: 'string', default: String(STABLE_PORT) }, faux: { type: 'boolean', default: false } } });
 const secret = randomBytes(32).toString('hex');
 const runtime = new DesktopRuntime(join(appDir, 'pi-context.mjs'));
 let origin = '';
@@ -223,6 +226,10 @@ server.on('upgrade', (req, socket, head) => {
       ws.on('close', () => { remote.close(); live.onMessage.delete(listener); });
     });
   }).catch(() => socket.destroy());
+});
+server.on('error', (error: NodeJS.ErrnoException) => {
+  if (error.code === 'EADDRINUSE' && Number(args.port) !== 0) { args.port = '0'; server.listen(0, '127.0.0.1'); }
+  else throw error;
 });
 server.listen(Number(args.port), '127.0.0.1', () => {
   const address = server.address() as { port: number };

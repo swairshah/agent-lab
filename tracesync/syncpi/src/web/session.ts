@@ -129,6 +129,16 @@ export class SessionClient {
 		storage.set(`outbox:${this.#storageKey}`, JSON.stringify([...this.outbox.values()].filter((m) => !m.attachments?.length)));
 	}
 
+	/** Messages already in the thread are sent, acknowledged or not (an acknowledgment can be lost on a reconnect). */
+	#arrived(): void {
+		if (this.outbox.size === 0) return;
+		let changed = false;
+		for (const item of this.threads.main.state.items) {
+			if (item.kind === "user" && item.requestId !== undefined && this.outbox.delete(item.requestId)) changed = true;
+		}
+		if (changed) this.#saveOutbox();
+	}
+
 	#settle(requestId: string | undefined): void {
 		if (requestId === undefined || !this.outbox.delete(requestId)) return;
 		this.#saveOutbox();
@@ -151,9 +161,11 @@ export class SessionClient {
 				return this.#emit("session", "people");
 			case "events":
 				this.threads[message.conv].apply(message.events);
+				this.#arrived();
 				return this.#emit("thread");
 			case "history":
 				this.threads[message.conv].prepend(message.entries);
+				this.#arrived();
 				return this.#emit("thread");
 			case "presence":
 				this.online = message.online;
