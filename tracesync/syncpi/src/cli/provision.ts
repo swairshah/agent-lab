@@ -203,11 +203,11 @@ npx playwright install chromium
 command -v ffmpeg >/dev/null || sudo apt-get install -y ffmpeg
 touch .ready-${PLAYWRIGHT}
 `;
-/** Writes the install script and starts it detached, unless it's done or already running. */
+/** Writes the install script and starts it detached, unless it's done; a lock keeps a second run from starting. */
 function installAgentTools(vm: string): Promise<string> {
 	return vmSsh(
 		vm,
-		`mkdir -p ${TOOLS_DIR} && cat > ${TOOLS_DIR}/install.sh && if [ ! -f ${TOOLS_DIR}/.ready-${PLAYWRIGHT} ] && ! pgrep -f "${TOOLS_DIR}/install.sh" >/dev/null; then setsid nohup bash ${TOOLS_DIR}/install.sh > ${TOOLS_DIR}/install.log 2>&1 < /dev/null & fi`,
+		`mkdir -p ${TOOLS_DIR} && cat > ${TOOLS_DIR}/install.sh && if [ ! -f ${TOOLS_DIR}/.ready-${PLAYWRIGHT} ]; then setsid nohup flock -n ${TOOLS_DIR}/.lock bash ${TOOLS_DIR}/install.sh > ${TOOLS_DIR}/install.log 2>&1 < /dev/null & fi`,
 		TOOLS_SCRIPT,
 	);
 }
