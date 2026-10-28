@@ -106,6 +106,19 @@ session details. It follows the system's light or dark theme by default and work
   `?embedded=1`. See `src/web/bridge.ts` for the messages: activity, the thread's title, and actions such as opening
   a terminal one way; theme, share, panel and dialogs the other.
 
+## The desktop app
+
+`npm run package:mac` builds `dist/SyncPi.app`. It is the web view in a native window (Tauri, `desktop/`). The app
+starts its local host (`src/desktop/host.ts`), which keeps each thread's connection, syncs project files to this Mac,
+runs the agent's tools here when a request runs on this machine, and serves the pages. The window shows a sidebar
+of threads by project (`src/web/shell.ts`) beside the open thread, which is the same page a browser gets, loaded
+through the host so the page never holds the thread's token. Recent threads stay loaded, so switching is instant.
+
+The app adds what a browser can't do: new threads from a project folder (⌘N, ⌘O), joining a share link, terminals
+on this Mac (⌃\`, or `!cmd` in the composer), the project's uncommitted git changes (⇧⌘G), revealing the project in
+Finder or Zed, and text size (⌘+, ⌘−). The menu bar is built from `src/shared/keymap.json`, so menu items and
+shortcuts run the same commands. The previous native (GPUI) app is at the tag `gpui-desktop-final`.
+
 The web view's code is in `src/web/`, one module per concern (see `main.ts`). Artifact detection is shared with the
 terminal UI in `src/shared/artifacts.ts`. The bundle is split, so the artifact renderers load only when an artifact
 is shown; the main script is about 95 KB.
@@ -150,7 +163,6 @@ Verified on 2026-10-27:
 
 ## Not done yet
 
-- A desktop app like the Delta app. The web view is the starting point for it.
 - Real merging. Conflicts keep both versions, but there is no 3-way merge.
 - Syncing git state. Commits the agent makes stay on the VM; only working-tree files sync.
 - Live terminals or previews of servers on the VM, for collaborators.
