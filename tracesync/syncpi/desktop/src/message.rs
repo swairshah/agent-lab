@@ -223,7 +223,11 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
             }
             Block::Code { language, content } => {
                 let copy = content.clone();
-                container = container.child(
+                let line_id = block_id.clone();
+                let line_text = content.clone();
+                container = container.child(crate::prose::as_line(
+                    line_id,
+                    &line_text,
                     div()
                         .w_full()
                         .min_w_0()
@@ -282,8 +286,9 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
                                         .whitespace_nowrap()
                                         .child(highlighted(&language, content, cx)),
                                 ),
-                        ),
-                );
+                        )
+                        .into_any_element(),
+                ));
             }
             Block::Table(rows) => {
                 let columns = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);

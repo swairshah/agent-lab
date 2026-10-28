@@ -3,6 +3,7 @@
 // was drawn at almost no width, one letter per line. StyledText measures against the width it gets. Links are
 // clickable ranges: file citations (syncpi://open/..., see citations.rs) open in the app, web links in the browser.
 use crate::theme::{self, MONO, Palette, SANS};
+
 use gpui::*;
 use markdown::mdast::Node;
 use markdown::{ParseOptions, to_mdast};
@@ -134,22 +135,140 @@ fn text(id: String, nodes: &[Node], p: &Palette) -> AnyElement {
         return div().into_any_element();
     }
     let (ranges, urls): (Vec<_>, Vec<_>) = inline.links.into_iter().unzip();
+    let full = inline.text.clone();
     let styled = StyledText::new(inline.text).with_runs(inline.runs);
     if ranges.is_empty() {
-        return styled.into_any_element();
+        return visual_lines(&id, &full, styled, p, |s| s.into_any_element());
     }
-    InteractiveText::new(SharedString::from(id), styled)
-        .on_click(ranges, move |index, window, cx| {
-            let url: &String = &urls[index];
-            if url.starts_with("syncpi://") {
-                crate::citations::handle_url(url);
-                window.refresh();
-            } else if url.starts_with("http://")
-                || url.starts_with("https://")
-                || url.starts_with("mailto:")
-            {
-                cx.open_url(url);
-            }
+    let link_id = id.clone();
+    visual_lines(&id, &full, styled, p, move |styled| {
+        InteractiveText::new(SharedString::from(link_id), styled)
+            .on_click(ranges, move |index, window, cx| {
+                let url: &String = &urls[index];
+                if url.starts_with("syncpi://") {
+                    crate::citations::handle_url(url);
+                    window.refresh();
+                } else if url.starts_with("http://")
+                    || url.starts_with("https://")
+                    || url.starts_with("mailto:")
+                {
+                    cx.open_url(url);
+                }
+            })
+            .into_any_element()
+    })
+}
+
+/// The visual line of `layout` under a point, 0 when it isn't laid out yet.
+fn line_at(layout: &TextLayout, y: Pixels) -> usize {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let bounds = layout.bounds();
+        let height = layout.line_height();
+        if height <= px(0.) {
+            return 0;
+        }
+        (f32::from((y - bounds.top()).max(px(0.))) / f32::from(height)) as usize
+    }))
+    .unwrap_or(0)
+}
+
+/// Text whose lines on screen are stops of the thread's cursor (cursor.rs): each visual line is registered (from the
+/// line starts measured the last time it was drawn), tinted when selected, and clickable; after layout, the line
+/// starts are measured again, and the line the cursor moved to is scrolled into view.
+pub(crate) fn visual_lines(
+    id: &str,
+    full: &str,
+    styled: StyledText,
+    p: &Palette,
+    wrap: impl FnOnce(StyledText) -> AnyElement,
+) -> AnyElement {
+    let layout = styled.layout().clone();
+    let len = full.len();
+    let starts = crate::cursor::starts(id, len);
+    let mut tinted: Vec<(usize, Hsla)> = vec![];
+    for (k, start) in starts.iter().enumerate() {
+        let end = starts.get(k + 1).copied().unwrap_or(len).min(len);
+        let text = full.get(*start..end).unwrap_or("");
+        if let Some(tint) = crate::cursor::line(&format!("{id}#{k}"), text) {
+            tinted.push((k, tint));
+        }
+    }
+    let line_count = starts.len();
+    let (measure, click, follow_id) = (layout.clone(), layout.clone(), id.to_owned());
+    let click_id = id.to_owned();
+    let _ = p;
+    div()
+        .relative()
+        .w_full()
+        .min_w_0()
+        .child(
+            // Under the text: measures its visual lines and tints the selected ones.
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    let Ok(text_bounds) =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| measure.bounds()))
+                    else {
+                        return;
+                    };
+                    let height = measure.line_height();
+                    if height <= px(0.) {
+                        return;
+                    }
+                    let width = f32::from(text_bounds.size.width);
+                    let lines = (f32::from(text_bounds.size.height) / f32::from(height))
+                        .round()
+                        .max(1.) as usize;
+                    if !crate::cursor::measured(&follow_id, len, width) || lines != line_count {
+                        let mut found = vec![0];
+                        for k in 1..lines {
+                            let y = text_bounds.top() + height * (k as f32 + 0.5);
+                            let index =
+                                match measure.index_for_position(point(text_bounds.left(), y)) {
+                                    Ok(i) | Err(i) => i,
+                                };
+                            if index > *found.last().unwrap() && index < len {
+                                found.push(index);
+                            }
+                        }
+                        if crate::cursor::store_starts(&follow_id, len, width, found) {
+                            window.refresh();
+                        }
+                    }
+                    for (k, tint) in &tinted {
+                        let top = text_bounds.top() + height * *k as f32;
+                        window.paint_quad(fill(
+                            Bounds::new(point(bounds.left(), top), size(bounds.size.width, height)),
+                            *tint,
+                        ));
+                    }
+                    // The cursor moved to one of these lines: keep it in view.
+                    for k in 0..line_count {
+                        if let Some(scroll) =
+                            crate::cursor::take_follow(&format!("{follow_id}#{k}"))
+                        {
+                            let top = text_bounds.top() + height * k as f32;
+                            let view = scroll.bounds();
+                            let mut offset = scroll.offset();
+                            let margin = height * 2.;
+                            if top < view.top() + margin {
+                                offset.y += view.top() + margin - top;
+                            } else if top + height > view.bottom() - margin {
+                                offset.y -= top + height - (view.bottom() - margin);
+                            }
+                            scroll.set_offset(offset);
+                            window.refresh();
+                        }
+                    }
+                },
+            )
+            .absolute()
+            .inset_0(),
+        )
+        .child(wrap(styled))
+        .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _, _| {
+            let k = line_at(&click, e.position.y).min(line_count.saturating_sub(1));
+            crate::cursor::click(&format!("{click_id}#{k}"));
         })
         .into_any_element()
 }
@@ -209,6 +328,24 @@ fn block(id: String, node: &Node, p: &Palette) -> AnyElement {
     }
 }
 
+/// A block as a line of the thread's cursor (cursor.rs): tinted when selected, clickable, with the comment box
+/// right under it when it's open there.
+pub(crate) fn as_line(id: String, _text: &str, element: AnyElement) -> AnyElement {
+    let after = crate::cursor::after(&id);
+    let line = div().w_full().min_w_0().child(element);
+    match after {
+        Some(after) => div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(line)
+            .child(after)
+            .into_any_element(),
+        None => line.into_any_element(),
+    }
+}
+
 /// Markdown prose as wrapping native text.
 pub fn render(id: &str, source: &str, cx: &App) -> AnyElement {
     let p = theme::palette(cx);
@@ -222,11 +359,9 @@ pub fn render(id: &str, source: &str, cx: &App) -> AnyElement {
         .flex()
         .flex_col()
         .gap_2()
-        .children(
-            nodes
-                .iter()
-                .enumerate()
-                .map(|(n, node)| block(format!("{id}-{n}"), node, &p)),
-        )
+        .children(nodes.iter().enumerate().map(|(n, node)| {
+            let id = format!("{id}-{n}");
+            as_line(id.clone(), &node.to_string(), block(id, node, &p))
+        }))
         .into_any_element()
 }

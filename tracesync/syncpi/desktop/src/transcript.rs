@@ -253,12 +253,42 @@ impl Desktop {
             .min_h_0()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
+            .track_focus(&self.thread_focus)
+            // A click on a line (prose.rs) puts the cursor there; Shift extends the selection.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, e: &MouseDownEvent, window, cx| {
+                    if let Some(id) = crate::cursor::take_click() {
+                        if !(e.modifiers.shift && this.thread_cursor.is_some()) {
+                            this.thread_anchor = Some(id.clone());
+                        }
+                        this.thread_cursor = Some(id);
+                        this.thread_comment = None;
+                        this.thread_focus.focus(window);
+                        cx.notify();
+                    }
+                }),
+            )
             .px(px(28.))
             .pt(px(28.))
             .pb(px(160.))
             .flex()
             .flex_col()
             .items_center();
+        // The thread's line cursor (cursor.rs): which lines to tint, and the comment box under them.
+        let showing_cursor = self.thread_focus.is_focused(window) || self.thread_comment.is_some();
+        let highlight = if showing_cursor {
+            self.cursor_range()
+                .map(|(lines, a, b)| lines[a..=b].iter().map(|l| l.id.clone()).collect())
+                .unwrap_or_default()
+        } else {
+            Default::default()
+        };
+        let after = self
+            .thread_comment
+            .as_ref()
+            .map(|c| (c.2.clone(), self.quote_box(&p, cx).into_any_element()));
+        crate::cursor::begin(highlight, p.accent.opacity(0.12), after, &self.scroll);
         let mut previous_agent = false;
         let mut model_of_turn = text(&state, "model");
         for unit in display_units(&items) {
@@ -952,14 +982,188 @@ impl Desktop {
         let name = text(&self.native["me"], "name");
         row(
             Some(avatar_person(&name)),
-            Input::new(&self.composer)
-                .appearance(false)
-                .px_0()
-                .py(px(2.))
-                .w_full()
-                .text_size(theme::sz(15.)),
+            div().w_full().child(
+                Input::new(&self.composer)
+                    .appearance(false)
+                    .px_0()
+                    .py(px(2.))
+                    .w_full()
+                    .text_size(theme::sz(15.)),
+            ),
         )
         .mt(px(26.))
+    }
+
+    /// The lines of the last frame and the selected range in them (first, last), if the cursor is on one.
+    fn cursor_range(&self) -> Option<(Vec<crate::cursor::Line>, usize, usize)> {
+        let lines = crate::cursor::lines();
+        let at = |id: &Option<String>| {
+            id.as_ref()
+                .and_then(|id| lines.iter().position(|l| &l.id == id))
+        };
+        let cursor = at(&self.thread_cursor)?;
+        let anchor = at(&self.thread_anchor).unwrap_or(cursor);
+        let (a, b) = (anchor.min(cursor), anchor.max(cursor));
+        Some((lines, a, b))
+    }
+
+    /// Up on the composer's first line moves the cursor to the thread's last line, as in Delta.
+    pub(crate) fn composer_up(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.composer.read(cx).cursor_position().line != 0 {
+            return false;
+        }
+        let Some(last) = crate::cursor::lines().last().cloned() else {
+            return false;
+        };
+        self.thread_cursor = Some(last.id.clone());
+        self.thread_anchor = Some(last.id.clone());
+        self.thread_focus.focus(window);
+        crate::cursor::follow(&last.id);
+        cx.notify();
+        true
+    }
+
+    /// Keys while the thread has focus: arrows move the line cursor, Enter comments, Esc clears. They come from a
+    /// keystroke interceptor (main.rs), ahead of key bindings, so Esc here doesn't also stop the agent.
+    pub(crate) fn thread_key(
+        &mut self,
+        e: &Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let lines = crate::cursor::lines();
+        if lines.is_empty() || e.modifiers.platform || e.modifiers.alt || e.modifiers.control {
+            return false;
+        }
+        let at = self
+            .thread_cursor
+            .as_ref()
+            .and_then(|id| lines.iter().position(|l| &l.id == id));
+        match e.key.as_str() {
+            "up" | "down" => {
+                let next = match (e.key.as_str(), at) {
+                    ("up", None) => lines.len() - 1,
+                    ("up", Some(i)) => i.saturating_sub(1),
+                    ("down", Some(i)) if i + 1 < lines.len() => i + 1,
+                    // Down past the last line goes back to the composer.
+                    _ => {
+                        self.thread_cursor = None;
+                        self.thread_anchor = None;
+                        self.composer.update(cx, |s, cx| s.focus(window, cx));
+                        cx.notify();
+                        return true;
+                    }
+                };
+                if !e.modifiers.shift || self.thread_anchor.is_none() {
+                    self.thread_anchor = Some(lines[next].id.clone());
+                }
+                self.thread_cursor = Some(lines[next].id.clone());
+                crate::cursor::follow(&lines[next].id);
+            }
+            "enter" => {
+                let Some((lines, a, b)) = self.cursor_range() else {
+                    return false;
+                };
+                let excerpt = lines[a..=b]
+                    .iter()
+                    .map(|l| l.text.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.thread_comment =
+                    Some((lines[a].message.clone(), excerpt, lines[b].id.clone()));
+                self.comment_input.update(cx, |input, cx| {
+                    input.set_placeholder("Comment on this", window, cx);
+                    input.set_value("", window, cx);
+                    input.focus(window, cx);
+                });
+            }
+            "escape" => {
+                self.thread_cursor = None;
+                self.thread_anchor = None;
+            }
+            _ => return false,
+        }
+        cx.notify();
+        true
+    }
+
+    /// The comment box under the lines the cursor selected: the quote, the note, Cancel and Comment.
+    fn quote_box(&self, p: &Palette, cx: &mut Context<Self>) -> Div {
+        let quote = self
+            .thread_comment
+            .as_ref()
+            .map(|c| c.1.clone())
+            .unwrap_or_default();
+        let shown: String = if quote.chars().count() > 160 {
+            quote.chars().take(160).collect::<String>() + "…"
+        } else {
+            quote
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_2()
+            .rounded(px(8.))
+            .bg(p.raised)
+            .shadow_sm()
+            .font_family(theme::SANS)
+            .capture_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
+                if e.keystroke.key == "escape" {
+                    this.thread_comment = None;
+                    this.thread_focus.focus(window);
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
+            .child(
+                div()
+                    .pl_2()
+                    .border_l_2()
+                    .border_color(p.accent)
+                    .text_size(theme::sz(13.))
+                    .text_color(p.ink_2)
+                    .child(shown),
+            )
+            .child(
+                Input::new(&self.comment_input)
+                    .appearance(false)
+                    .w_full()
+                    .text_size(theme::sz(14.)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(theme::sz(11.5))
+                            .text_color(p.muted)
+                            .child("⌘↩ to send, Esc to cancel"),
+                    )
+                    .child(
+                        Button::new("cancel-quote")
+                            .ghost()
+                            .xsmall()
+                            .label("Cancel")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.thread_comment = None;
+                                this.thread_focus.focus(window);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("send-quote")
+                            .primary()
+                            .xsmall()
+                            .label("Comment")
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.send_comment(window, cx)),
+                            ),
+                    ),
+            )
     }
 
     fn status_bar(&self, state: &Value, p: &Palette, cx: &mut Context<Self>) -> Div {

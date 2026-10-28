@@ -1,5 +1,6 @@
 mod backend;
 mod citations;
+mod cursor;
 mod diagram;
 mod fileview;
 mod icons;
@@ -138,6 +139,12 @@ struct Desktop {
     palette_scroll: ScrollHandle,
     /// Lines of the open file being commented on, and the comment being written.
     comment_lines: Option<(usize, usize)>,
+    /// The thread's line cursor (cursor.rs): the line it's on, where a Shift selection started, focus, and a comment
+    /// being written on the selection (message key, the quoted text, the line the box goes under).
+    thread_cursor: Option<String>,
+    thread_anchor: Option<String>,
+    thread_focus: FocusHandle,
+    thread_comment: Option<(String, String, String)>,
     comment_input: Entity<InputState>,
     thinking: HashSet<String>,
     scroll: ScrollHandle,
@@ -201,7 +208,56 @@ impl Desktop {
                 .auto_grow(2, 8)
                 .placeholder("Comment on these lines. ⌘↩ to send")
         });
+        // The thread's line cursor and the composer's Up, ahead of key bindings (the editor's own Up, Esc to stop the
+        // agent), which would otherwise take these keys first.
+        let me = cx.entity().downgrade();
+        // macOS can deliver a key press handled here a second time; the repeat is ignored.
+        let mut last: Option<(String, Instant)> = None;
+        let intercept = cx.intercept_keystrokes(move |event, window, cx| {
+            let key = event.keystroke.clone();
+            let stroke = key.unparse();
+            eprintln!(
+                "KEY {stroke} t={:?}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis()
+                    % 100000
+            );
+            if last
+                .as_ref()
+                .is_some_and(|(s, at)| *s == stroke && at.elapsed() < Duration::from_millis(12))
+            {
+                cx.stop_propagation();
+                return;
+            }
+            let handled = me.update(cx, |this, cx| {
+                let plain = !(key.modifiers.shift
+                    || key.modifiers.platform
+                    || key.modifiers.alt
+                    || key.modifiers.control);
+                let handled =
+                    if this.thread_focus.is_focused(window) && this.thread_comment.is_none() {
+                        this.thread_key(&key, window, cx)
+                    } else if key.key == "up"
+                        && plain
+                        && this.composer.focus_handle(cx).is_focused(window)
+                    {
+                        this.composer_up(window, cx)
+                    } else {
+                        false
+                    };
+                if handled {
+                    cx.stop_propagation();
+                }
+                handled
+            });
+            if handled.unwrap_or(false) {
+                last = Some((stroke, Instant::now()));
+            }
+        });
         let subscriptions = vec![
+            intercept,
             cx.subscribe_in(&comment_input, window, |this, _, event, window, cx| {
                 if let InputEvent::PressEnter { secondary: true } = event {
                     this.send_comment(window, cx);
@@ -296,6 +352,10 @@ impl Desktop {
             palette_input,
             palette_scroll: ScrollHandle::new(),
             comment_lines: None,
+            thread_cursor: None,
+            thread_anchor: None,
+            thread_focus: cx.focus_handle(),
+            thread_comment: None,
             comment_input,
             thinking: HashSet::new(),
             scroll: ScrollHandle::new(),
@@ -946,6 +1006,28 @@ impl Desktop {
     }
     /// Sends the comment being written, with the lines it's about, to the thread as its own message.
     fn send_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A comment on lines of the thread: it quotes them.
+        if let Some((message, excerpt, _)) = self.thread_comment.clone() {
+            let note = self.comment_input.read(cx).value().trim().to_owned();
+            if note.is_empty() {
+                return;
+            }
+            self.send(json!({
+                "type": "submit",
+                "requestId": uuid::Uuid::new_v4().to_string(),
+                "text": "",
+                "mode": "followUp",
+                "where": if self.where_vm { "vm" } else { "device" },
+                "comments": [{ "path": "", "start": 0, "end": 0, "excerpt": excerpt, "text": note, "message": message }],
+            }));
+            self.thread_comment = None;
+            self.thread_cursor = None;
+            self.thread_anchor = None;
+            self.comment_input
+                .update(cx, |input, cx| input.set_value("", window, cx));
+            self.notice("Comment sent", cx);
+            return;
+        }
         let Some((start, end)) = self.comment_lines else {
             return;
         };
