@@ -470,8 +470,11 @@ window.syncpiShell = {
 	},
 	titled(id: string, title: string) {
 		const t = catalog.sessions.find((s) => s.id === id);
-		// A new thread is named after its first message.
-		if (t && (!t.title?.trim() || t.title === "New thread")) void decorate(id, { title });
+		// A new thread is named after its first message at once, then gets a short title written from it, as in Delta.
+		if (t && (!t.title?.trim() || t.title === "New thread")) {
+			void decorate(id, { title });
+			void api(`/api/sessions/${id}/title`, {}).then(refresh, () => {});
+		}
 	},
 	openUrl,
 	toast,

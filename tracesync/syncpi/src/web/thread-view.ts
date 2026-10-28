@@ -140,11 +140,13 @@ export class ThreadView {
 			// Messages can be commented on by selecting their text (quote-comments.ts).
 			if (unit.tools.length === 0) node.dataset.key = unit.key;
 			for (const mark of marks.get(unit.key) ?? []) this.#mark(node, mark);
-			// A folded row keeps its open/closed state across updates once its tool has finished.
+			// A folded row keeps its open/closed state across updates once its tool has finished; not the state it had
+			// while running (an edit has no diff to show until it's done, and opens then).
 			const before = have?.el.querySelector<HTMLDetailsElement>(":scope .tool");
 			const after = node.querySelector<HTMLDetailsElement>(":scope .tool");
 			const settled = unit.tools.every((t) => t.status !== "running" && t.status !== "pending");
-			if (before && after && have?.key === unit.key && unit.tools.length > 0 && settled) after.open = before.open;
+			if (after) after.dataset.settled = String(settled);
+			if (before && after && have?.key === unit.key && unit.tools.length > 0 && settled && before.dataset.settled === "true") after.open = before.open;
 			if (have === undefined) {
 				// New items go above the messages still waiting to be sent.
 				const pending = box.querySelector(":scope > .pending");
@@ -431,9 +433,24 @@ export class ThreadView {
 			const path = String(item.args.path ?? "");
 			body.append(el("div", "tool-note", kindOfPath(path) === "image" ? "image" : `${item.output.split("\n").length} lines`));
 		} else if (item.output.trim()) {
+			// Long output shows its end, where the result is, as in Delta; the rest is a click away.
+			const lines = item.output.trimEnd().slice(-20_000).split("\n");
 			const pre = el("pre", "tool-output");
-			pre.textContent = item.output.trimEnd().slice(-20_000);
-			body.append(pre);
+			const TAIL = 10;
+			if (lines.length > TAIL + 3) {
+				const more = el("button", "tool-more", `Show ${lines.length - TAIL} more lines`);
+				more.type = "button";
+				more.contentEditable = "false";
+				more.addEventListener("click", () => {
+					pre.textContent = lines.join("\n");
+					more.remove();
+				});
+				pre.textContent = lines.slice(-TAIL).join("\n");
+				body.append(more, pre);
+			} else {
+				pre.textContent = lines.join("\n");
+				body.append(pre);
+			}
 		}
 		node.append(body);
 		if (item.status === "error") node.open = true;
