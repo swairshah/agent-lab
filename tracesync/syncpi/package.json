@@ -1,0 +1,35 @@
+{
+  "name": "syncpi",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "^1.4.0",
+    "@earendil-works/pi-ai": "^1.4.0",
+    "@earendil-works/pi-coding-agent": "^1.4.0",
+    "@earendil-works/pi-durable": "^1.4.0",
+    "@earendil-works/pi-env": "^1.4.0",
+    "@earendil-works/pi-tui": "^1.4.0",
+    "marked": "^15.0.12",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/ws": "^8.18.2",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  },
+  "description": "A multiplayer pi session whose agent runs on its own exe.dev VM",
+  "bin": {
+    "syncpi": "dist/cli.mjs"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "smoke": "node build.mjs && tsx test/smoke.ts"
+  }
+}
