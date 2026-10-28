@@ -37,7 +37,13 @@ fn flag(value: &Value, key: &str) -> bool {
 }
 /// The highlighter language for a file, from its extension.
 fn language_of(path: &str) -> &'static str {
-    match path.rsplit('.').next().unwrap_or("").to_lowercase().as_str() {
+    match path
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_lowercase()
+        .as_str()
+    {
         "rs" => "rust",
         "ts" | "mts" | "cts" => "typescript",
         "tsx" => "tsx",
@@ -123,11 +129,16 @@ struct Desktop {
     palette: Option<PaletteState>,
     palette_input: Entity<InputState>,
     palette_scroll: ScrollHandle,
+    /// Lines of the open file being commented on, and the comment being written.
+    comment_lines: Option<(usize, usize)>,
+    comment_input: Entity<InputState>,
     thinking: HashSet<String>,
     scroll: ScrollHandle,
     files: Vec<String>,
     file_path: String,
     file_hash: String,
+    /// The open file as the project has it, to tell a real local edit from the file as loaded.
+    file_text: String,
     git: Value,
     share_url: String,
     models: Vec<Value>,
@@ -170,7 +181,18 @@ impl Desktop {
         let palette_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder("Search commands, threads and files…")
         });
+        let comment_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .multi_line(true)
+                .auto_grow(2, 8)
+                .placeholder("Comment on these lines. ⌘↩ to send")
+        });
         let subscriptions = vec![
+            cx.subscribe_in(&comment_input, window, |this, _, event, window, cx| {
+                if let InputEvent::PressEnter { secondary: true } = event {
+                    this.send_comment(window, cx);
+                }
+            }),
             cx.subscribe_in(
                 &palette_input,
                 window,
@@ -207,13 +229,16 @@ impl Desktop {
             ),
             cx.subscribe_in(&editor, window, |this, _, event, _, cx| {
                 if matches!(event, InputEvent::Change) && !this.file_path.is_empty() {
-                    this.prefs.files.insert(
-                        format!("{}:{}", this.active, this.file_path),
-                        (
-                            this.editor.read(cx).value().to_string(),
-                            this.file_hash.clone(),
-                        ),
-                    );
+                    // A draft is kept only while the editor differs from the file.
+                    let key = format!("{}:{}", this.active, this.file_path);
+                    let value = this.editor.read(cx).value().to_string();
+                    if value == this.file_text {
+                        this.prefs.files.remove(&key);
+                    } else {
+                        this.prefs
+                            .files
+                            .insert(key, (value, this.file_hash.clone()));
+                    }
                     this.persist();
                 }
             }),
@@ -256,11 +281,14 @@ impl Desktop {
             palette: None,
             palette_input,
             palette_scroll: ScrollHandle::new(),
+            comment_lines: None,
+            comment_input,
             thinking: HashSet::new(),
             scroll: ScrollHandle::new(),
             files: vec![],
             file_path: String::new(),
             file_hash: String::new(),
+            file_text: String::new(),
             git: Value::Null,
             share_url: String::new(),
             models: vec![],
@@ -373,6 +401,7 @@ impl Desktop {
                             _ if tag.starts_with("file:") => {
                                 self.file_path = tag[5..].into();
                                 self.file_hash = text(&value, "hash");
+                                self.file_text = text(&value, "text");
                                 let key = format!("{}:{}", self.active, self.file_path);
                                 let saved = self.prefs.files.get(&key).cloned();
                                 let content = if let Some((text, base)) = saved {
@@ -389,6 +418,7 @@ impl Desktop {
                             }
                             _ if tag.starts_with("saved:") => {
                                 self.file_hash = text(&value, "hash");
+                                self.file_text = self.editor.read(cx).value().to_string();
                                 self.prefs
                                     .files
                                     .remove(&format!("{}:{}", self.active, &tag[6..]));
@@ -781,6 +811,7 @@ impl Desktop {
             "view.files" => self.set_pane("files", cx),
             "view.people" => self.set_pane("people", cx),
             "view.terminal" => self.run_action("terminal", window, cx),
+            "file.comment" => self.start_comment(window, cx),
             "project.sync" => self.run_action("sync", window, cx),
             "project.reveal" => self.run_action("reveal", window, cx),
             "project.zed" => self.run_action("zed", window, cx),
@@ -792,6 +823,90 @@ impl Desktop {
             }
             _ => {}
         }
+    }
+    /// Starts a comment on the lines selected in the open file (or the cursor's line), as in Delta.
+    pub(crate) fn start_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.file_path.is_empty() || self.pane != "files" {
+            return self.notice("Open a file and select lines to comment on them.", cx);
+        }
+        let text = self.editor.read(cx).value().to_string();
+        let selection = self.editor.update(cx, |editor, cx| {
+            editor.selected_text_range(true, window, cx)
+        });
+        let Some(selection) = selection else { return };
+        // UTF-16 offsets to 1-based line numbers.
+        let line_at = |offset: usize| {
+            let mut units = 0;
+            let mut line = 1;
+            for ch in text.chars() {
+                if units >= offset {
+                    break;
+                }
+                units += ch.len_utf16();
+                if ch == '\n' {
+                    line += 1;
+                }
+            }
+            line
+        };
+        let start = line_at(selection.range.start);
+        // A selection ending at the start of a line doesn't include that line.
+        let end = line_at(
+            selection
+                .range
+                .end
+                .saturating_sub(1)
+                .max(selection.range.start),
+        )
+        .max(start);
+        self.comment_lines = Some((start, end));
+        self.comment_input.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.focus(window, cx);
+        });
+        cx.notify();
+    }
+    /// Sends the comment being written, with the lines it's about, to the thread as its own message.
+    fn send_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((start, end)) = self.comment_lines else {
+            return;
+        };
+        let note = self.comment_input.read(cx).value().trim().to_owned();
+        if note.is_empty() {
+            return;
+        }
+        let excerpt = self
+            .editor
+            .read(cx)
+            .value()
+            .lines()
+            .skip(start - 1)
+            .take(end - start + 1)
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.send(json!({
+            "type": "submit",
+            "requestId": uuid::Uuid::new_v4().to_string(),
+            "text": "",
+            "mode": "followUp",
+            "where": if self.where_vm { "vm" } else { "device" },
+            "comments": [{ "path": self.file_path, "start": start, "end": end, "excerpt": excerpt, "text": note }],
+        }));
+        self.comment_lines = None;
+        self.comment_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.notice(
+            format!(
+                "Comment on {}:{} sent",
+                self.file_path,
+                if start == end {
+                    start.to_string()
+                } else {
+                    format!("{start}-{end}")
+                }
+            ),
+            cx,
+        );
     }
     /// Opens a project file in the files pane.
     pub(crate) fn open_file(&mut self, path: String, cx: &mut Context<Self>) {
@@ -1061,6 +1176,17 @@ impl Desktop {
                                 )
                                 .child(label(self.file_path.clone()).flex_1().text_xs())
                                 .child(
+                                    Button::new("comment-file")
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(icons::icon("message-square"))
+                                        .label("Comment")
+                                        .tooltip("Comment on the selected lines (⌥⌘M)")
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.start_comment(window, cx)
+                                        })),
+                                )
+                                .child(
                                     Button::new("mention-file")
                                         .ghost()
                                         .xsmall()
@@ -1093,7 +1219,56 @@ impl Desktop {
                                         })),
                                 ),
                         )
-                        .child(Input::new(&self.editor).h_full().bordered(false))
+                        .child(
+                            Input::new(&self.editor)
+                                .h_full()
+                                .bordered(false)
+                                .font_family(theme::MONO)
+                                .text_size(px(12.5)),
+                        )
+                        .when_some(self.comment_lines, |d, (start, end)| {
+                            let p = theme::palette(cx);
+                            d.child(
+                                div()
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .m_2()
+                                    .p_2()
+                                    .rounded(px(8.))
+                                    .border_l_2()
+                                    .border_color(p.accent)
+                                    .bg(p.surface)
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .text_size(px(12.))
+                                            .text_color(p.muted)
+                                            .child(div().flex_1().child(format!(
+                                                "Comment on {}:{}",
+                                                self.file_path,
+                                                if start == end {
+                                                    start.to_string()
+                                                } else {
+                                                    format!("{start}-{end}")
+                                                }
+                                            )))
+                                            .child(
+                                                Button::new("cancel-comment")
+                                                    .ghost()
+                                                    .xsmall()
+                                                    .label("Cancel")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.comment_lines = None;
+                                                        cx.notify();
+                                                    })),
+                                            ),
+                                    )
+                                    .child(Input::new(&self.comment_input).w_full()),
+                            )
+                        })
                         .child(
                             label(if dirty {
                                 "Unsaved draft saved locally"

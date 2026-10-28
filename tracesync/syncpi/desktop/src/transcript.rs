@@ -363,6 +363,7 @@ impl Desktop {
                 }))
         });
         let attachments = array(item, "attachments");
+        let comments = array(item, "comments");
         let group = SharedString::from(format!("message-{key}"));
         row(
             Some(avatar_person(&name)),
@@ -380,7 +381,7 @@ impl Desktop {
                             div()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(color)
-                                .child(name),
+                                .child(name.clone()),
                         )
                         .child(div().flex_1())
                         // Shown while the pointer is over the message, as on the web.
@@ -398,6 +399,20 @@ impl Desktop {
                             .line_height(px(24.))
                             .text_color(p.ink)
                             .child(body),
+                    )
+                })
+                .when(!comments.is_empty(), |d| {
+                    d.child(div().text_size(px(15.)).text_color(p.muted).child(
+                        if comments.len() == 1 {
+                            "1 comment".to_owned()
+                        } else {
+                            format!("{} comments", comments.len())
+                        },
+                    ))
+                    .children(
+                        comments.iter().enumerate().map(|(n, c)| {
+                            self.comment_card(c, &name, &format!("{key}-c{n}"), p, cx)
+                        }),
                     )
                 })
                 .when(!attachments.is_empty(), |d| {
@@ -748,6 +763,108 @@ impl Desktop {
             content = content.child(list);
         }
         row((!previous_agent).then(|| avatar_model(model, p)), content)
+    }
+
+    /// A comment on file lines, as Delta shows it: file:lines (opening the file), the lines, the note.
+    fn comment_card(
+        &self,
+        c: &Value,
+        name: &str,
+        id: &str,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let path = text(c, "path");
+        let (start, end) = (
+            c["start"].as_u64().unwrap_or(1),
+            c["end"].as_u64().unwrap_or(1),
+        );
+        let target = path.clone();
+        let lines: Vec<String> = text(c, "excerpt").lines().map(str::to_owned).collect();
+        let shown = lines.len().min(6);
+        div()
+            .mt_1()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .p_2()
+            .rounded(px(10.))
+            .border_1()
+            .border_color(p.rule)
+            .bg(p.surface)
+            .child(
+                div()
+                    .id(eid(format!("{id}-where")))
+                    .font_family(MONO)
+                    .text_size(px(12.5))
+                    .text_color(p.ink_2)
+                    .underline()
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(p.accent))
+                    .child(format!(
+                        "{path}:{}",
+                        if start == end {
+                            start.to_string()
+                        } else {
+                            format!("{start}-{end}")
+                        }
+                    ))
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.open_file(target.clone(), cx)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .py_1()
+                    .rounded(px(6.))
+                    .bg(p.raised)
+                    .font_family(MONO)
+                    .text_size(px(12.5))
+                    .children(lines.iter().take(shown).enumerate().map(|(n, line)| {
+                        div()
+                            .flex()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .w(px(36.))
+                                    .flex_shrink_0()
+                                    .text_right()
+                                    .text_color(p.faint)
+                                    .child((start as usize + n).to_string()),
+                            )
+                            .child(
+                                div()
+                                    .bg(p.removed.opacity(0.1))
+                                    .whitespace_nowrap()
+                                    .child(line.replace('\t', "  ")),
+                            )
+                    }))
+                    .when(lines.len() > shown, |d| {
+                        d.child(
+                            div()
+                                .pl(px(48.))
+                                .text_size(px(12.))
+                                .text_color(p.muted)
+                                .child(format!("{} more lines", lines.len() - shown)),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap_2()
+                    .px_2()
+                    .py_1()
+                    .rounded_r(px(6.))
+                    .border_l_2()
+                    .border_color(p.accent)
+                    .bg(p.raised)
+                    .child(avatar_person(name).size(px(22.)).text_size(px(9.)))
+                    .child(div().text_size(px(14.5)).child(text(c, "text"))),
+            )
     }
 
     /// The next row of the thread: your avatar and a plain place to type. Enter starts a new line; ⌘↩ sends.

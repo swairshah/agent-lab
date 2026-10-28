@@ -429,7 +429,8 @@ fn highlighted(language: &str, code: String, cx: &App) -> StyledText {
         .unwrap()
         .entry(key)
         .or_insert_with(|| {
-            let mut highlighter = gpui_component::highlighter::SyntaxHighlighter::new(&language.to_lowercase());
+            let mut highlighter =
+                gpui_component::highlighter::SyntaxHighlighter::new(&language.to_lowercase());
             highlighter.update(None, &gpui_component::input::Rope::from_str(&code));
             highlighter.styles(&(0..code.len()), theme)
         })
