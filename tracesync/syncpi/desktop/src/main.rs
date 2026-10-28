@@ -227,6 +227,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(Host(Mutex::new(Some(child))))
         .invoke_handler(tauri::generate_handler![quit])
         .menu(menu)

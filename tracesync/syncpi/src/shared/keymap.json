@@ -3,6 +3,7 @@
 	{ "id": "palette.commands", "title": "Show all commands", "group": "General", "keys": "cmd-shift-p", "apps": ["web", "desktop"] },
 	{ "id": "palette.files", "title": "Go to file", "group": "General", "keys": "cmd-p", "apps": ["web", "desktop"] },
 	{ "id": "palette.threads", "title": "Go to thread", "group": "General", "keys": "cmd-t", "apps": ["desktop"] },
+	{ "id": "inbox.toggle", "title": "Toggle Inbox", "group": "General", "keys": "cmd-shift-j", "apps": ["web", "desktop"], "quick": true },
 	{ "id": "app.keymap", "title": "Keyboard shortcuts", "group": "General", "keys": "cmd-/", "apps": ["web", "desktop"] },
 	{ "id": "app.settings", "title": "Settings", "group": "General", "keys": "cmd-,", "apps": ["web", "desktop"] },
 	{ "id": "app.zoomIn", "title": "Bigger text", "group": "View", "keys": "cmd-=", "apps": ["desktop"] },

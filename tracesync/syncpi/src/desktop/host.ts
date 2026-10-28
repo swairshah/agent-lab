@@ -14,6 +14,7 @@ import { home, identity, loadSession } from '../cli/store.ts';
 import { piDefaults } from '../cli/provision.ts';
 import { hashBytes, listFiles, safePath, MAX_FILE_BYTES } from '../shared/files.ts';
 import type { ClientMessage, ServerMessage } from '../shared/protocol.ts';
+import { mentionsOf } from '../shared/mentions.ts';
 
 const run = promisify(execFile);
 const appDir = dirname(fileURLToPath(import.meta.url));
@@ -68,6 +69,17 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   if (WEB_ASSET.test(url.pathname.slice(1))) return staticFile(res, join(webDir, url.pathname.slice(1)));
   if (url.pathname === '/api/sessions' && req.method === 'GET') return json(res, { sessions: runtime.list(), identity: identity(), defaults: piDefaults(), login });
   if (url.pathname === '/api/sessions' && req.method === 'POST') { const data = await input(req); return json(res, { id: await runtime.create({ ...data, faux: args.faux }) }); }
+  // Messages that mention you in any thread (the inbox): shared threads are followed in the background for this.
+  if (url.pathname === '/api/inbox' && req.method === 'GET') {
+    const items = [];
+    for (const s of runtime.list()) {
+      const live = runtime.live.get(s.id) ?? runtime.watch(s.id);
+      const me = live?.native.me;
+      if (!live || !me) continue;
+      for (const m of mentionsOf(live.native.main.state, me)) items.push({ ...m, thread: s.id, threadTitle: s.title || s.name, author: live.native.members.find(p => p.id === m.memberId)?.name ?? m.author });
+    }
+    return json(res, { items });
+  }
   if (url.pathname === '/api/join' && req.method === 'POST') { const data = await input(req); const id = await runtime.join(data.url, data.name); login = undefined; return json(res, { id }); }
   const action = url.pathname.match(/^\/api\/sessions\/([a-zA-Z0-9_-]+)\/([a-z-]+)$/);
   if (action) {

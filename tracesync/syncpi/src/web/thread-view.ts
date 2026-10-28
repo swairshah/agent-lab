@@ -67,6 +67,46 @@ export class ThreadView {
 		this.reset();
 	}
 
+	/** Scrolls to a message (by its key) and flashes it, as the inbox does. Returns whether it's in the thread. */
+	reveal(key: string): boolean {
+		if (this.#conv !== "main") this.show("main");
+		const node = this.#box.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"]`);
+		if (node === null) return false;
+		node.scrollIntoView({ block: "center", behavior: "smooth" });
+		node.classList.remove("flash");
+		void node.offsetWidth;
+		node.classList.add("flash");
+		return true;
+	}
+
+	/** "@Name" for members of the session, in a message's text: marked, and more strongly when it's you. */
+	#markMentions(body: HTMLElement): void {
+		const names = [...this.#session.names.values()].filter(Boolean).sort((a, b) => b.length - a.length);
+		if (names.length === 0) return;
+		const me = this.#session.me?.name.toLowerCase();
+		const pattern = new RegExp(`(^|[^\\w@])@(${names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})(?![\\w])`, "gi");
+		const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.parentElement?.closest("pre, code, a, .mention") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
+		const texts: Text[] = [];
+		for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) texts.push(n as Text);
+		for (const node of texts) {
+			const text = node.textContent ?? "";
+			pattern.lastIndex = 0;
+			if (!pattern.test(text)) continue;
+			pattern.lastIndex = 0;
+			const out = document.createDocumentFragment();
+			let at = 0;
+			for (const m of text.matchAll(pattern)) {
+				const start = m.index! + m[1]!.length;
+				out.append(text.slice(at, start));
+				const span = el("span", m[2]!.toLowerCase() === me ? "mention me" : "mention", `@${m[2]}`);
+				out.append(span);
+				at = start + 1 + m[2]!.length;
+			}
+			out.append(text.slice(at));
+			node.replaceWith(out);
+		}
+	}
+
 	/** Re-renders everything, e.g. after a rename (authors show current names) or a role change. */
 	reset(): void {
 		disposeWithin(this.#box);
@@ -242,7 +282,10 @@ export class ThreadView {
 			status ? `<span>${escapeHtml(status)}</span>` : ""
 		}</div>${text ? `<div class="msg-body prose">${renderMarkdown(text, { breaks: true })}</div>` : ""}</div>`;
 		const body = node.querySelector<HTMLElement>(".msg-body");
-		if (body !== null) this.#linkFileNames(body);
+		if (body !== null) {
+			this.#linkFileNames(body);
+			this.#markMentions(body);
+		}
 		if (comments.length > 0) {
 			const box = el("details", "fold comments");
 			box.open = true;

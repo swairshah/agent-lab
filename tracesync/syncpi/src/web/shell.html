@@ -13,6 +13,10 @@
   <nav id="sidebar" class="sidebar" aria-label="Threads">
     <header class="sidebar-head">
       <span class="spacer"></span>
+      <button id="sidebar-inbox" type="button" class="icon-button small" title="Inbox (⇧⌘J)" aria-label="Inbox">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 11.5 5.5 4.5h9l2 7v3.5a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5z"/><path d="M3.5 11.5h4l1 2h3l1-2h4"/></svg>
+        <span id="inbox-badge" class="badge"></span>
+      </button>
       <button id="sidebar-search" type="button" class="icon-button small" title="Go to thread (⌘T)" aria-label="Go to thread">
         <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5"/><path d="m13 13 3.5 3.5"/></svg>
       </button>
@@ -108,6 +112,13 @@
   <input id="palette-input" autocomplete="off" spellcheck="false" aria-label="Search">
   <div id="palette-tabs" class="palette-tabs" role="tablist"></div>
   <div id="palette-list" class="palette-list" role="listbox"></div>
+</dialog>
+
+<dialog id="inbox" class="palette inbox" aria-label="Inbox">
+  <header class="inbox-titlebar"><h2>Inbox</h2><span class="spacer"></span><button id="inbox-read-all" type="button" class="text-button">Mark all read</button></header>
+  <div id="inbox-tabs" class="palette-tabs" role="tablist"></div>
+  <div id="inbox-list" class="palette-list" role="listbox" tabindex="-1"></div>
+  <footer class="inbox-foot"><span class="spacer"></span>Open <kbd>↩</kbd></footer>
 </dialog>
 
 <div id="toast" class="toast" role="status" hidden></div>

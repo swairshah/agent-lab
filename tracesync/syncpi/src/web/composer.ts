@@ -114,7 +114,7 @@ export class Composer {
 		this.#c = context;
 		this.#input = $<HTMLTextAreaElement>("input");
 		if (TOUCH) {
-			this.#input.placeholder = "@ for files, / for commands";
+			this.#input.placeholder = "@ for people and files, / for commands";
 			this.#input.enterKeyHint = "send";
 		}
 		this.#draftKey = `draft:${draftKey}`;
@@ -300,9 +300,13 @@ export class Composer {
 		// Commands only at the start of the message.
 		if (match === null || (match[1] === "/" && before.trimStart().indexOf("/") !== 0)) return this.#hideCompletions();
 		const query = match[2]!.toLowerCase();
+		// @ completes people (to mention them; they get it in their inbox), then files.
+		const people = this.#c.session.members
+			.filter((m) => m.id !== this.#c.session.me?.id && m.name.toLowerCase().startsWith(query))
+			.map((m) => ({ name: m.name, description: "mention" }));
 		const options: { name: string; description: string }[] =
 			match[1] === "@"
-				? this.#c.session.files.filter((f) => f.toLowerCase().includes(query)).slice(0, 40).map((name) => ({ name, description: "" }))
+				? [...people, ...this.#c.session.files.filter((f) => f.toLowerCase().includes(query)).slice(0, 40).map((name) => ({ name, description: "" }))]
 				: [...this.#commands().map(({ name, description }) => ({ name, description })), ...this.prompts.map((name) => ({ name, description: "prompt template" }))].filter((c) =>
 						c.name.toLowerCase().startsWith(query),
 					);

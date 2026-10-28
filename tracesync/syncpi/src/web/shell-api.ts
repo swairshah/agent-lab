@@ -5,6 +5,7 @@ import { storage } from "./dom.ts";
 /** Commands that span threads or reach the system; the shell carries them out wherever they're pressed. */
 export const SHELL_COMMANDS = [
 	"palette.threads",
+	"inbox.toggle",
 	"thread.new",
 	"project.add",
 	"thread.join",

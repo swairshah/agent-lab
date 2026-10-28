@@ -77,7 +77,7 @@
           <span id="me-avatar" class="avatar" aria-hidden="true"></span>
           <div class="composer-main">
             <div id="attachments" class="attachments" hidden></div>
-            <textarea id="input" rows="1" placeholder="@ for files, / for commands. ⌘↩ to send" aria-label="Message"></textarea>
+            <textarea id="input" rows="1" placeholder="@ for people and files, / for commands. ⌘↩ to send" aria-label="Message"></textarea>
             <p id="viewer-note" class="viewer-note" hidden>You're a viewer in this session. An admin can make you an editor.</p>
           </div>
           <input id="file-input" type="file" multiple hidden>
@@ -243,6 +243,13 @@
     <input id="palette-input" autocomplete="off" spellcheck="false" aria-label="Search">
     <div id="palette-tabs" class="palette-tabs" role="tablist"></div>
     <div id="palette-list" class="palette-list" role="listbox"></div>
+  </dialog>
+
+  <dialog id="inbox" class="palette inbox" aria-label="Inbox">
+    <header class="inbox-titlebar"><h2>Inbox</h2><span class="spacer"></span><button id="inbox-read-all" type="button" class="text-button">Mark all read</button></header>
+    <div id="inbox-tabs" class="palette-tabs" role="tablist"></div>
+    <div id="inbox-list" class="palette-list" role="listbox" tabindex="-1"></div>
+    <footer class="inbox-foot"><span class="spacer"></span>Open <kbd>↩</kbd></footer>
   </dialog>
 
   <dialog id="keymap-dialog" class="keymap">

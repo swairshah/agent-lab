@@ -29,6 +29,8 @@ import { Settings } from "./settings.ts";
 import { avatarHtml, ThreadView } from "./thread-view.ts";
 import { applyZoom, dragWindow, SHELL_COMMANDS, shell } from "./shell-api.ts";
 import { Terminals } from "./terminal.ts";
+import { Inbox } from "./inbox.ts";
+import { mentionsOf } from "../shared/mentions.ts";
 import { Git } from "./git.ts";
 
 type Theme = "system" | "light" | "dark";
@@ -320,6 +322,23 @@ async function main(): Promise<void> {
 			choose: (model, thinkingLevel) => session.send({ type: "configure", model, thinkingLevel }),
 		});
 	};
+	// The inbox: in a browser, this thread's mentions of you; in the app the shell keeps one for every thread and asks
+	// this page to show a message (syncpiReveal).
+	const inboxItems = () => {
+		const me = session.me;
+		const info = session.info;
+		if (me === undefined || info === undefined) return [];
+		return mentionsOf(session.threads.main.state, me).map((m) => ({ ...m, author: session.nameOf(m.memberId, m.author), thread: info.id, threadTitle: info.name }));
+	};
+	const inbox = app ? undefined : new Inbox({ load: inboxItems, open: (item) => threadView.reveal(item.key), many: false });
+	if (inbox) {
+		session.on("thread", () => {
+			for (const m of inbox.fresh(inboxItems())) toast(`${m.author} mentioned you: ${m.text.split("\n")[0]!.slice(0, 90)}`);
+			inbox.update();
+		});
+	}
+	(window as Window & { syncpiReveal?: (key: string) => boolean }).syncpiReveal = (key) => threadView.reveal(key);
+
 	// What each command in src/shared/keymap.json does here; in the app, the shell's commands go up to it.
 	const fromShell = Object.fromEntries((app ? SHELL_COMMANDS : []).map((id) => [id, () => void app!.command(id)]));
 	const palette = new Palette({
@@ -332,6 +351,7 @@ async function main(): Promise<void> {
 		handlers: {
 			...fromShell,
 			"palette.threads": () => palette.open("threads"),
+			...(inbox ? { "inbox.toggle": () => inbox.toggle() } : {}),
 			"palette.all": () => palette.open("all"),
 			"palette.commands": () => palette.open("commands"),
 			"palette.files": () => palette.open("files"),
@@ -363,7 +383,7 @@ async function main(): Promise<void> {
 		if (event.key === "Escape" || event.defaultPrevented) return;
 		// With a dialog open only the palette and settings shortcuts apply, so typing there stays typing.
 		const dialog = document.querySelector("dialog[open]");
-		if (dialog !== null && dialog.id !== "palette" && dialog.id !== "settings-dialog") return;
+		if (dialog !== null && dialog.id !== "palette" && dialog.id !== "settings-dialog" && dialog.id !== "inbox") return;
 		palette.handleKey(event);
 	});
 

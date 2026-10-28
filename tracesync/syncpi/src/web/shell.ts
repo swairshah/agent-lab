@@ -10,6 +10,7 @@ import { commandsFor, matchesKeys } from "../shared/keymap.ts";
 import { $, el, escapeHtml, initials, personColor, storage } from "./dom.ts";
 import { Palette, type ThreadRow } from "./palette.ts";
 import { applyZoom, dragWindow, type Shell, SHELL_COMMANDS, zoomBy } from "./shell-api.ts";
+import { Inbox, type InboxItem } from "./inbox.ts";
 
 type Thread = {
 	id: string;
@@ -39,6 +40,7 @@ declare global {
 			core: { invoke(command: string, args?: Record<string, unknown>): Promise<unknown> };
 			dialog?: { open(options: Record<string, unknown>): Promise<string | string[] | null> };
 			opener?: { openUrl(url: string): Promise<void> };
+			notification?: { isPermissionGranted(): Promise<boolean>; requestPermission(): Promise<string>; sendNotification(options: { title: string; body?: string }): void };
 		};
 		syncpiShell?: Shell;
 		syncpiCommand?: (id: string) => void;
@@ -106,6 +108,7 @@ function renderSidebar(): void {
 	const list = $("sidebar-list");
 	list.replaceChildren();
 	const groups = grouped();
+	const unreadThreads = new Set(inbox.unread(inboxItems).map((i) => i.thread));
 	list.append(el("div", "sidebar-label", archives ? "Archived" : "Projects"));
 	if (groups.length === 0) list.append(el("p", "sidebar-empty muted", archives ? "No archived threads." : "No threads yet."));
 	for (const group of groups) {
@@ -122,7 +125,8 @@ function renderSidebar(): void {
 			row.setAttribute("aria-current", String(t.id === active));
 			const state = t.status === "failed" ? `<span class="thread-state failed" title="${escapeHtml(t.error ?? "Setup failed")}">${ICONS.failed}</span>` : t.status === "provisioning" || busy.get(t.id) ? '<span class="thread-state spinner" aria-label="Working"></span>' : "";
 			const tags = (t.tags ?? []).map((tag) => `<span class="thread-tag">${escapeHtml(tag)}</span>`).join("");
-			row.innerHTML = `<span class="sidebar-name">${escapeHtml(titleOf(t))}</span>${tags}${t.pinned ? `<span class="thread-pin" title="Pinned">${ICONS.pin}</span>` : ""}${state}`;
+			const unread = unreadThreads.has(t.id) ? '<span class="thread-unread" title="Unread mentions"></span>' : "";
+			row.innerHTML = `<span class="sidebar-name">${escapeHtml(titleOf(t))}</span>${unread}${tags}${t.pinned ? `<span class="thread-pin" title="Pinned">${ICONS.pin}</span>` : ""}${state}`;
 			list.append(row);
 		}
 	}
@@ -181,6 +185,46 @@ function show(id: string): void {
 /** With the sidebar hidden, a thread's top bar starts after the window's traffic lights. */
 function controls(frame: HTMLIFrameElement): void {
 	frame.contentDocument?.documentElement.classList.toggle("window-controls", document.body.classList.contains("sidebar-hidden"));
+}
+
+// ---------- the inbox: mentions of you in every thread ----------
+
+let inboxItems: InboxItem[] = [];
+
+/** Opens a thread at a message: once its page is up and has the message, it scrolls there and flashes it. */
+function reveal(thread: string, key: string): void {
+	show(thread);
+	const started = Date.now();
+	const attempt = () => {
+		const page = frames.get(thread)?.contentWindow as (Window & { syncpiReveal?: (key: string) => boolean }) | null | undefined;
+		if (page?.syncpiReveal?.(key)) return;
+		if (Date.now() - started < 10_000) setTimeout(attempt, 250);
+		else toast("That message is no longer in the thread.");
+	};
+	attempt();
+}
+
+const inbox = new Inbox({ load: () => inboxItems, open: (item) => reveal(item.thread, item.key), many: true });
+
+/** A new mention: a toast here, and a notification from the system when the app isn't in front. */
+async function announce(item: InboxItem): Promise<void> {
+	toast(`${item.author} mentioned you in ${item.threadTitle}`);
+	const notes = tauri?.notification;
+	if (notes === undefined || document.hasFocus()) return;
+	if (!(await notes.isPermissionGranted()) && (await notes.requestPermission()) !== "granted") return;
+	notes.sendNotification({ title: `${item.author} mentioned you`, body: `${item.threadTitle}: ${item.text.split("\n")[0]!.slice(0, 140)}` });
+}
+
+async function pollInbox(): Promise<void> {
+	const data = await api<{ items: InboxItem[] }>("/api/inbox").catch(() => undefined);
+	if (data === undefined) return;
+	const before = JSON.stringify(inboxItems.map((i) => [i.thread, i.key, i.comment]));
+	inboxItems = data.items.sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
+	for (const item of inbox.fresh(inboxItems)) void announce(item);
+	const unread = inbox.unread(inboxItems).length;
+	$("inbox-badge").textContent = unread > 0 ? String(unread) : "";
+	if (JSON.stringify(inboxItems.map((i) => [i.thread, i.key, i.comment])) !== before) renderSidebar();
+	inbox.update();
 }
 
 /** Runs a command in the open thread's page. */
@@ -353,6 +397,11 @@ const commands: Record<string, () => void> = {
 	"palette.commands": () => inThread("palette.commands") || palette.open("commands"),
 	"palette.files": () => inThread("palette.files") || palette.open("files"),
 	"palette.threads": () => inThread("palette.threads") || palette.open("threads"),
+	"inbox.toggle": () => {
+		inbox.toggle();
+		// Reading marks: the badge and dots follow when it closes.
+		$("inbox").addEventListener("close", () => void pollInbox(), { once: true });
+	},
 	"thread.new": () => newThread(),
 	"project.add": () => void openProject(),
 	"thread.join": () => join(),
@@ -466,6 +515,7 @@ function wire(): void {
 	addEventListener("blur", () => ($("context-menu").hidden = true));
 	$("sidebar-new").addEventListener("click", () => newThread());
 	$("sidebar-search").addEventListener("click", () => commands["palette.threads"]!());
+	$("sidebar-inbox").addEventListener("click", () => commands["inbox.toggle"]!());
 	$("archive-toggle").addEventListener("click", () => commands["thread.archives"]!());
 	$("theme-toggle").addEventListener("click", () => commands["app.theme"]!());
 	$("empty-open").addEventListener("click", () => void openProject());
@@ -521,7 +571,7 @@ function wire(): void {
 	// Shortcuts while the shell itself has focus (the sidebar, or no thread open).
 	const keys = commandsFor("desktop").filter((c) => c.keys && commands[c.id]);
 	document.addEventListener("keydown", (event) => {
-		if (event.defaultPrevented || document.querySelector("dialog[open]:not(#palette)")) return;
+		if (event.defaultPrevented || document.querySelector("dialog[open]:not(#palette):not(#inbox)")) return;
 		const command = keys.find((c) => matchesKeys(event, c.keys!));
 		if (command === undefined) return;
 		event.preventDefault();
@@ -566,3 +616,5 @@ await refresh();
 renderSidebar();
 show(catalog.sessions.some((t) => t.id === active) ? active : (order()[0] ?? ""));
 setInterval(() => void refresh(), 1500);
+void pollInbox();
+setInterval(() => void pollInbox(), 4000);

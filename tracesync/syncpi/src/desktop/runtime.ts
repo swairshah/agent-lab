@@ -73,7 +73,8 @@ export class DesktopRuntime {
   }
   async open(id: string): Promise<LiveSession> {
     const existing = this.live.get(id);
-    if (existing) return existing;
+    // A thread watched in the background (for the inbox) starts syncing and running tools once it's opened.
+    if (existing) { if (!existing.full) { existing.start(); this.decorate(id, { lastOpened: Date.now() }); } return existing; }
     const s = loadSession(id);
     if (!s) throw new Error('No such session');
     const live = new LiveSession(s, this.contextHelper);
@@ -87,6 +88,19 @@ export class DesktopRuntime {
       this.decorate(id, { lastOpened: Date.now() });
       return live;
     } catch (e) { live.close(); this.live.delete(id); throw e; }
+  }
+  /** Follows a thread in the background, for mentions in the inbox: its connection only, no file sync and no tools
+   *  here until it's opened. A thread on this machine's own server is followed while that server runs; watching
+   *  doesn't start it. */
+  watch(id: string): LiveSession | undefined {
+    const existing = this.live.get(id);
+    if (existing) return existing;
+    const s = loadSession(id);
+    if (!s || (s.status !== undefined && s.status !== 'ready') || this.pending.has(id)) return undefined;
+    const live = new LiveSession(s, this.contextHelper);
+    this.live.set(id, live);
+    live.watch();
+    return live;
   }
   async join(url: string, name?: string) {
     const { parseShareUrl } = await import('../shared/protocol.ts');
@@ -130,6 +144,9 @@ export class LiveSession {
   sync = { pushed: 0, pulled: 0, conflicts: [] as string[], error: '' };
   login?: { url: string; check: string };
   role = 'viewer';
+  /** Syncing and running tools (opened), not just following the thread (watched for the inbox). */
+  full = false;
+  #connected = false;
   native = { main: new Thread(), setup: new Thread(), me: undefined as import('../shared/protocol.ts').Member | undefined, members: [] as import('../shared/protocol.ts').Member[], online: [] as import('../shared/protocol.ts').Presence[], env: { status: 'pending' } as import('../shared/protocol.ts').EnvStatus, branches: [] as import('../shared/protocol.ts').BranchInfo[], currentBranch: 0, target: '', error: '', lastInvite: undefined as { url: string; invite: import('../shared/protocol.ts').InviteInfo } | undefined, invites: [] as import('../shared/protocol.ts').InviteInfo[] };
   snapshot() { return { main: this.native.main.state, setup: this.native.setup.state, me: this.native.me, members: this.native.members, online: this.native.online, env: this.native.env, branches: this.native.branches, currentBranch: this.native.currentBranch, target: this.native.target, error: this.native.error, lastInvite: this.native.lastInvite, invites: this.native.invites, sync: this.sync, connection: this.conn.state, context: { skillCount: this.context.skillCount, prompts: this.context.prompts.map(p => ({ name: p.name, description: p.description })) } }; }
   onMessage = new Set<(m: ServerMessage) => void>();
@@ -138,7 +155,7 @@ export class LiveSession {
     this.conn = new Connection(record.url, record.token);
     this.mirror = new Mirror(record.id, record.dir, this.conn);
     this.device = new LocalDevice(this.conn, this.mirror);
-    this.conn.onOpen = () => this.device.register();
+    this.conn.onOpen = () => { if (this.full) this.device.register(); };
     this.conn.onBinary = d => this.device.binary(d);
     this.conn.onState = state => { if (state === 'closed') this.device.disconnected(); };
     this.conn.onMessage = m => {
@@ -166,7 +183,13 @@ export class LiveSession {
     };
     void loadPiContext(record.dir, helper).then(context => { this.context = context; this.device.setContext(context); });
   }
-  start() { this.mirror.start(); this.conn.start(); }
+  start() {
+    this.full = true;
+    this.mirror.start();
+    if (!this.#connected) { this.#connected = true; this.conn.start(); }
+    else if (this.conn.state === 'open') this.device.register();
+  }
+  watch() { if (!this.#connected) { this.#connected = true; this.conn.start(); } }
   async info(): Promise<{ me: { role: string }; workdir: string }> {
     const res = await fetch(`${this.record.url}/api/info`, { headers: { authorization: `Bearer ${this.record.token}` }, signal: AbortSignal.timeout(10_000) });
     if (!res.ok) throw new Error(`Session access refused (${res.status})`);

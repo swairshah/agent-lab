@@ -590,3 +590,24 @@ html.window-controls .topbar { padding-left: 84px; }
 .code-block:hover .copy-code, .code-slot:hover .copy-code, .copy-code:focus-visible { opacity: 1; }
 .copy-code:hover { color: var(--ink); }
 .terminal-view .xterm, .terminal-view .xterm-viewport { background-color: var(--sunken) !important; }
+
+/* The inbox: mentions of you, unread first. */
+.inbox { width: min(640px, calc(100% - 32px)); }
+.inbox-titlebar { display: flex; align-items: center; padding: 12px 16px 4px; }
+.inbox-titlebar h2 { margin: 0; font: 500 15px var(--sans) !important; }
+.inbox-row { display: flex; gap: 10px; padding: 9px 12px; border-radius: 7px; cursor: default; }
+.inbox-row[aria-selected="true"] { background: var(--sunken); }
+.inbox-row .avatar { width: 26px; height: 26px; font-size: 10px; flex: none; }
+.inbox-main { min-width: 0; flex: 1; }
+.inbox-head { font-size: 13px; color: var(--ink-2); }
+.inbox-row[data-unread="true"] .inbox-head strong::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--accent); vertical-align: 1px; }
+.inbox-thread { color: var(--ink); }
+.inbox-time { margin-left: 8px; color: var(--muted); font-size: 12px; }
+.inbox-text { margin-top: 2px; font-size: 13.5px; color: var(--ink); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: pre-wrap; }
+.inbox-foot { display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-top: 1px solid var(--rule); font-size: 12.5px; color: var(--muted); }
+.thread-unread { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--accent); }
+.mention { color: var(--accent); font-weight: 500; }
+.mention.me { background: var(--accent-soft); border-radius: 4px; padding: 0 2px; }
+.msg.flash { animation: flash 1.6s ease; }
+@keyframes flash { 0%, 30% { background: var(--accent-soft); } 100% { background: transparent; } }
+#inbox-list:focus { outline: none; }
