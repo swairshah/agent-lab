@@ -313,3 +313,21 @@ Ordered by value for the effort, cheapest high-impact first. Sizes: S is about a
 | 16 | Follow a collaborator | Show who is viewing what, and follow another person's scroll position and open file | M |
 
 Items 1 to 4 build directly on syncpi's existing Markdown and artifact code (`src/web/markdown.ts`, `src/web/artifacts.ts`) and need no server changes. Items 5, 6 and 12 are UI over data the server already sends. Items 13 to 15 need server support for more than one conversation per session.
+
+## 8. Hands-on findings and status
+
+A second, hands-on pass through the running app (2026-10-28) turned up the things that make Delta feel the way it does. Each line says whether syncpi has it yet, in the web view (W) and the desktop app (D).
+
+| Feature | What Delta does | syncpi |
+|---|---|---|
+| Command palette | `cmd-k` / `cmd-shift-p` / `cmd-t` / `cmd-p`, tabs with `cmd-1`…`4`, matched letters highlighted, file icons | W, D (one keymap: `src/shared/keymap.json`) |
+| Model picker | Search, models grouped under their provider, vendor marks, thinking level | W, D |
+| Grouped tool calls | A run of reads and commands is one line, "Listed 6 directories, read 5 files ›", opening to one line per call with file links | W, D |
+| File citations | Replies link files (`[Project overview](README.md#heading)`); a click opens the file in the right pane at that spot | W; D in the packaged app (`syncpi://` scheme) |
+| Comments on lines | Select lines in a file, Comment (`alt-cmd-m`), `cmd-enter` sends it to the thread as a card with the lines | W, D |
+| Diagram viewer | Mermaid as a viewer: Preview/Source, pan, zoom, recenter, copy | W, D |
+| Thread context menu | Share, Pin, Bookmark, Rename, Regenerate Title, Mark as Unread, View Details, Copy Options, color tags, Archive, Delete | D (Share, Pin, Rename, Regenerate title, Open in browser, Reveal, Archive) |
+| People's messages | Rendered as Markdown | W, D |
+| Message rail | Ticks at the right edge for jumping between messages (`cmd-[` / `cmd-]`) | not yet |
+| Status bar | Project / branch, subthread, context ring, thinking, effort, model | partly (model, activity, branch) |
+| Right pane file viewer | Rendered Markdown with breadcrumb, version picker, search, edit and comment toggles | partly (panel / files pane) |
