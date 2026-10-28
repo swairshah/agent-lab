@@ -28,13 +28,42 @@ const MARKS: [RegExp, string, string][] = [
 	[/minimax/, "MiniMax", minimax],
 ];
 
-/** An avatar for `provider/model`: the vendor's mark, or the model's first letter when it isn't one we know. */
-export function modelAvatar(model: string | undefined): string {
+/** The vendor behind `provider/model` and its mark (an SVG in currentColor), when it's one we know. */
+export function modelVendor(model: string | undefined): { name: string; svg: string } | undefined {
 	const ref = (model ?? "").toLowerCase();
 	const [, modelId = ref] = ref.split(/\/(.*)/);
 	const match = MARKS.find(([pattern]) => pattern.test(modelId)) ?? MARKS.find(([pattern]) => pattern.test(ref));
+	if (match === undefined) return undefined;
+	return { name: match[1], svg: match[2].replace(/<title>.*?<\/title>/, "").replace(/ (width|height)="1em"/g, "") };
+}
+
+const PROVIDERS: Record<string, string> = {
+	anthropic: "Anthropic",
+	openai: "OpenAI",
+	"openai-codex": "ChatGPT subscription",
+	openrouter: "OpenRouter",
+	exe: "exe.dev",
+	google: "Google",
+	"google-gemini-cli": "Gemini CLI",
+	"github-copilot": "GitHub Copilot",
+	xai: "xAI",
+	groq: "Groq",
+	mistral: "Mistral",
+	faux: "Test model",
+};
+
+/** How a provider (the part of a model reference before "/") is named to people. */
+export function providerName(provider: string): string {
+	return PROVIDERS[provider] ?? provider.charAt(0).toUpperCase() + provider.slice(1);
+}
+
+/** An avatar for `provider/model`: the vendor's mark, or the model's first letter when it isn't one we know. */
+export function modelAvatar(model: string | undefined): string {
+	const vendor = modelVendor(model);
 	const title = escapeHtml(model ?? "agent");
-	if (match === undefined) return `<span class="avatar model-avatar" title="${title}">${escapeHtml((modelId[0] ?? "?").toUpperCase())}</span>`;
-	const svg = match[2].replace(/<title>.*?<\/title>/, "").replace(/ (width|height)="1em"/g, "");
-	return `<span class="avatar model-avatar" title="${escapeHtml(match[1])} · ${title}">${svg}</span>`;
+	if (vendor === undefined) {
+		const id = (model ?? "").split("/").pop() ?? "";
+		return `<span class="avatar model-avatar" title="${title}">${escapeHtml((id[0] ?? "?").toUpperCase())}</span>`;
+	}
+	return `<span class="avatar model-avatar" title="${escapeHtml(vendor.name)} · ${title}">${vendor.svg}</span>`;
 }

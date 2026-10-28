@@ -247,6 +247,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .branch::before { content: "⑂"; color: var(--accent); }
 .activity .spinner { display: none; width: 11px; height: 11px; border-radius: 50%; border: 1.5px solid var(--muted); border-top-color: transparent; animation: spin .9s linear infinite; }
 .activity[data-busy="true"] .spinner { display: inline-block; }
+#model-chip { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); }
+#model-chip svg { width: 13px; height: 13px; fill: currentColor; stroke: none; }
 .send { color: var(--ink-2); }
 .send:hover { color: var(--accent); }
 
@@ -337,6 +339,11 @@ kbd { font: 500 11px/1 var(--mono); color: var(--muted); background: var(--sunke
 .palette-title { color: var(--ink); white-space: nowrap; }
 .palette-detail { color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
 .palette-row kbd { margin-left: auto; }
+.palette-icon { width: 18px; height: 18px; display: inline-grid; place-items: center; flex: none; color: var(--ink); }
+.palette-icon svg { width: 15px; height: 15px; fill: currentColor; stroke: none; }
+.palette-check { color: var(--accent); margin-left: 6px; }
+.palette-label { font-size: 12px; color: var(--muted); align-self: center; margin-right: 4px; }
+.palette-tabs button[data-thinking] { font-family: var(--mono); font-size: 11.5px; }
 .palette-empty { color: var(--muted); padding: 18px 12px; font-size: 13.5px; }
 .keymap { width: min(640px, calc(100% - 32px)); }
 .keymap-list { columns: 2 260px; column-gap: 28px; max-height: 60vh; overflow-y: auto; }

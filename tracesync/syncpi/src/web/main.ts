@@ -17,7 +17,8 @@ import { signIn, TOKEN_KEY } from "./auth.ts";
 import { embedded, onHostAction, toHost } from "./bridge.ts";
 import { Composer } from "./composer.ts";
 import { Dialogs } from "./dialogs.ts";
-import { $, initials, personColor, storage } from "./dom.ts";
+import { $, escapeHtml, initials, personColor, storage } from "./dom.ts";
+import { modelVendor } from "./icons.ts";
 import { Palette } from "./palette.ts";
 import { ArtifactPanel } from "./panel.ts";
 import { SessionClient } from "./session.ts";
@@ -130,7 +131,9 @@ async function main(): Promise<void> {
 		$("status-text").textContent = parts.join(" · ");
 		$("activity").dataset.busy = String(s.busy || s.compacting);
 		$("stop").hidden = !(showing === "main" && session.threads.main.state.busy) || session.role === "viewer";
-		$("model-chip").textContent = session.threads.main.state.model ?? session.info?.model ?? "model";
+		const model = session.threads.main.state.model ?? session.info?.model ?? "model";
+		// The vendor's mark is one of our bundled SVGs; the name is escaped.
+		$("model-chip").innerHTML = `${modelVendor(model)?.svg ?? ""}<span>${escapeHtml(model)}</span>`;
 		$("cost").textContent = s.cost > 0 ? `$${s.cost.toFixed(2)}` : "";
 	};
 
@@ -196,7 +199,7 @@ async function main(): Promise<void> {
 	$("share").addEventListener("click", () => session.send({ type: "invite" }));
 	$("stop").addEventListener("click", () => session.send({ type: "abort" }));
 	$("setup-back").addEventListener("click", () => show("main"));
-	$("model-chip").addEventListener("click", () => session.role === "admin" && settings.open("general"));
+	$("model-chip").addEventListener("click", () => session.role === "admin" && pickModel());
 	$("branch-chip").addEventListener("click", () => settings.open("branches"));
 	// Clicking empty space in the conversation puts the cursor in the composer.
 	$("scroller").addEventListener("click", (event) => {
@@ -210,6 +213,21 @@ async function main(): Promise<void> {
 		panel.openFile({ key: `file:${path}`, kind, title: path, path, content, lang: path.split(".").pop(), source: "file" });
 	};
 	const admin = (run: () => void) => () => (session.role === "admin" ? run() : toast("Only admins can do that."));
+	let models: { id: string; name: string; reasoning?: boolean }[] | undefined;
+	const pickModel = async () => {
+		models ??= await fetch("api/models", { headers: { authorization: `Bearer ${token}` } })
+			.then((r) => r.json() as Promise<{ models?: typeof models }>)
+			.then((d) => d.models)
+			.catch(() => undefined);
+		if (!models?.length) return toast("Couldn't load the models.", "error");
+		const state = session.threads.main.state;
+		palette.pickModel({
+			models,
+			current: state.model ?? session.info?.model ?? "",
+			thinking: state.thinkingLevel ?? "medium",
+			choose: (model, thinkingLevel) => session.send({ type: "configure", model, thinkingLevel }),
+		});
+	};
 	// What each command in src/shared/keymap.json does here.
 	const palette = new Palette({
 		files: () => session.files,
@@ -228,7 +246,7 @@ async function main(): Promise<void> {
 			},
 			"thread.share": admin(() => session.send({ type: "invite" })),
 			"agent.stop": () => session.send({ type: "abort" }),
-			"agent.model": admin(() => settings.open("general")),
+			"agent.model": admin(() => void pickModel()),
 			"agent.compact": () => dialogs.open("compact"),
 			"agent.newContext": admin(() => dialogs.open("reset")),
 			"agent.branches": () => settings.open("branches"),
