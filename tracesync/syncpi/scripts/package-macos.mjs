@@ -38,6 +38,7 @@ writeFileSync(join(contents,'Info.plist'),`<?xml version="1.0" encoding="UTF-8"?
 <key>CFBundleIdentifier</key><string>dev.syncpi.desktop</string>
 <key>CFBundleExecutable</key><string>SyncPi</string>
 <key>CFBundleName</key><string>SyncPi</string>
+<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>dev.syncpi.desktop.open</string><key>CFBundleURLSchemes</key><array><string>syncpi</string></array></dict></array>
 <key>CFBundleDisplayName</key><string>SyncPi</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>

@@ -333,7 +333,7 @@ impl Desktop {
         item: &Value,
         key: &str,
         p: &Palette,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
         let id = text(item, "memberId");
@@ -364,6 +364,9 @@ impl Desktop {
         });
         let attachments = array(item, "attachments");
         let comments = array(item, "comments");
+        // People's messages are Markdown too, with their line breaks kept.
+        let rendered = (!body.is_empty())
+            .then(|| message::render(&format!("user-{key}"), &keep_breaks(&body), window, cx));
         let group = SharedString::from(format!("message-{key}"));
         row(
             Some(avatar_person(&name)),
@@ -392,13 +395,13 @@ impl Desktop {
                                 .child(b)
                         })),
                 )
-                .when(!body.is_empty(), |d| {
+                .when_some(rendered, |d, rendered| {
                     d.child(
                         div()
                             .text_size(px(15.))
                             .line_height(px(24.))
                             .text_color(p.ink)
-                            .child(body),
+                            .child(rendered),
                     )
                 })
                 .when(!comments.is_empty(), |d| {
@@ -1229,4 +1232,23 @@ fn display_units(items: &[Value]) -> Vec<Unit<'_>> {
         }
     }
     units
+}
+
+/// Single line breaks as Markdown hard breaks, outside code fences, so a message keeps the lines it was written in.
+fn keep_breaks(text: &str) -> String {
+    let mut fenced = false;
+    text.lines()
+        .map(|line| {
+            if line.trim_start().starts_with("```") {
+                fenced = !fenced;
+                return line.to_owned();
+            }
+            if fenced || line.trim().is_empty() {
+                line.to_owned()
+            } else {
+                format!("{line}  ")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
