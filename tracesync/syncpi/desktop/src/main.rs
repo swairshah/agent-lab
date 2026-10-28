@@ -74,7 +74,6 @@ struct Desktop {
     native: Value,
     active: String,
     composer: Entity<InputState>,
-    search: Entity<InputState>,
     editor: Entity<InputState>,
     fields: HashMap<&'static str, Entity<InputState>>,
     _subscriptions: Vec<Subscription>,
@@ -133,9 +132,6 @@ impl Desktop {
                 .auto_grow(1, 14)
                 .placeholder("@ for files, / for commands, ! for a terminal. ⌘↩ to send")
         });
-        let search = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Search threads, projects, and tags…")
-        });
         let editor = cx.new(|cx| {
             InputState::new(window, cx)
                 .code_editor("plain")
@@ -179,7 +175,6 @@ impl Desktop {
                     _ => {}
                 },
             ),
-            cx.subscribe(&search, |_, _, _: &InputEvent, cx| cx.notify()),
             cx.subscribe_in(&editor, window, |this, _, event, _, cx| {
                 if matches!(event, InputEvent::Change) && !this.file_path.is_empty() {
                     this.prefs.files.insert(
@@ -214,7 +209,6 @@ impl Desktop {
             native: Value::Null,
             active,
             composer,
-            search,
             editor,
             fields: HashMap::new(),
             _subscriptions: subscriptions,
@@ -524,16 +518,6 @@ impl Desktop {
                 window,
                 cx,
             ),
-            "model" => {
-                self.field("model", text(&self.native["main"], "model"), window, cx);
-                self.field(
-                    "thinking",
-                    text(&self.native["main"], "thinkingLevel"),
-                    window,
-                    cx,
-                );
-                self.request("models", "GET", "models", None);
-            }
             "compact" => self.field("instructions", String::new(), window, cx),
             "invite" => {
                 self.field("email", String::new(), window, cx);
@@ -545,10 +529,6 @@ impl Desktop {
             "commit" => self.field("message", String::new(), window, cx),
             "name" => self.field("name", text(&self.native["me"], "name"), window, cx),
             "preview" => self.field("url", "http://localhost:3000".into(), window, cx),
-            "search" => {
-                self.search.update(cx, |s, cx| s.set_value("", window, cx));
-                self.search.update(cx, |s, cx| s.focus(window, cx));
-            }
             _ => {}
         }
         let first = match kind {
@@ -556,7 +536,6 @@ impl Desktop {
             "join" => "url",
             "rename" => "title",
             "tags" => "tags",
-            "model" => "model",
             "compact" => "instructions",
             "invite" => "email",
             "file" => "path",
@@ -652,7 +631,7 @@ impl Desktop {
         match name {
             "new" => self.new_thread(self.current_project(), window, cx),
             "project" => self.choose_project(window, cx),
-            "search" => self.open_modal("search", window, cx),
+            "search" => self.open_palette(Tab::Threads, window, cx),
             "join" => self.open_modal("join", window, cx),
             "theme" => {
                 self.prefs.dark = !self.prefs.dark;
@@ -710,7 +689,8 @@ impl Desktop {
             ),
             "update" => self.request("update", "POST", "update", Some(json!({}))),
             "retry" => self.request("retry", "POST", "retry", Some(json!({}))),
-            "rename" | "tags" | "model" | "compact" | "reset" | "branches" | "invite" | "name"
+            "model" => self.pick_model(window, cx),
+            "rename" | "tags" | "compact" | "reset" | "branches" | "invite" | "name"
             | "preview" | "actions" | "file" | "commit" => self.open_modal(name, window, cx),
             _ => {}
         }
@@ -803,7 +783,6 @@ impl Desktop {
   "create"=>{let dir=self.value("dir",cx);if dir.trim().is_empty(){self.notice("Choose a project folder",cx);return;}self.busy=true;self.backend.request("create","POST","/api/sessions",Some(json!({"dir":dir,"title":self.value("title",cx),"compute":self.value("compute",cx),"model":self.value("model",cx),"thinkingLevel":self.value("thinking",cx),"vm":self.value("vm",cx),"setupModel":self.value("setupModel",cx)})));return;},
   "join"=>{self.busy=true;self.backend.request("join","POST","/api/join",Some(json!({"url":self.value("url",cx),"name":self.value("name",cx)})));return;},
   "rename"=>self.decorate(json!({"title":self.value("title",cx)})),"tags"=>self.decorate(json!({"tags":self.value("tags",cx).split(',').map(str::trim).filter(|s|!s.is_empty()).collect::<Vec<_>>()})),
-  "model"=>self.send(json!({"type":"configure","model":self.value("model",cx),"thinkingLevel":self.value("thinking",cx)})),
   "compact"=>self.send(json!({"type":"compact","instructions":self.value("instructions",cx)})),"reset"=>self.send(json!({"type":"new"})),
   "invite"=>{let uses=self.value("uses",cx).parse::<u32>().ok();let email=self.value("email",cx);self.send(json!({"type":"invite","email":if email.is_empty(){None}else{Some(email)},"role":self.value("role",cx),"expiresInDays":self.value("days",cx).parse::<f64>().unwrap_or(7.),"maxUses":uses}));},
   "name"=>self.send(json!({"type":"rename","name":self.value("name",cx)})),
@@ -855,7 +834,7 @@ impl Desktop {
         let command = parts.next().unwrap_or("");
         let arg = parts.next().unwrap_or("").trim();
         match command{
-  "stop"=>self.send(json!({"type":"abort"})),"env"=>self.showing="setup".into(),"members"|"who"|"links"=>self.set_pane("people",cx),"session-share"=>self.send(json!({"type":"invite"})),"compact"=>if arg.is_empty(){self.open_modal("compact",window,cx)}else{self.send(json!({"type":"compact","instructions":arg}))},"new"=>self.open_modal("reset",window,cx),"name"=>self.send(json!({"type":"rename","name":arg})),"model"=>self.open_modal("model",window,cx),"sync"=>self.request("sync","POST","sync",Some(json!({}))),"web"=>cx.open_url(&text(&self.selected(),"url")),"where"=>self.where_vm=arg=="vm","tree"=>{if let Some(index)=arg.strip_prefix('b').and_then(|s|s.parse::<usize>().ok()){if let Some(branch)=array(&self.native,"branches").get(index){self.send(json!({"type":"switchBranch","id":branch["id"]}));}}else if let Ok(n)=arg.parse::<usize>(){let users:Vec<_>=array(&self.native["main"],"items").into_iter().filter(|i|i["kind"]=="user").collect();if let Some(item)=users.get(n.saturating_sub(1)){self.send(json!({"type":"fork","before":item["key"]}));}}else{self.open_modal("branches",window,cx);}},
+  "stop"=>self.send(json!({"type":"abort"})),"env"=>self.showing="setup".into(),"members"|"who"|"links"=>self.set_pane("people",cx),"session-share"=>self.send(json!({"type":"invite"})),"compact"=>if arg.is_empty(){self.open_modal("compact",window,cx)}else{self.send(json!({"type":"compact","instructions":arg}))},"new"=>self.open_modal("reset",window,cx),"name"=>self.send(json!({"type":"rename","name":arg})),"model"=>self.pick_model(window,cx),"sync"=>self.request("sync","POST","sync",Some(json!({}))),"web"=>cx.open_url(&text(&self.selected(),"url")),"where"=>self.where_vm=arg=="vm","tree"=>{if let Some(index)=arg.strip_prefix('b').and_then(|s|s.parse::<usize>().ok()){if let Some(branch)=array(&self.native,"branches").get(index){self.send(json!({"type":"switchBranch","id":branch["id"]}));}}else if let Ok(n)=arg.parse::<usize>(){let users:Vec<_>=array(&self.native["main"],"items").into_iter().filter(|i|i["kind"]=="user").collect();if let Some(item)=users.get(n.saturating_sub(1)){self.send(json!({"type":"fork","before":item["key"]}));}}else{self.open_modal("branches",window,cx);}},
   "steer"=>self.send(json!({"type":"submit","requestId":uuid::Uuid::new_v4().to_string(),"text":arg,"mode":"steer","where":if self.where_vm{"vm"}else{"device"}})),
   "revoke"=>self.send(json!({"type":"revoke","code":arg})),"remove"=>{let member=array(&self.native,"members").into_iter().find(|m|text(m,"name")==arg||text(m,"id")==arg||text(m,"email")==arg);self.send(json!({"type":"remove","memberId":member.map(|m|text(&m,"id")).unwrap_or_else(||arg.into())}));},
   "role"=>{let words:Vec<_>=arg.split_whitespace().collect();if words.len()==2{let member=array(&self.native,"members").into_iter().find(|m|text(m,"name")==words[0]||text(m,"id")==words[0]||text(m,"email")==words[0]);self.send(json!({"type":"setRole","memberId":member.map(|m|text(&m,"id")).unwrap_or_else(||words[0].into()),"role":words[1]}));}},
@@ -1490,10 +1469,8 @@ impl Desktop {
         let title = match kind.as_str() {
             "create" => "New thread",
             "join" => "Join a shared thread",
-            "search" => "Search threads",
             "rename" => "Rename thread",
             "tags" => "Thread tags",
-            "model" => "Model and thinking",
             "compact" => "Summarize older messages",
             "reset" => "Start a new context?",
             "branches" => "Thread branches",
@@ -1610,69 +1587,9 @@ impl Desktop {
                         );
                 }
             }
-            "search" => {
-                content = content.child(Input::new(&self.search).mb_3());
-                let query = self.search.read(cx).value().to_lowercase();
-                for s in self
-                    .sessions
-                    .clone()
-                    .into_iter()
-                    .filter(|s| s.to_string().to_lowercase().contains(&query))
-                {
-                    let id = text(&s, "id");
-                    content = content.child(
-                        Button::new(eid(format!("search-{id}")))
-                            .ghost()
-                            .label(format!(
-                                "{} · {}{}",
-                                text(&s, "title"),
-                                text(&s, "name"),
-                                if flag(&s, "archived") {
-                                    " · archived"
-                                } else {
-                                    ""
-                                }
-                            ))
-                            .w_full()
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.select(id.clone(), window, cx);
-                                this.modal.clear();
-                                cx.notify();
-                            })),
-                    );
-                }
-            }
             "rename" => content = content.child(self.dialog_field("title", "Title")),
             "tags" => {
                 content = content.child(self.dialog_field("tags", "Tags, separated by commas"))
-            }
-            "model" => {
-                content = content
-                    .child(self.dialog_field("model", "Model (provider/model)"))
-                    .child(self.dialog_field("thinking", "Thinking level"));
-                let mut choices = div()
-                    .id("available-models")
-                    .max_h(px(220.))
-                    .overflow_y_scroll();
-                for model in &self.models {
-                    let id = text(model, "id");
-                    let selected = id == self.value("model", cx);
-                    choices = choices.child(
-                        Button::new(eid(format!("model-choice-{id}")))
-                            .ghost()
-                            .xsmall()
-                            .label(id.clone())
-                            .w_full()
-                            .when(selected, |b| b.primary())
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                if let Some(input) = this.fields.get("model") {
-                                    input.update(cx, |s, cx| s.set_value(id.clone(), window, cx));
-                                }
-                                cx.notify();
-                            })),
-                    );
-                }
-                content = content.child(choices);
             }
             "compact" => {
                 content = content
@@ -1795,7 +1712,7 @@ impl Desktop {
             _ => {}
         }
         card = card.child(content);
-        if !["search", "share", "actions", "branches", "role", "keymap"].contains(&kind.as_str()) {
+        if !["share", "actions", "branches", "role", "keymap"].contains(&kind.as_str()) {
             card = card.child(
                 div()
                     .flex()

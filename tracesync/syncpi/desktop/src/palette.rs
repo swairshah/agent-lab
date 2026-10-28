@@ -64,6 +64,7 @@ pub fn score(text: &str, query: &str) -> Option<i32> {
     }
     let t: Vec<char> = text.to_lowercase().chars().collect();
     let q: Vec<char> = query.to_lowercase().chars().collect();
+    let q_len = q.len();
     let haystack: String = t.iter().collect();
     let needle: String = q.iter().collect();
     if let Some(byte) = haystack.find(&needle) {
@@ -81,7 +82,39 @@ pub fn score(text: &str, query: &str) -> Option<i32> {
         last = found as i64;
         i = found + 1;
     }
-    Some(points)
+    // Letters scattered across the text match nearly anything; keep runs and word starts.
+    (points >= q_len as i32 * 3).then_some(points)
+}
+
+/// Byte ranges of `text` that `query` matched, as score() matches them, for highlighting.
+fn match_ranges(text: &str, query: &str) -> Vec<std::ops::Range<usize>> {
+    if query.is_empty() {
+        return vec![];
+    }
+    let lower: Vec<(usize, char)> = text
+        .char_indices()
+        .map(|(i, c)| (i, c.to_lowercase().next().unwrap_or(c)))
+        .collect();
+    let q: Vec<char> = query.to_lowercase().chars().collect();
+    let range = |n: usize| {
+        lower[n].0..lower[n].0 + text[lower[n].0..].chars().next().map_or(1, char::len_utf8)
+    };
+    // A contiguous match first, as score() prefers it.
+    if let Some(start) = (0..lower.len())
+        .find(|&s| s + q.len() <= lower.len() && (0..q.len()).all(|k| lower[s + k].1 == q[k]))
+    {
+        return (start..start + q.len()).map(range).collect();
+    }
+    let mut out = vec![];
+    let mut i = 0;
+    for ch in q {
+        let Some(found) = (i..lower.len()).find(|&n| lower[n].1 == ch) else {
+            return vec![];
+        };
+        out.push(range(found));
+        i = found + 1;
+    }
+    out
 }
 
 fn thread_title(session: &serde_json::Value) -> String {
@@ -193,7 +226,7 @@ impl Desktop {
                     };
                 let dir = path
                     .rsplit_once('/')
-                    .map(|(d, _)| d.to_owned())
+                    .map(|(d, _)| format!("{d}/"))
                     .unwrap_or_default();
                 Some((
                     s,
@@ -202,7 +235,7 @@ impl Desktop {
                         detail: dir,
                         keys: None,
                         section: "Files".into(),
-                        icon: None,
+                        icon: Some("syncpi/code.svg".into()),
                         current: false,
                         target: Target::File(path.clone()),
                     },
@@ -394,6 +427,7 @@ impl Desktop {
         let (tab, selected, follow) =
             (state.tab, state.selected, std::mem::take(&mut state.follow));
         let thinking = state.thinking.clone();
+        let query = self.palette_input.read(cx).value().trim().to_owned();
         let p = theme::palette(cx);
         let mut list = div()
             .id("palette-list")
@@ -408,6 +442,10 @@ impl Desktop {
         let mut child = 0;
         for (n, row) in rows.iter().enumerate() {
             if row.section != section {
+                if child > 0 {
+                    list = list.child(div().h(px(1.)).mx(px(-6.)).mt_1().bg(p.rule));
+                    child += 1;
+                }
                 section = row.section.clone();
                 list = list.child(section_label_static(section.clone(), &p));
                 child += 1;
@@ -415,7 +453,7 @@ impl Desktop {
             if follow && n == selected {
                 self.palette_scroll.scroll_to_item(child);
             }
-            list = list.child(self.palette_row(n, row, n == selected, &p, cx));
+            list = list.child(self.palette_row(n, row, n == selected, &query, &p, cx));
             child += 1;
         }
         if rows.is_empty() {
@@ -544,9 +582,19 @@ impl Desktop {
         n: usize,
         row: &Row,
         selected: bool,
+        query: &str,
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
+        let marked = HighlightStyle {
+            color: Some(p.accent),
+            ..Default::default()
+        };
+        let title = StyledText::new(row.title.clone()).with_highlights(
+            match_ranges(&row.title, query)
+                .into_iter()
+                .map(|r| (r, marked)),
+        );
         div()
             .id(eid(format!("palette-row-{n}")))
             .flex()
@@ -565,7 +613,13 @@ impl Desktop {
                     .items_center()
                     .justify_center()
                     .when(!path.is_empty(), |d| {
-                        d.child(svg().path(path.clone()).size(px(15.)).text_color(p.ink))
+                        d.child(svg().path(path.clone()).size(px(15.)).text_color(
+                            if path.starts_with("syncpi/") {
+                                p.muted
+                            } else {
+                                p.ink
+                            },
+                        ))
                     })
             }))
             .child(
@@ -573,7 +627,7 @@ impl Desktop {
                     .flex_shrink_0()
                     .text_size(px(14.))
                     .text_color(p.ink)
-                    .child(row.title.clone()),
+                    .child(title),
             )
             .child(
                 div()
@@ -664,8 +718,7 @@ fn section_label_static(text: String, p: &Palette) -> Div {
         .px(px(10.))
         .pt_3()
         .pb(px(6.))
-        .font_family(theme::MONO)
-        .text_size(px(10.5))
+        .text_size(px(12.5))
         .text_color(p.muted)
-        .child(text.to_uppercase())
+        .child(text)
 }
