@@ -82,7 +82,7 @@ impl Desktop {
                     label("Nothing archived.")
                         .px_3()
                         .py_2()
-                        .text_size(px(13.))
+                        .text_size(theme::sz(13.))
                         .text_color(p.muted),
                 );
             }
@@ -121,7 +121,7 @@ impl Desktop {
                     label("Open a project to start a thread.")
                         .px_3()
                         .py_2()
-                        .text_size(px(13.))
+                        .text_size(theme::sz(13.))
                         .text_color(p.muted),
                 );
             }
@@ -203,11 +203,16 @@ impl Desktop {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .text_size(px(10.))
+                            .text_size(theme::sz(10.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(theme::initials(&name)),
                     )
-                    .child(label(name).flex_1().text_size(px(13.)).text_color(p.ink_2))
+                    .child(
+                        label(name)
+                            .flex_1()
+                            .text_size(theme::sz(13.))
+                            .text_color(p.ink_2),
+                    )
                     .child(
                         Button::new("theme")
                             .ghost()
@@ -239,7 +244,7 @@ impl Desktop {
             .justify_between()
             .h(px(28.))
             .pl_2()
-            .text_size(px(12.))
+            .text_size(theme::sz(12.))
             .text_color(p.muted)
             .child(title.to_owned())
             .children(action)
@@ -262,7 +267,7 @@ impl Desktop {
             .flex()
             .items_center()
             .gap_2()
-            .h(px(30.))
+            .min_h(theme::sz(30.))
             .pl_2()
             .pr_1()
             .mt_1()
@@ -283,7 +288,7 @@ impl Desktop {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_size(px(13.5))
+                    .text_size(theme::sz(13.5))
                     .text_color(p.ink)
                     .child(name.to_owned()),
             )
@@ -334,7 +339,7 @@ impl Desktop {
             .flex()
             .items_center()
             .gap_2()
-            .h(px(30.))
+            .min_h(theme::sz(30.))
             .pl(px(if nested { 32. } else { 10. }))
             .pr_2()
             .rounded(px(6.))
@@ -346,7 +351,7 @@ impl Desktop {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_size(px(13.5))
+                    .text_size(theme::sz(13.5))
                     .text_color(if selected { p.ink } else { p.ink_2 })
                     .child(title(s)),
             )
@@ -356,7 +361,7 @@ impl Desktop {
                         .flex_shrink_0()
                         .max_w(px(80.))
                         .truncate()
-                        .text_size(px(11.))
+                        .text_size(theme::sz(11.))
                         .text_color(p.muted)
                         .child(tags),
                 )

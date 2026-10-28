@@ -213,7 +213,7 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
                         .gap_1()
                         .child(
                             div()
-                                .text_size(px(12.))
+                                .text_size(crate::theme::sz(12.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(color)
                                 .child(kind.to_uppercase()),
@@ -273,7 +273,7 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
                                 .px_3()
                                 .py_3()
                                 .font_family(crate::theme::MONO)
-                                .text_size(px(12.5))
+                                .text_size(crate::theme::sz(12.5))
                                 .line_height(relative(1.6))
                                 .child(
                                     div()

@@ -96,8 +96,12 @@ pub fn load_fonts(cx: &App) {
     }
 }
 
-/// Switches light or dark and paints gpui-component's theme with the syncpi palette.
-pub fn apply(dark: bool, window: Option<&mut Window>, cx: &mut App) {
+/// Switches light or dark, paints gpui-component's theme with the syncpi palette, and scales text by `zoom`: the
+/// window's rem size scales every size given in rems (ours and gpui-component's).
+pub fn apply(dark: bool, zoom: f32, mut window: Option<&mut Window>, cx: &mut App) {
+    if let Some(window) = window.as_deref_mut() {
+        window.set_rem_size(px(16. * zoom));
+    }
     Theme::change(
         if dark {
             ThemeMode::Dark
@@ -116,8 +120,8 @@ pub fn apply(dark: bool, window: Option<&mut Window>, cx: &mut App) {
     let theme = cx.global_mut::<Theme>();
     theme.font_family = SANS.into();
     theme.mono_font_family = MONO.into();
-    theme.font_size = px(14.);
-    theme.mono_font_size = px(12.5);
+    theme.font_size = px(14. * zoom);
+    theme.mono_font_size = px(12.5 * zoom);
     theme.radius = px(6.);
     theme.radius_lg = px(10.);
     let c = &mut theme.colors;
@@ -211,4 +215,9 @@ pub fn initials(name: &str) -> String {
         None
     };
     format!("{first}{}", last.map(String::from).unwrap_or_default()).to_uppercase()
+}
+
+/// A size in rems from a size in pixels at the default scale: text sizes follow the user's text size (⌘+ / ⌘−).
+pub fn sz(pixels: f32) -> Rems {
+    rems(pixels / 16.)
 }

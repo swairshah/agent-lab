@@ -4,7 +4,10 @@
 	{ "id": "palette.files", "title": "Go to file", "group": "General", "keys": "cmd-p", "apps": ["web", "desktop"] },
 	{ "id": "palette.threads", "title": "Go to thread", "group": "General", "keys": "cmd-t", "apps": ["desktop"] },
 	{ "id": "app.keymap", "title": "Keyboard shortcuts", "group": "General", "keys": "cmd-/", "apps": ["web", "desktop"] },
-	{ "id": "app.settings", "title": "Settings", "group": "General", "keys": "cmd-,", "apps": ["web"] },
+	{ "id": "app.settings", "title": "Settings", "group": "General", "keys": "cmd-,", "apps": ["web", "desktop"] },
+	{ "id": "app.zoomIn", "title": "Bigger text", "group": "View", "keys": "cmd-=", "apps": ["desktop"] },
+	{ "id": "app.zoomOut", "title": "Smaller text", "group": "View", "keys": "cmd--", "apps": ["desktop"] },
+	{ "id": "app.zoomReset", "title": "Actual size text", "group": "View", "keys": "cmd-0", "apps": ["desktop"] },
 	{ "id": "app.theme", "title": "Switch light or dark", "group": "General", "keys": "cmd-shift-l", "apps": ["web", "desktop"] },
 
 	{ "id": "thread.new", "title": "New thread", "group": "Threads", "keys": "cmd-n", "apps": ["desktop"], "quick": true },
@@ -17,6 +20,8 @@
 	{ "id": "thread.title", "title": "Regenerate thread title", "group": "Threads", "apps": ["desktop"] },
 	{ "id": "thread.pin", "title": "Pin or unpin thread", "group": "Threads", "keys": "cmd-alt-p", "apps": ["desktop"] },
 	{ "id": "thread.archive", "title": "Archive or restore thread", "group": "Threads", "apps": ["desktop"] },
+	{ "id": "thread.bookmark", "title": "Bookmark thread", "group": "Threads", "keys": "cmd-d", "apps": ["desktop"] },
+	{ "id": "thread.tags", "title": "Edit thread tags", "group": "Threads", "apps": ["desktop"] },
 	{ "id": "thread.archives", "title": "Show archived threads", "group": "Threads", "keys": "cmd-y", "apps": ["desktop"] },
 
 	{ "id": "agent.stop", "title": "Stop the agent", "group": "Agent", "keys": "escape", "apps": ["web", "desktop"] },
@@ -37,6 +42,8 @@
 	{ "id": "project.reveal", "title": "Reveal the project in Finder", "group": "Project", "apps": ["desktop"] },
 	{ "id": "project.zed", "title": "Open the project in Zed", "group": "Project", "apps": ["desktop"] },
 	{ "id": "project.web", "title": "Open the thread in a browser", "group": "Project", "apps": ["desktop"] },
+	{ "id": "project.preview", "title": "Open a dev server preview", "group": "Project", "apps": ["desktop"] },
+	{ "id": "project.update", "title": "Update the session server", "group": "Project", "apps": ["desktop"] },
 
 	{ "id": "app.quit", "title": "Quit SyncPi", "group": "General", "keys": "cmd-q", "apps": ["desktop"] }
 ]

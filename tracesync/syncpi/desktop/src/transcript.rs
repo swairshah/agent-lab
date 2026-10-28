@@ -27,7 +27,7 @@ fn avatar_person(name: &str) -> Div {
         .justify_center()
         .bg(color.opacity(0.16))
         .text_color(color)
-        .text_size(px(11.))
+        .text_size(theme::sz(11.))
         .font_weight(FontWeight::SEMIBOLD)
         .child(theme::initials(name))
 }
@@ -49,7 +49,7 @@ fn avatar_model(model: &str, p: &Palette) -> Div {
         None => {
             let id = model.split_once('/').map_or(model, |(_, id)| id);
             base.font_family(MONO)
-                .text_size(px(11.))
+                .text_size(theme::sz(11.))
                 .child(id.chars().next().unwrap_or('?').to_uppercase().to_string())
         }
     }
@@ -215,8 +215,8 @@ pub(crate) fn diff_view(id: String, patch: &str, p: &Palette) -> Stateful<Div> {
         .bg(p.raised)
         .py_1()
         .font_family(MONO)
-        .text_size(px(12.))
-        .line_height(px(19.))
+        .text_size(theme::sz(12.))
+        .line_height(theme::sz(19.))
         .child(lines)
 }
 
@@ -292,7 +292,7 @@ impl Desktop {
                         .items_center()
                         .gap_3()
                         .text_color(p.muted)
-                        .text_size(px(13.))
+                        .text_size(theme::sz(13.))
                         .italic()
                         .child(div().flex_1().h(px(1.)).bg(p.rule))
                         .child(text(item, "text"))
@@ -315,7 +315,7 @@ impl Desktop {
         if self.showing == "main" && self.role() != "viewer" {
             thread = thread.child(self.composer_row(&p, cx));
         } else if self.role() == "viewer" {
-            thread = thread.child(label("You can read this thread. Ask an admin to make you an editor to talk to the agent.").mt(px(26.)).text_color(p.muted).text_size(px(13.)));
+            thread = thread.child(label("You can read this thread. Ask an admin to make you an editor to talk to the agent.").mt(px(26.)).text_color(p.muted).text_size(theme::sz(13.)));
         }
         div()
             .size_full()
@@ -334,7 +334,7 @@ impl Desktop {
                         .bg(p.sunken)
                         .border_b_1()
                         .border_color(p.rule)
-                        .text_size(px(12.5))
+                        .text_size(theme::sz(12.5))
                         .text_color(p.ink_2)
                         .child("The setup agent's thread: it prepares the environment.")
                         .child(
@@ -404,8 +404,8 @@ impl Desktop {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .h(px(20.))
-                        .text_size(px(12.))
+                        .min_h(theme::sz(20.))
+                        .text_size(theme::sz(12.))
                         .child(
                             div()
                                 .font_weight(FontWeight::SEMIBOLD)
@@ -424,14 +424,14 @@ impl Desktop {
                 .when_some(rendered, |d, rendered| {
                     d.child(
                         div()
-                            .text_size(px(15.))
-                            .line_height(px(24.))
+                            .text_size(theme::sz(15.))
+                            .line_height(theme::sz(24.))
                             .text_color(p.ink)
                             .child(rendered),
                     )
                 })
                 .when(!comments.is_empty(), |d| {
-                    d.child(div().text_size(px(15.)).text_color(p.muted).child(
+                    d.child(div().text_size(theme::sz(15.)).text_color(p.muted).child(
                         if comments.len() == 1 {
                             "1 comment".to_owned()
                         } else {
@@ -458,7 +458,7 @@ impl Desktop {
                                 .border_color(p.rule)
                                 .bg(p.surface)
                                 .font_family(MONO)
-                                .text_size(px(12.))
+                                .text_size(theme::sz(12.))
                                 .text_color(p.ink_2)
                                 .when(text(a, "kind") == "image", |d| {
                                     d.child(Icon::new(IconName::Frame).size_3())
@@ -500,7 +500,7 @@ impl Desktop {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .text_size(px(15.))
+                    .text_size(theme::sz(15.))
                     .text_color(p.muted)
                     .cursor_pointer()
                     .hover(|s| s.text_color(p.ink_2))
@@ -532,19 +532,27 @@ impl Desktop {
                         .pl_3()
                         .border_l_2()
                         .border_color(p.rule_strong)
-                        .text_size(px(13.5))
+                        .text_size(theme::sz(13.5))
                         .text_color(p.ink_2)
                         .child(thinking),
                 );
             }
         }
         if !body.is_empty() {
-            content = content.child(div().text_size(px(15.)).line_height(px(25.)).child(
-                message::render(&format!("assistant-{key}"), &body, window, cx),
-            ));
+            content = content.child(
+                div()
+                    .text_size(theme::sz(15.))
+                    .line_height(theme::sz(25.))
+                    .child(message::render(
+                        &format!("assistant-{key}"),
+                        &body,
+                        window,
+                        cx,
+                    )),
+            );
         }
         if !error.is_empty() {
-            content = content.child(label(error).text_size(px(13.)).text_color(p.removed));
+            content = content.child(label(error).text_size(theme::sz(13.)).text_color(p.removed));
         }
         Some(row(
             (!previous_agent).then(|| avatar_model(model, p)),
@@ -590,8 +598,8 @@ impl Desktop {
             .flex()
             .items_center()
             .gap_2()
-            .h(px(24.))
-            .text_size(px(15.))
+            .min_h(theme::sz(24.))
+            .text_size(theme::sz(15.))
             .cursor_pointer()
             .child(
                 div()
@@ -615,7 +623,7 @@ impl Desktop {
                     .min_w_0()
                     .truncate()
                     .font_family(MONO)
-                    .text_size(px(12.5))
+                    .text_size(theme::sz(12.5))
                     .text_color(p.muted)
                     .child(summary),
             )
@@ -626,7 +634,7 @@ impl Desktop {
                         .flex()
                         .gap_1()
                         .font_family(MONO)
-                        .text_size(px(12.))
+                        .text_size(theme::sz(12.))
                         .child(div().text_color(p.added).child(format!("+{added}")))
                         .child(div().text_color(p.removed).child(format!("−{removed}"))),
                 )
@@ -665,7 +673,7 @@ impl Desktop {
                         .bg(p.raised)
                         .p_3()
                         .font_family(MONO)
-                        .text_size(px(12.))
+                        .text_size(theme::sz(12.))
                         .child(source.to_owned())
                         .into_any_element(),
                 )
@@ -688,7 +696,7 @@ impl Desktop {
                         .px_3()
                         .py_2()
                         .font_family(MONO)
-                        .text_size(px(12.))
+                        .text_size(theme::sz(12.))
                         .text_color(p.ink_2)
                         .child(tail.trim_end().to_owned())
                         .into_any_element(),
@@ -725,8 +733,8 @@ impl Desktop {
             .flex()
             .items_center()
             .gap_2()
-            .h(px(24.))
-            .text_size(px(15.))
+            .min_h(theme::sz(24.))
+            .text_size(theme::sz(15.))
             .text_color(p.ink_2)
             .cursor_pointer()
             .child(group_summary(&names))
@@ -769,15 +777,15 @@ impl Desktop {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .h(px(24.))
-                        .text_size(px(15.))
+                        .min_h(theme::sz(24.))
+                        .text_size(theme::sz(15.))
                         .text_color(p.muted)
                         .child(verb)
                         .child(
                             div()
                                 .id(eid(format!("open-{}", text(tool, "key"))))
                                 .font_family(MONO)
-                                .text_size(px(12.5))
+                                .text_size(theme::sz(12.5))
                                 .text_color(p.ink_2)
                                 .underline()
                                 .cursor_pointer()
@@ -825,7 +833,7 @@ impl Desktop {
                 div()
                     .id(eid(format!("{id}-where")))
                     .font_family(MONO)
-                    .text_size(px(12.5))
+                    .text_size(theme::sz(12.5))
                     .text_color(p.ink_2)
                     .underline()
                     .cursor_pointer()
@@ -850,7 +858,7 @@ impl Desktop {
                     .rounded(px(6.))
                     .bg(p.raised)
                     .font_family(MONO)
-                    .text_size(px(12.5))
+                    .text_size(theme::sz(12.5))
                     .children(lines.iter().take(shown).enumerate().map(|(n, line)| {
                         div()
                             .flex()
@@ -874,7 +882,7 @@ impl Desktop {
                         d.child(
                             div()
                                 .pl(px(48.))
-                                .text_size(px(12.))
+                                .text_size(theme::sz(12.))
                                 .text_color(p.muted)
                                 .child(format!("{} more lines", lines.len() - shown)),
                         )
@@ -891,8 +899,8 @@ impl Desktop {
                     .border_l_2()
                     .border_color(p.accent)
                     .bg(p.raised)
-                    .child(avatar_person(name).size(px(22.)).text_size(px(9.)))
-                    .child(div().text_size(px(14.5)).child(text(c, "text"))),
+                    .child(avatar_person(name).size(px(22.)).text_size(theme::sz(9.)))
+                    .child(div().text_size(theme::sz(14.5)).child(text(c, "text"))),
             )
     }
 
@@ -906,7 +914,7 @@ impl Desktop {
                 .px_0()
                 .py(px(2.))
                 .w_full()
-                .text_size(px(15.)),
+                .text_size(theme::sz(15.)),
         )
         .mt(px(26.))
     }
@@ -951,7 +959,7 @@ impl Desktop {
             .border_t_1()
             .border_color(p.rule)
             .bg(p.paper)
-            .text_size(px(12.))
+            .text_size(theme::sz(12.))
             .text_color(p.muted)
             .when(!local, |d| {
                 d.child(
@@ -1065,13 +1073,13 @@ impl Desktop {
             .gap_3()
             .child(
                 label("A shared place to build.")
-                    .text_size(px(24.))
+                    .text_size(theme::sz(24.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(p.ink),
             )
             .child(
                 label("Your project, your agent, and everyone on the same page.")
-                    .text_size(px(14.))
+                    .text_size(theme::sz(14.))
                     .text_color(p.muted),
             )
             .child(
@@ -1093,7 +1101,7 @@ impl Desktop {
             )
             .child(
                 label("The agent runs on its own, with your pi setup.")
-                    .text_size(px(12.))
+                    .text_size(theme::sz(12.))
                     .mt_6()
                     .text_color(p.muted),
             )
@@ -1115,13 +1123,13 @@ impl Desktop {
                 } else {
                     "Preparing your workspace…"
                 })
-                .text_size(px(17.))
+                .text_size(theme::sz(17.))
                 .text_color(p.ink),
             )
             .child(
                 label(text(selected, if failed { "error" } else { "step" }))
                     .max_w(px(600.))
-                    .text_size(px(13.))
+                    .text_size(theme::sz(13.))
                     .text_color(p.muted),
             )
             .when(failed, |d| {
@@ -1160,7 +1168,7 @@ pub(crate) fn file_diffs(id: &str, diff: &str, p: &Palette) -> Vec<Div> {
                         .items_center()
                         .gap_2()
                         .font_family(MONO)
-                        .text_size(px(12.))
+                        .text_size(theme::sz(12.))
                         .child(
                             div()
                                 .flex_1()

@@ -154,7 +154,7 @@ pub fn view(id: &str, source: &str, width: f32, cx: &App) -> AnyElement {
             .py(px(2.))
             .rounded(px(4.))
             .cursor_pointer()
-            .text_size(px(12.))
+            .text_size(theme::sz(12.))
             .when(selected, |d| d.bg(p.raised).text_color(p.ink).shadow_xs())
             .when(!selected, |d| d.text_color(p.muted))
             .child(label)
@@ -297,7 +297,7 @@ pub fn view(id: &str, source: &str, width: f32, cx: &App) -> AnyElement {
                 div()
                     .px_3()
                     .pt_2()
-                    .text_size(px(12.5))
+                    .text_size(theme::sz(12.5))
                     .text_color(p.muted)
                     .child(format!("Couldn't draw this diagram: {reason}")),
             )
@@ -305,14 +305,14 @@ pub fn view(id: &str, source: &str, width: f32, cx: &App) -> AnyElement {
                 div()
                     .p_3()
                     .font_family(MONO)
-                    .text_size(px(12.))
+                    .text_size(theme::sz(12.))
                     .child(source.to_owned()),
             )
             .into_any_element(),
         (Ok(_), true) => div()
             .p_3()
             .font_family(MONO)
-            .text_size(px(12.))
+            .text_size(theme::sz(12.))
             .text_color(p.ink)
             .child(source.to_owned())
             .into_any_element(),

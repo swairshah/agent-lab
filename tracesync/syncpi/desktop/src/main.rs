@@ -6,6 +6,7 @@ mod keymap;
 mod message;
 mod palette;
 mod prose;
+mod settings;
 mod sidebar;
 mod theme;
 mod transcript;
@@ -16,6 +17,7 @@ use gpui_component::{
     ActiveTheme, Root, Sizable,
     button::{Button, ButtonVariants},
     input::{Input, InputEvent, InputState},
+    menu::{DropdownMenu, PopupMenu},
     text::TextView,
     *,
 };
@@ -92,6 +94,8 @@ struct Preferences {
     active: String,
     dark: bool,
     sidebar: Option<bool>,
+    /// Text size, as a scale of the default (⌘+ / ⌘− / ⌘0).
+    zoom: Option<f32>,
     drafts: HashMap<String, String>,
     files: HashMap<String, (String, String)>,
 }
@@ -170,7 +174,7 @@ impl Desktop {
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
-        theme::apply(prefs.dark, Some(window), cx);
+        theme::apply(prefs.dark, prefs.zoom.unwrap_or(1.), Some(window), cx);
         let composer = cx.new(|cx| {
             InputState::new(window, cx)
                 .multi_line(true)
@@ -598,6 +602,7 @@ impl Desktop {
                 self.field("vm", String::new(), window, cx);
                 self.field("setupModel", String::new(), window, cx);
             }
+            "settings" => self.field("name", text(&self.native["me"], "name"), window, cx),
             "join" => {
                 self.field("url", String::new(), window, cx);
                 self.field("name", text(&self.catalog["identity"], "name"), window, cx);
@@ -730,7 +735,7 @@ impl Desktop {
             "join" => self.open_modal("join", window, cx),
             "theme" => {
                 self.prefs.dark = !self.prefs.dark;
-                theme::apply(self.prefs.dark, Some(window), cx);
+                theme::apply(self.prefs.dark, self.zoom(), Some(window), cx);
                 self.persist();
             }
             "sidebar" => {
@@ -786,7 +791,7 @@ impl Desktop {
             "retry" => self.request("retry", "POST", "retry", Some(json!({}))),
             "model" => self.pick_model(window, cx),
             "rename" | "tags" | "compact" | "reset" | "branches" | "invite" | "name"
-            | "preview" | "actions" | "file" | "commit" => self.open_modal(name, window, cx),
+            | "preview" | "file" | "commit" => self.open_modal(name, window, cx),
             _ => {}
         }
         cx.notify();
@@ -799,6 +804,26 @@ impl Desktop {
             "palette.threads" => self.open_palette(Tab::Threads, window, cx),
             "palette.files" => self.open_palette(Tab::Files, window, cx),
             "app.keymap" => self.open_modal("keymap", window, cx),
+            "app.settings" => {
+                if self.modal == "settings" {
+                    self.modal.clear();
+                    cx.notify();
+                } else {
+                    self.open_modal("settings", window, cx);
+                }
+            }
+            "app.zoomIn" | "app.zoomOut" | "app.zoomReset" => {
+                let zoom = match id {
+                    "app.zoomIn" => self.zoom() + 0.1,
+                    "app.zoomOut" => self.zoom() - 0.1,
+                    _ => 1.,
+                };
+                self.set_zoom(zoom, window, cx);
+            }
+            "thread.bookmark" => self.run_action("bookmark", window, cx),
+            "thread.tags" => self.open_modal("tags", window, cx),
+            "project.preview" => self.open_modal("preview", window, cx),
+            "project.update" => self.run_action("update", window, cx),
             "app.theme" => self.run_action("theme", window, cx),
             "app.quit" => cx.quit(),
             "thread.new" => self.run_action("new", window, cx),
@@ -939,6 +964,17 @@ impl Desktop {
             ),
             cx,
         );
+    }
+    pub(crate) fn zoom(&self) -> f32 {
+        self.prefs.zoom.unwrap_or(1.)
+    }
+    /// Scales all text, from 80% to 150%, and remembers it.
+    fn set_zoom(&mut self, zoom: f32, window: &mut Window, cx: &mut Context<Self>) {
+        let zoom = (zoom * 10.).round().clamp(8., 15.) / 10.;
+        self.prefs.zoom = Some(zoom);
+        self.persist();
+        theme::apply(self.prefs.dark, zoom, Some(window), cx);
+        self.notice(format!("Text size {}%", (zoom * 100.).round()), cx);
     }
     /// Opens a project file in the files pane.
     pub(crate) fn open_file(&mut self, path: String, cx: &mut Context<Self>) {
@@ -1084,18 +1120,76 @@ impl Desktop {
                 t
             }
         };
+        let empty = self.active.is_empty();
         let actions = [
-            ("actions", "More", "ellipsis", IconName::Ellipsis),
-            ("changes", "Changes", "changes", IconName::Replace),
-            ("terminal", "Terminal", "terminal", IconName::SquareTerminal),
-            ("share", "Share", "share", IconName::Globe),
-            ("files", "Files", "files", IconName::PanelRight),
+            (
+                "changes",
+                "Review changes (⇧⌘D)",
+                "changes",
+                IconName::Replace,
+            ),
+            (
+                "terminal",
+                "Terminal (⌃`)",
+                "terminal",
+                IconName::SquareTerminal,
+            ),
+            ("share", "Share (⇧⌘S)", "share", IconName::Globe),
+            ("files", "Files (⇧⌘E)", "files", IconName::PanelRight),
         ];
+        let pinned = flag(&selected, "pinned");
+        let bookmarked = flag(&selected, "bookmarked");
+        let archived = flag(&selected, "archived");
+        // The thread's actions, as a menu of shared commands (with their shortcuts), as in Delta.
+        let menu = Button::new("thread-menu")
+            .ghost()
+            .icon(IconName::Ellipsis)
+            .tooltip("Thread actions")
+            .disabled(empty)
+            .dropdown_menu_with_anchor(Corner::TopRight, move |menu: PopupMenu, _, _| {
+                let item = |menu: PopupMenu, label: &str, id: &str| {
+                    menu.menu(
+                        label.to_owned(),
+                        Box::new(RunCommand {
+                            id: id.to_owned().into(),
+                        }),
+                    )
+                };
+                let menu = item(menu, "Rename", "thread.rename");
+                let menu = item(menu, "Regenerate title", "thread.title");
+                let menu = item(menu, "Edit tags", "thread.tags");
+                let menu = item(menu, if pinned { "Unpin" } else { "Pin" }, "thread.pin");
+                let menu = item(
+                    menu,
+                    if bookmarked {
+                        "Remove bookmark"
+                    } else {
+                        "Bookmark"
+                    },
+                    "thread.bookmark",
+                );
+                let menu = item(
+                    menu,
+                    if archived { "Restore" } else { "Archive" },
+                    "thread.archive",
+                )
+                .separator();
+                let menu = item(menu, "Change model", "agent.model");
+                let menu = item(menu, "Branches", "agent.branches");
+                let menu = item(menu, "Summarize older messages", "agent.compact");
+                let menu = item(menu, "Start a new context", "agent.newContext").separator();
+                let menu = item(menu, "Open a dev server preview", "project.preview");
+                let menu = item(menu, "Open the thread in a browser", "project.web");
+                let menu = item(menu, "Reveal the project in Finder", "project.reveal");
+                let menu = item(menu, "Open the project in Zed", "project.zed");
+                let menu = item(menu, "Sync the project now", "project.sync");
+                item(menu, "Update the session server", "project.update")
+            });
         div()
             .h(px(49.))
             .flex()
             .items_center()
-            .gap_2()
+            .gap_1()
             .px_3()
             .when(!self.sidebar, |bar| bar.pl(px(92.)))
             .border_b_1()
@@ -1104,25 +1198,38 @@ impl Desktop {
             .child(
                 Button::new("sidebar-toggle")
                     .ghost()
-                    .small()
                     .icon(IconName::PanelLeft)
-                    .tooltip("Toggle sidebar")
+                    .tooltip("Toggle sidebar (⌘B)")
                     .on_click(
                         cx.listener(|this, _, window, cx| this.run_action("sidebar", window, cx)),
                     ),
             )
-            .child(label(title).text_sm().flex_1().overflow_hidden())
+            .child(
+                label(title)
+                    .text_size(theme::sz(14.))
+                    .flex_1()
+                    .overflow_hidden(),
+            )
+            .child(menu)
             .children(actions.into_iter().map(|(action, title, id, icon)| {
                 Button::new(id)
                     .ghost()
-                    .small()
                     .icon(icon)
                     .tooltip(title)
-                    .disabled(self.active.is_empty())
+                    .disabled(empty)
                     .on_click(
                         cx.listener(move |this, _, window, cx| this.run_action(action, window, cx)),
                     )
             }))
+            .child(
+                Button::new("settings")
+                    .ghost()
+                    .icon(IconName::Settings)
+                    .tooltip("Settings (⌘,)")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.run_command("app.settings", window, cx)
+                    })),
+            )
             .into_any_element()
     }
     fn inspector(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -1256,7 +1363,7 @@ impl Desktop {
                                 .h_full()
                                 .bordered(false)
                                 .font_family(theme::MONO)
-                                .text_size(px(12.5)),
+                                .text_size(theme::sz(12.5)),
                         )
                         .when_some(self.comment_lines, |d, (start, end)| {
                             let p = theme::palette(cx);
@@ -1276,7 +1383,7 @@ impl Desktop {
                                         div()
                                             .flex()
                                             .items_center()
-                                            .text_size(px(12.))
+                                            .text_size(theme::sz(12.))
                                             .text_color(p.muted)
                                             .child(div().flex_1().child(format!(
                                                 "Comment on {}:{}",
@@ -1317,7 +1424,7 @@ impl Desktop {
                 body = body.child(
                     label("This project isn't a git repository, so there's nothing to review here. The agent's edits show in the thread.")
                         .p_4()
-                        .text_size(px(13.))
+                        .text_size(theme::sz(13.))
                         .text_color(muted),
                 );
             }
@@ -1401,137 +1508,7 @@ impl Desktop {
                     }
                 }
             }
-            "people" => {
-                let admin = self.role() == "admin";
-                body = body.child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .p_3()
-                        .child(
-                            Button::new("invite-person")
-                                .small()
-                                .label("Invite")
-                                .disabled(!admin)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.open_modal("invite", window, cx)
-                                })),
-                        )
-                        .child(
-                            Button::new("rename-me")
-                                .ghost()
-                                .small()
-                                .label("Rename me")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.open_modal("name", window, cx)
-                                })),
-                        ),
-                );
-                for m in array(&self.native, "members") {
-                    let id = text(&m, "id");
-                    let online = array(&self.native, "online")
-                        .iter()
-                        .any(|p| text(p, "memberId") == id);
-                    let member = id.clone();
-                    let remove = id.clone();
-                    body = body.child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .p_3()
-                            .border_b_1()
-                            .border_color(border)
-                            .child(
-                                div()
-                                    .size_2()
-                                    .rounded_full()
-                                    .border_1()
-                                    .border_color(muted)
-                                    .when(online, |d| d.bg(rgb(0x438858))),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .child(label(text(&m, "name")).text_sm())
-                                    .child(label(text(&m, "email")).text_xs().text_color(muted)),
-                            )
-                            .child(
-                                Button::new(eid(format!("role-{id}")))
-                                    .ghost()
-                                    .xsmall()
-                                    .label(text(&m, "role"))
-                                    .disabled(!admin || flag(&m, "creator"))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.target_member = member.clone();
-                                        this.modal = "role".into();
-                                        cx.notify();
-                                    })),
-                            )
-                            .when(admin && !flag(&m, "creator"), |d| {
-                                d.child(
-                                    Button::new(eid(format!("remove-{id}")))
-                                        .ghost()
-                                        .xsmall()
-                                        .label("Remove")
-                                        .on_click(cx.listener(move |this, _, _, _| {
-                                            this.send(json!({"type":"remove","memberId":remove}))
-                                        })),
-                                )
-                            }),
-                    );
-                }
-                if admin {
-                    body = body.child(label("Active invites").text_xs().text_color(muted).p_3());
-                    for invite in array(&self.native, "invites") {
-                        let code = text(&invite, "code");
-                        body = body.child(
-                            div()
-                                .flex()
-                                .gap_2()
-                                .items_center()
-                                .px_3()
-                                .py_2()
-                                .child(
-                                    label(format!(
-                                        "{} · {}",
-                                        if text(&invite, "email").is_empty() {
-                                            "Link".into()
-                                        } else {
-                                            text(&invite, "email")
-                                        },
-                                        text(&invite, "role")
-                                    ))
-                                    .text_xs()
-                                    .flex_1(),
-                                )
-                                .child(
-                                    Button::new(eid(format!("revoke-{code}")))
-                                        .ghost()
-                                        .xsmall()
-                                        .label("Revoke")
-                                        .on_click(cx.listener(move |this, _, _, _| {
-                                            this.send(json!({"type":"revoke","code":code}))
-                                        })),
-                                ),
-                        );
-                    }
-                }
-                body = body
-                    .child(label("Environment").text_xs().text_color(muted).p_3())
-                    .child(label(text(&self.native["env"], "summary")).text_xs().px_3())
-                    .child(
-                        label(format!(
-                            "{} Pi skills loaded",
-                            self.native["context"]["skillCount"]
-                                .as_u64()
-                                .unwrap_or_default()
-                        ))
-                        .text_xs()
-                        .text_color(muted)
-                        .p_3(),
-                    );
-            }
+            "people" => body = body.child(self.people_pane(cx)),
             _ => {}
         }
         div()
@@ -1554,7 +1531,7 @@ impl Desktop {
                     .child(
                         label(match self.pane.as_str() {
                             "changes" => "Review changes",
-                            "people" => "People & environment",
+                            "people" => "People",
                             _ => "Files",
                         })
                         .flex_1()
@@ -1679,7 +1656,7 @@ impl Desktop {
                     .px_4()
                     .py_1()
                     .font_family("Menlo")
-                    .text_size(px(11.))
+                    .text_size(theme::sz(11.))
                     .child(contents),
             )
             .into_any_element()
@@ -1722,10 +1699,11 @@ impl Desktop {
             "name" => "Your display name",
             "preview" => "Open a development preview",
             "keymap" => "Keyboard shortcuts",
-            _ => "Thread actions",
+            "settings" => "Settings",
+            _ => "",
         };
         let mut card = div()
-            .w(px(490.))
+            .w(px(if kind == "settings" { 568. } else { 490. }))
             .max_h(px(720.))
             .flex()
             .flex_col()
@@ -1756,6 +1734,7 @@ impl Desktop {
         let mut content = div().id("modal-content").min_h_0().overflow_y_scroll();
         match kind.as_str() {
             "keymap" => content = content.child(self.keymap_sheet(cx)),
+            "settings" => content = content.child(self.settings(window, cx)),
             "create" => {
                 content = content
                     .child(self.dialog_field("dir", "Project folder"))
@@ -1895,64 +1874,10 @@ impl Desktop {
             "preview" => {
                 content = content.child(self.dialog_field("url", "Development server URL"))
             }
-            "actions" => {
-                let s = self.selected();
-                let actions = [
-                    ("rename", "Rename thread"),
-                    ("title", "Regenerate title"),
-                    ("tags", "Edit tags…"),
-                    (
-                        "pin",
-                        if flag(&s, "pinned") {
-                            "Unpin thread"
-                        } else {
-                            "Pin thread"
-                        },
-                    ),
-                    (
-                        "bookmark",
-                        if flag(&s, "bookmarked") {
-                            "Remove bookmark"
-                        } else {
-                            "Bookmark thread"
-                        },
-                    ),
-                    (
-                        "archive",
-                        if flag(&s, "archived") {
-                            "Reopen thread"
-                        } else {
-                            "Archive thread"
-                        },
-                    ),
-                    ("branches", "Thread branches"),
-                    ("compact", "Summarize context"),
-                    ("reset", "Start a new context"),
-                    ("model", "Model and thinking…"),
-                    ("preview", "Open preview"),
-                    ("sync", "Sync project now"),
-                    ("reveal", "Show project in Finder"),
-                    ("zed", "Open in Zed"),
-                    ("update", "Update session server"),
-                ];
-                for (action, title) in actions {
-                    content = content.child(
-                        Button::new(eid(format!("action-{action}")))
-                            .ghost()
-                            .small()
-                            .label(title)
-                            .w_full()
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.modal.clear();
-                                this.run_action(action, window, cx);
-                            })),
-                    );
-                }
-            }
             _ => {}
         }
         card = card.child(content);
-        if !["share", "actions", "branches", "role", "keymap"].contains(&kind.as_str()) {
+        if !["share", "branches", "role", "keymap", "settings"].contains(&kind.as_str()) {
             card = card.child(
                 div()
                     .flex()
@@ -2028,7 +1953,7 @@ impl Render for Desktop {
             .text_color(cx.theme().foreground)
             .font_family(theme::SANS)
             .font_weight(FontWeight::NORMAL)
-            .text_size(px(14.))
+            .text_size(theme::sz(14.))
             .on_action(cx.listener(|this, action: &RunCommand, window, cx| {
                 this.run_command(&action.id, window, cx)
             }))
@@ -2071,7 +1996,7 @@ impl Render for Desktop {
                                 .shadow_lg()
                                 .bg(cx.theme().foreground)
                                 .text_color(cx.theme().background)
-                                .text_size(px(13.))
+                                .text_size(theme::sz(13.))
                                 .child(self.toast.clone()),
                         ),
                 )

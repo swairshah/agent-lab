@@ -461,7 +461,7 @@ impl Desktop {
                 div()
                     .px_3()
                     .py_4()
-                    .text_size(px(13.5))
+                    .text_size(theme::sz(13.5))
                     .text_color(p.muted)
                     .child(if tab == Tab::Files && self.files.is_empty() {
                         "No project files yet."
@@ -487,7 +487,7 @@ impl Desktop {
                     Input::new(&self.palette_input)
                         .appearance(false)
                         .px_0()
-                        .text_size(px(15.)),
+                        .text_size(theme::sz(15.)),
                 ),
             )
             .child(
@@ -501,7 +501,7 @@ impl Desktop {
                     .when(tab == Tab::Models, |d| {
                         d.child(
                             div()
-                                .text_size(px(12.))
+                                .text_size(theme::sz(12.))
                                 .text_color(p.muted)
                                 .mr_1()
                                 .child("Thinking"),
@@ -515,7 +515,7 @@ impl Desktop {
                                 .rounded(px(6.))
                                 .cursor_pointer()
                                 .font_family(theme::MONO)
-                                .text_size(px(11.5))
+                                .text_size(theme::sz(11.5))
                                 .when(level == thinking, |d| d.bg(p.sunken).text_color(p.ink))
                                 .when(level != thinking, |d| d.text_color(p.muted))
                                 .child(level)
@@ -539,7 +539,7 @@ impl Desktop {
                                 .py(px(3.))
                                 .rounded(px(6.))
                                 .cursor_pointer()
-                                .text_size(px(12.5))
+                                .text_size(theme::sz(12.5))
                                 .when(t == tab, |d| d.bg(p.sunken).text_color(p.ink))
                                 .when(t != tab, |d| d.text_color(p.muted))
                                 .child(label.to_string())
@@ -625,7 +625,7 @@ impl Desktop {
             .child(
                 div()
                     .flex_shrink_0()
-                    .text_size(px(14.))
+                    .text_size(theme::sz(14.))
                     .text_color(p.ink)
                     .child(title),
             )
@@ -634,7 +634,7 @@ impl Desktop {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_size(px(12.5))
+                    .text_size(theme::sz(12.5))
                     .text_color(p.muted)
                     .child(row.detail.clone()),
             )
@@ -670,7 +670,7 @@ impl Desktop {
                 .items_center()
                 .justify_between()
                 .py(px(3.))
-                .text_size(px(13.5))
+                .text_size(theme::sz(13.5))
                 .child(title)
                 .child(kbd(&keys, &p))
         };
@@ -708,7 +708,7 @@ fn kbd(text: &str, p: &Palette) -> Div {
         .border_color(p.rule)
         .bg(p.sunken)
         .font_family(theme::MONO)
-        .text_size(px(11.))
+        .text_size(theme::sz(11.))
         .text_color(p.muted)
         .child(text.to_owned())
 }
@@ -718,7 +718,7 @@ fn section_label_static(text: String, p: &Palette) -> Div {
         .px(px(10.))
         .pt_3()
         .pb(px(6.))
-        .text_size(px(12.5))
+        .text_size(theme::sz(12.5))
         .text_color(p.muted)
         .child(text)
 }
