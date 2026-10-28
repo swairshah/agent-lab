@@ -364,10 +364,19 @@ function totalCost(usage: { models: Record<string, { cost?: { total?: number } }
 /** A one-line description of a tool call, e.g. `bash  npm test` or `edit  src/app.ts`. */
 export function toolSummary(tool: Pick<ToolItem, "name" | "args">): string {
 	const a = tool.args as Record<string, unknown>;
-	if ((tool.name === "record_browser" || tool.name === "screenshot_browser") && typeof a.title === "string") return a.title;
+	if ((tool.name === "record_browser" || tool.name === "screenshot_browser" || tool.name === "milestone") && typeof a.title === "string") return a.title;
 	const pick = a.command ?? a.path ?? a.file_path ?? a.url ?? a.pattern;
 	const detail = typeof pick === "string" ? pick : Object.keys(a).length > 0 ? JSON.stringify(a) : "";
 	return detail.replace(/\s+/g, " ").trim();
+}
+
+/** A milestone the agent marked (the \`milestone\` tool, src/server/milestone.ts): a significant change, summarized. */
+export type Milestone = { key: string; title: string; summary: string };
+
+export function milestoneOf(item: Item): Milestone | undefined {
+	if (item.kind !== "tool" || item.name !== "milestone" || item.status === "error") return undefined;
+	const { title, summary } = item.args as { title?: unknown; summary?: unknown };
+	return typeof title === "string" ? { key: item.key, title, summary: typeof summary === "string" ? summary : "" } : undefined;
 }
 
 /** Tools that only look around (read, list, search, run a command); a run of them shows as one line, as in Delta. */
@@ -386,6 +395,7 @@ const GROUP_PHRASES: Record<string, [string, string]> = {
 	remote_bash: ["ran {n} command on the VM", "ran {n} commands on the VM"],
 	record_browser: ["recorded {n} video", "recorded {n} videos"],
 	screenshot_browser: ["took {n} screenshot", "took {n} screenshots"],
+	milestone: ["marked {n} milestone", "marked {n} milestones"],
 };
 
 /** "Listed 6 directories, read 5 files": what a run of quiet tool calls did, in the order they started. */

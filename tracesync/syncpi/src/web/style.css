@@ -110,7 +110,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 
 /* ---------- frame ---------- */
 
-#app { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+/* Clipped, not hidden: nothing (a scrollIntoView, a caret) can scroll the frame itself, only the panes inside it. */
+#app { height: 100%; display: flex; flex-direction: column; overflow: clip; }
 .topbar { display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--rule); background: var(--paper); }
 .session-name { margin: 0; font: 500 14px/1 var(--sans); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .conn { font: 500 10.5px/1 var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--warn); }
@@ -664,24 +665,44 @@ html.window-controls .topbar { padding-left: 84px; }
 .mention.me { background: var(--accent-soft); border-radius: 4px; padding: 0 2px; }
 .msg.flash { animation: flash 1.6s ease; }
 
-/* ---------- the scrollbar as a map of the thread (thread-map.ts) ---------- */
+/* ---------- the timeline beside the thread (thread-map.ts) ---------- */
 
-html.thread-map-on .scroller { scrollbar-width: none; }
-html.thread-map-on .scroller::-webkit-scrollbar { display: none; }
-.thread-map { position: absolute; right: 2px; width: 14px; z-index: 3; cursor: pointer; touch-action: none; }
-.thread-map-view { position: absolute; left: 2px; right: 2px; border-radius: 3px; background: color-mix(in srgb, var(--ink) 8%, transparent); pointer-events: none; }
-.thread-map-mark { position: absolute; left: 0; right: 0; height: 9px; margin-top: -3px; padding: 0; border: none; background: none; cursor: pointer; }
-.thread-map-mark::before { content: ""; position: absolute; left: 3px; right: 3px; top: 3px; height: 3px; border-radius: 2px; background: var(--person); opacity: .75; transition: left .1s, right .1s; }
-.thread-map-mark:hover::before { left: 0; right: 0; opacity: 1; }
-.thread-map-mark.bookmarked::before { left: 0; right: 0; top: 2px; height: 5px; opacity: 1; box-shadow: 0 0 0 1.5px var(--paper), 0 0 0 2.5px var(--accent); }
-.thread-map-tip { position: absolute; right: 22px; width: min(300px, 70vw); z-index: 20; display: grid; gap: 5px; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow); font-size: 13px; cursor: pointer; }
-.thread-map-tip-head { display: flex; align-items: baseline; gap: 8px; }
-.thread-map-tip-head span { color: var(--faint); font-size: 12px; }
-.thread-map-tip-head .link { margin-left: auto; font-size: 12px; }
-.thread-map-tip-text { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
-.thread-map-tip-did { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
-.thread-map-tip-did .avatar, .thread-map-tip-did .model-avatar { width: 16px; height: 16px; flex: none; }
-@media (pointer: coarse) { .thread-map, .thread-map-tip { display: none; } html.thread-map-on .scroller { scrollbar-width: auto; } }
+/* A short line per turn, stacked at the thread's right edge: the one being read darker and longer. */
+.thread-map { position: absolute; right: 12px; width: 26px; z-index: 3; display: flex; flex-direction: column; }
+.thread-map-mark { position: relative; flex: none; height: var(--gap, 10px); width: 100%; padding: 0; border: none; background: none; cursor: pointer; }
+.thread-map-mark:focus-visible { outline: none; }
+.thread-map-mark::before {
+  content: ""; position: absolute; right: 6px; top: 50%; width: 12px; height: 2px; margin-top: -1px; border-radius: 1px;
+  background: color-mix(in srgb, var(--ink) 20%, transparent); transition: width .12s ease, background-color .12s ease;
+}
+.thread-map-mark.current::before { width: 17px; background: color-mix(in srgb, var(--ink) 75%, transparent); }
+.thread-map-mark:hover::before, .thread-map-mark:focus-visible::before { width: 20px; background: var(--ink); }
+.thread-map-mark.milestone-turn::before { background: color-mix(in srgb, var(--accent) 55%, transparent); }
+.thread-map-mark.milestone-turn.current::before, .thread-map-mark.milestone-turn:hover::before, .thread-map-mark.milestone-turn:focus-visible::before { background: var(--accent); }
+.thread-map-mark.bookmarked::after { content: ""; position: absolute; right: 0; top: 50%; width: 4px; height: 4px; margin-top: -2px; border-radius: 50%; background: var(--accent); }
+
+/* What a turn was, beside its line. */
+.thread-map-tip {
+  position: absolute; right: 44px; width: min(320px, calc(100% - 72px)); z-index: 20; padding: 2px 0; pointer-events: none;
+  border: 1px solid var(--rule); border-radius: 10px; background: var(--raised); box-shadow: var(--shadow); font-size: 13px; line-height: 1.45;
+}
+.thread-map-tip > section { padding: 9px 14px; }
+.thread-map-tip > section + section { border-top: 1px solid var(--rule); }
+.tm-ask { color: var(--ink); font-size: 14px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.tm-milestone { display: flex; align-items: center; gap: 6px; font-weight: 600; color: var(--ink); }
+.tm-milestone svg { width: 13px; height: 13px; color: var(--accent); flex: none; }
+.tm-milestone + .tm-summary { margin-top: 2px; }
+.tm-summary + .tm-milestone { margin-top: 8px; }
+.tm-summary { color: var(--ink-2); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.tm-did { margin-top: 4px; color: var(--muted); font-size: 12.5px; }
+.tm-row { display: flex; align-items: center; gap: 8px; min-height: 24px; color: var(--ink-2); white-space: nowrap; overflow: hidden; }
+.tm-row > span { overflow: hidden; text-overflow: ellipsis; }
+.tm-row .avatar, .tm-row .model-avatar { width: 18px; height: 18px; font-size: 8px; border-width: 0; flex: none; }
+.tm-row .model-avatar svg { width: 12px; height: 12px; }
+.tm-row > svg { width: 16px; height: 16px; margin: 0 1px; color: var(--muted); flex: none; }
+.tm-faint { color: var(--muted); }
+.tm-hints { color: var(--muted); font-size: 12.5px; line-height: 1.75; }
+@media (pointer: coarse) { .thread-map, .thread-map-tip { display: none; } }
 @keyframes flash { 0%, 30% { background: var(--accent-soft); } 100% { background: transparent; } }
 #inbox-list:focus { outline: none; }
 .tool-more { display: block; margin: 0 0 4px; padding: 2px 0; border: none; background: none; color: var(--muted); font-size: 12.5px; cursor: pointer; }
@@ -714,3 +735,12 @@ html[data-desktop="true"] .statusbar { height: 30px; padding: 0 6px 0 16px; }
 .recording video { display: block; width: 100%; max-width: 720px; border-radius: 8px; border: 1px solid var(--rule); background: #000; }
 .screenshot img { display: block; max-width: 100%; max-height: 520px; border-radius: 8px; border: 1px solid var(--rule); cursor: zoom-in; }
 .recording-download { display: inline-block; margin-top: 4px; font-size: 12.5px; color: var(--muted); }
+
+/* A milestone the agent marked (milestone.ts): a flag, its title and what changed. */
+.milestone { display: flex; gap: 10px; padding: 9px 12px; border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--rule)); border-radius: 8px; background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
+.milestone > svg { width: 15px; height: 15px; margin-top: 3px; color: var(--accent); flex: none; }
+.milestone-title { font-weight: 600; font-size: 14px; }
+.milestone-summary { color: var(--ink-2); font-size: 13.5px; line-height: 1.5; }
+
+/* Room for the timeline beside the thread (after the app's own padding, which it overrides). */
+@media (pointer: fine) { html.thread-map-on .scroller { padding-right: 46px; } }

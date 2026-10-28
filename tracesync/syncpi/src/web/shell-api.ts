@@ -75,10 +75,29 @@ export function dragWindow(bar: HTMLElement): void {
 
 const ZOOM = "syncpi-zoom";
 
-/** Text size, 80% to 150%, kept for the app and every thread's page. */
+type Webview = { setZoom(scale: number): Promise<void> };
+
+/** The app's webview, which zooms natively; undefined in a browser. */
+function webview(): Webview | undefined {
+	try {
+		return (window.top as (Window & { __TAURI__?: { webview?: { getCurrentWebview(): Webview } } }) | null)?.__TAURI__?.webview?.getCurrentWebview();
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Text size, 80% to 150%, kept for the app and every thread's page. The app zooms its webview, as a browser's ⌘+
+ * does: CSS `zoom` in WebKit makes a page inside a frame larger than the frame, so jumping to a message scrolled the
+ * whole page and cut off its top bar, left edge and composer. A browser (no webview) uses CSS `zoom`.
+ */
 export function applyZoom(doc: Document): void {
-	const zoom = Number(storage.get(ZOOM) ?? "1");
-	doc.documentElement.style.setProperty("zoom", String(Number.isFinite(zoom) ? zoom : 1));
+	const stored = Number(storage.get(ZOOM) ?? "1");
+	const zoom = Number.isFinite(stored) && stored > 0 ? stored : 1;
+	const native = webview();
+	if (native === undefined) return doc.documentElement.style.setProperty("zoom", String(zoom));
+	doc.documentElement.style.removeProperty("zoom");
+	if (doc === window.top?.document) void native.setZoom(zoom).catch(() => {});
 }
 
 /** Changes the text size by `by` (0 resets it), here and in every thread's page. */

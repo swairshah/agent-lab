@@ -39,6 +39,7 @@ import { Thread, toolSummary } from "../shared/thread.ts";
 import type { Devices } from "./devices.ts";
 import { History } from "./history.ts";
 import { remoteTools } from "./remote-tools.ts";
+import { milestoneTool } from "./milestone.ts";
 import type { StateFile, StoredMember } from "./state.ts";
 
 export const context: Context = BACKGROUND_CONTEXT;
@@ -143,7 +144,8 @@ function shellEnv(vm: string | undefined): NodeJS.ProcessEnv {
 
 /**
  * A scripted model for tests: `write <path> <text>` writes a file, `edit <path> <old> => <new>` edits one, `run <command>`
- * runs bash, `look <path>...` lists the project and reads those files in one turn, anything else is echoed.
+ * runs bash, `look <path>...` lists the project and reads those files in one turn, `milestone <title> | <summary>` marks a
+ * milestone, anything else is echoed.
  */
 function installFaux(models: MutableModels): void {
 	const faux = fauxProvider({ tokensPerSecond: 400 });
@@ -193,6 +195,8 @@ function installFaux(models: MutableModels): void {
 			if (shot) return fauxAssistantMessage([fauxToolCall("screenshot_browser", { title: "The page", url: shot[1]! })], { stopReason: "toolUse" });
 			const remote = body.match(/^remote (.+)$/);
 			if (remote) return fauxAssistantMessage([fauxToolCall("remote_bash", { command: remote[1]! })], { stopReason: "toolUse" });
+			const milestone = body.match(/^milestone (.+?) \| (.+)$/);
+			if (milestone) return fauxAssistantMessage([fauxToolCall("milestone", { title: milestone[1]!, summary: milestone[2]! })], { stopReason: "toolUse" });
 			const run = body.match(/^run ([\s\S]+)$/);
 			if (run) return fauxAssistantMessage([fauxToolCall("bash", { command: run[1]! })], { stopReason: "toolUse" });
 			return fauxAssistantMessage(`(faux) ${body}`);
@@ -295,6 +299,7 @@ export class Session {
 		const Syncpi = defineExtension({
 			name: "syncpi",
 			sections: [section("syncpi", () => this.#projectNotes(), { tag: true })],
+			tools: [milestoneTool],
 		});
 		const registry = createRegistry();
 		const env = shellEnv(s.vm);
@@ -834,7 +839,9 @@ People comment on lines of files and on parts of earlier messages; a comment com
 
 Run long-lived processes (dev servers, watchers) in the background with output to a log file, for example \`nohup npm run dev > /tmp/dev.log 2>&1 &\`, and on the VM never on port 8000, which serves this session.
 
-Two tools always run on the session's VM, wherever your other tools are: remote_bash (deploying, hosting something for everyone, long jobs that must outlive someone's laptop), record_browser (a real browser on the VM goes through steps while it's recorded, and the video appears in the thread) and screenshot_browser (that browser takes a picture of a page, which you see and the thread shows). When someone asks you to show, demo or prove that something works in a UI, build or start it on the VM, then record it, with short captions saying what's happening. To check how a page you built looks, take a screenshot and look at it. A request sent with /remote runs entirely on the VM. Keep answers short; people see your tool calls as they happen.`;
+Two tools always run on the session's VM, wherever your other tools are: remote_bash (deploying, hosting something for everyone, long jobs that must outlive someone's laptop), record_browser (a real browser on the VM goes through steps while it's recorded, and the video appears in the thread) and screenshot_browser (that browser takes a picture of a page, which you see and the thread shows). When someone asks you to show, demo or prove that something works in a UI, build or start it on the VM, then record it, with short captions saying what's happening. To check how a page you built looks, take a screenshot and look at it. A request sent with /remote runs entirely on the VM.
+
+When a request ends in a significant change that is done and works (a feature built, a bug fixed and verified, a migration finished, a decision reached), call milestone once, last, with a short title and a one or two sentence summary of what changed. It marks the thread's timeline so people can find major changes later. Don't mark questions, small tweaks or exploring. Keep answers short; people see your tool calls as they happen.`;
 }
 
 function setupInstructions(name: string, workdir: string): string {

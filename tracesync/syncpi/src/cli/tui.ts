@@ -23,7 +23,7 @@ import {
 import { type BranchInfo, type ConvName, type EnvStatus, type InviteInfo, type Member, type Presence, ROLES, type Role, type ServerMessage, type SessionInfo } from "../shared/protocol.ts";
 import { type Artifact, patchStats, replyArtifacts, threadArtifacts, toolArtifacts } from "../shared/artifacts.ts";
 import { draftText, fromBase64, isCommand, Y } from "../shared/drafts.ts";
-import { type Item, Thread, toolSummary } from "../shared/thread.ts";
+import { type Item, milestoneOf, Thread, toolSummary } from "../shared/thread.ts";
 import type { Connection, ConnectionState } from "./client.ts";
 import { home, type SessionRecord } from "./store.ts";
 import type { LocalDevice } from "./device.ts";
@@ -158,6 +158,11 @@ class ThreadView implements Component {
 				return lines;
 			}
 			case "tool": {
+				const milestone = milestoneOf(item);
+				if (milestone !== undefined) {
+					const wrapped = wrapTextWithAnsi(c.gray(milestone.summary), Math.max(10, width - 4)).map((l) => `  ${l}`);
+					return ["", `${c.accent("⚑")} ${c.bold(milestone.title)}`, ...wrapped];
+				}
 				const icon =
 					item.status === "running"
 						? c.yellow(SPINNER[this.frame % SPINNER.length]!)

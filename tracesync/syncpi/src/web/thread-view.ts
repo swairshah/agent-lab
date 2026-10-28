@@ -5,7 +5,7 @@ import { type Artifact, kindOfPath, patchStats, replyArtifacts, toolArtifacts } 
 import { draftText, isCommand } from "../shared/drafts.ts";
 import type { ConvName, LineComment } from "../shared/protocol.ts";
 import type { Item, ToolItem, UserItem } from "../shared/thread.ts";
-import { isQuietTool, toolGroupSummary, toolSummary } from "../shared/thread.ts";
+import { isQuietTool, type Milestone, milestoneOf, toolGroupSummary, toolSummary } from "../shared/thread.ts";
 import { artifactCard, type CommentHandler, disposeWithin, type ImageLoader, renderCode } from "./artifacts.ts";
 import { renderDiagram } from "./diagrams.ts";
 import { el, escapeHtml, initials, personColor } from "./dom.ts";
@@ -97,7 +97,10 @@ export class ThreadView {
 		if (this.#conv !== "main") this.show("main");
 		const node = this.#box.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"]`);
 		if (node === null) return false;
-		node.scrollIntoView({ block: "center", behavior: "smooth" });
+		// The thread scrolls, not the page around it (scrollIntoView would move every scrollable ancestor).
+		const s = this.#scroller;
+		const at = node.getBoundingClientRect().top - s.getBoundingClientRect().top + s.scrollTop;
+		s.scrollTo({ top: at - (s.clientHeight - node.offsetHeight) / 2, behavior: "smooth" });
 		node.classList.remove("flash");
 		void node.offsetWidth;
 		node.classList.add("flash");
@@ -263,8 +266,11 @@ export class ThreadView {
 				// A turn that only called tools has nothing to show of its own.
 				if (!item.text && !item.thinking && !item.error && !item.streaming) return Object.assign(el("div"), { hidden: true });
 				return this.#agentRow(this.#assistant(item, this.#askedBefore(items, index)), item.model, item.streaming);
-			case "tool":
+			case "tool": {
+				const milestone = milestoneOf(item);
+				if (milestone !== undefined) return this.#agentRow(milestoneCard(milestone), this.#modelBefore(items, index), false);
 				return this.#agentRow(this.#tool(item), this.#modelBefore(items, index), false);
+			}
 			case "notice": {
 				const node = el("div", "notice", item.text);
 				// A land's progress opens its thread.
@@ -627,6 +633,15 @@ export class ThreadView {
 		content.append(node);
 		return content;
 	}
+}
+
+export const FLAG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/></svg>`;
+
+/** A milestone the agent marked: a flag, its title and what changed. */
+function milestoneCard(milestone: Milestone): HTMLElement {
+	const node = el("div", "milestone");
+	node.innerHTML = `${FLAG}<div><div class="milestone-title">${escapeHtml(milestone.title)}</div>${milestone.summary ? `<div class="milestone-summary">${escapeHtml(milestone.summary)}</div>` : ""}</div>`;
+	return node;
 }
 
 /** What the thread shows, in order: each item on its own, except that a run of quiet tool calls (and the empty
