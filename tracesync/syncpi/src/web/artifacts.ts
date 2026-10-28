@@ -5,6 +5,7 @@
 // HTML from the agent is untrusted. Previews run in an iframe sandboxed without `allow-same-origin`: scripts run, but
 // in an opaque origin with no access to this page, its storage, or the session's token.
 import { type Artifact, patchStats } from "../shared/artifacts.ts";
+import type { LineComment } from "../shared/protocol.ts";
 import { el, escapeHtml } from "./dom.ts";
 import { renderMarkdown } from "./markdown.ts";
 
@@ -22,12 +23,64 @@ function themeType(): "light" | "dark" | "system" {
 
 const THEME = { light: "pierre-light", dark: "pierre-dark" } as const;
 
-/** Highlighted, read-only code. */
-export function renderCode(host: HTMLElement, name: string, contents: string): void {
+/** Sends a comment on lines of a file to the thread. */
+export type CommentHandler = (comment: LineComment) => void;
+
+/**
+ * Highlighted, read-only code. With `onComment` (a project file), lines can be selected and commented on, as in
+ * Delta: a box opens under the selection, ⌘↩ sends the comment with those lines, Esc drops it.
+ */
+export function renderCode(host: HTMLElement, name: string, contents: string, onComment?: CommentHandler): void {
 	host.classList.add("pierre-host");
 	void loadPierre().then(({ File }) => {
-		const view = new File({ theme: THEME, themeType: themeType(), overflow: "wrap", disableFileHeader: true });
-		view.render({ file: { name, contents }, containerWrapper: host });
+		const file = { name, contents };
+		let selection: { start: number; end: number } | undefined;
+		const draw = () => {
+			view.render({ file, lineAnnotations: selection ? [{ lineNumber: selection.end, metadata: selection }] : [], containerWrapper: host });
+			// Sent or dropped: the lines are no longer selected.
+			if (selection === undefined) view.setSelectedLines(null);
+		};
+		const box = (range: { start: number; end: number }) => {
+			const form = el("div", "line-comment");
+			const input = el("textarea");
+			input.rows = 2;
+			input.placeholder = `Comment on ${range.start === range.end ? `line ${range.start}` : `lines ${range.start}–${range.end}`}. ⌘↩ to send, Esc to cancel`;
+			input.addEventListener("keydown", (event) => {
+				if (event.key === "Escape") {
+					event.preventDefault();
+					event.stopPropagation();
+					selection = undefined;
+					draw();
+				} else if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && input.value.trim()) {
+					event.preventDefault();
+					const excerpt = contents.split("\n").slice(range.start - 1, range.end).join("\n");
+					onComment!({ path: name, start: range.start, end: range.end, excerpt, text: input.value.trim() });
+					selection = undefined;
+					draw();
+				}
+			});
+			form.append(input);
+			requestAnimationFrame(() => input.focus());
+			return form;
+		};
+		const view = new File<{ start: number; end: number }>({
+			theme: THEME,
+			themeType: themeType(),
+			overflow: "wrap",
+			disableFileHeader: true,
+			...(onComment
+				? {
+						enableLineSelection: true,
+						onLineSelectionEnd: (range: { start: number; end: number } | null) => {
+							if (range === null) return;
+							selection = { start: Math.min(range.start, range.end), end: Math.max(range.start, range.end) };
+							draw();
+						},
+						renderAnnotation: (annotation: { metadata?: { start: number; end: number } }) => (annotation.metadata ? box(annotation.metadata) : undefined),
+					}
+				: {}),
+		});
+		draw();
 		instances.set(host, view);
 	});
 }
@@ -88,11 +141,13 @@ function views(artifact: Artifact): ("preview" | "code" | "diff")[] {
 	}
 }
 
-function renderView(host: HTMLElement, artifact: Artifact, view: "preview" | "code" | "diff", loadImage: ImageLoader): void {
+function renderView(host: HTMLElement, artifact: Artifact, view: "preview" | "code" | "diff", loadImage: ImageLoader, onComment?: CommentHandler): void {
 	disposeWithin(host);
 	host.replaceChildren();
 	if (view === "diff") return renderDiff(host, artifact.content);
-	if (view === "code") return renderCode(host, artifact.path ?? `snippet.${artifact.lang || artifact.kind}`, artifact.content);
+	// Comments are on project files as they are now, so not on what the agent wrote earlier.
+	const commentable = artifact.source === "file" && artifact.path !== undefined ? onComment : undefined;
+	if (view === "code") return renderCode(host, artifact.path ?? `snippet.${artifact.lang || artifact.kind}`, artifact.content, commentable);
 	if (artifact.kind === "markdown") {
 		host.innerHTML = `<div class="markdown-preview prose">${renderMarkdown(artifact.content)}</div>`;
 		return;
@@ -113,6 +168,8 @@ export type CardOptions = {
 	size: "inline" | "panel";
 	onOpen?: (artifact: Artifact) => void;
 	loadImage: ImageLoader;
+	/** Lets lines of a project file be commented on. */
+	onComment?: CommentHandler;
 };
 
 /** A card for one artifact: a header with its name and kind, tabs where it has several views, and the view. */
@@ -129,7 +186,7 @@ export function artifactCard(artifact: Artifact, options: CardOptions): HTMLElem
 	const body = el("div", "artifact-body");
 	const select = (view: (typeof tabs)[number]) => {
 		for (const button of tabBar.querySelectorAll<HTMLButtonElement>("button")) button.setAttribute("aria-selected", String(button.dataset.view === view));
-		renderView(body, artifact, view, options.loadImage);
+		renderView(body, artifact, view, options.loadImage, options.onComment);
 	};
 	if (tabs.length > 1) {
 		for (const view of tabs) {

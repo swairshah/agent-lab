@@ -34,7 +34,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { diff, Scanner } from "../shared/files.ts";
-import { ATTACHMENT_LIMITS, type Attachment, type BranchInfo, type ConvName, type EnvStatus, type FileHash, IMAGE_TYPES, type Where } from "../shared/protocol.ts";
+import { ATTACHMENT_LIMITS, type Attachment, type BranchInfo, type ConvName, type EnvStatus, type FileHash, IMAGE_TYPES, type Where, COMMENT_LIMITS, type LineComment } from "../shared/protocol.ts";
 import { Thread, toolSummary } from "../shared/thread.ts";
 import type { Devices } from "./devices.ts";
 import type { StateFile, StoredMember } from "./state.ts";
@@ -73,6 +73,25 @@ async function createSessionModels(stateDir: string, auth: "pi" | "exe-gateway",
 	};
 	writeFileSync(join(dir, "models.json"), `${JSON.stringify(config, null, 2)}\n`);
 	return ModelRuntime.create({ authPath: join(dir, "auth.json"), modelsPath: join(dir, "models.json"), modelsStorePath: join(dir, "models-store.json") });
+}
+
+/** Comments as sent, checked against the limits; anything malformed is refused rather than guessed at. */
+function checkComments(comments: unknown[]): LineComment[] {
+	if (comments.length > COMMENT_LIMITS.count) throw new Error(`at most ${COMMENT_LIMITS.count} comments per message`);
+	return comments.map((c) => {
+		const { path, start, end, excerpt, text } = (c ?? {}) as Partial<LineComment>;
+		if (typeof path !== "string" || path === "" || !Number.isInteger(start) || !Number.isInteger(end) || start! < 1 || end! < start! || typeof excerpt !== "string" || typeof text !== "string")
+			throw new Error("a comment needs a path, a line range, the lines and its text");
+		if (excerpt.length > COMMENT_LIMITS.excerptChars || text.length > COMMENT_LIMITS.textChars) throw new Error("that comment is too long");
+		return { path, start: start!, end: end!, excerpt, text };
+	});
+}
+
+/** How the model sees comments: each with the file, the lines and the excerpt it's about. */
+function commentText(comments: LineComment[]): string {
+	return comments
+		.map((c) => `\n\n<comment file="${c.path}" lines="${c.start === c.end ? c.start : `${c.start}-${c.end}`}">\n<lines>\n${c.excerpt}\n</lines>\n${c.text}\n</comment>`)
+		.join("");
 }
 
 /**
@@ -393,8 +412,9 @@ export class Session {
 		return watchEvents(this.harness, this.conversation(name).id, context);
 	}
 
-	async submit(member: StoredMember, requestId: string, text: string, mode: "followUp" | "steer", where: Where, attachments: Attachment[] = []): Promise<void> {
-		const { content, shown } = messageContent(`[${member.name}] ${text}`, attachments);
+	async submit(member: StoredMember, requestId: string, text: string, mode: "followUp" | "steer", where: Where, attachments: Attachment[] = [], comments: LineComment[] = []): Promise<void> {
+		const checked = checkComments(comments);
+		const { content, shown } = messageContent(`[${member.name}] ${text}${commentText(checked)}`, attachments);
 		// A request can only run on its sender's own machine, and only while it is connected.
 		const destination: Where = where === "device" && this.devices.online(member.id) !== undefined ? "device" : "vm";
 		// A steer joins the running run and its tools. Nobody steers a run that executes on someone else's machine;
@@ -410,7 +430,7 @@ export class Session {
 				// The route is part of the request ID, so it is stored with the submission and survives restarts.
 				requestId: `${member.id}:${destination}:${requestId}`,
 				whenBusy: mode,
-				entry: { kind: "syncpi.message", data: { author: member.name, memberId: member.id, text, ...(shown.length > 0 ? { attachments: shown } : {}) } },
+				entry: { kind: "syncpi.message", data: { author: member.name, memberId: member.id, text, ...(shown.length > 0 ? { attachments: shown } : {}), ...(checked.length > 0 ? { comments: checked } : {}) } },
 			},
 			context,
 		);

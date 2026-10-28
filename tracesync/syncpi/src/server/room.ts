@@ -219,7 +219,8 @@ export class Room {
 			case "submit": {
 				if (!atLeast(member, "editor")) return this.#send(client, { type: "error", requestId: message.requestId, message: "viewers can't talk to the agent; ask an admin for the editor role" });
 				const text = message.text.trim();
-				if (text.length === 0 && !(Array.isArray(message.attachments) && message.attachments.length > 0)) return;
+				const comments = Array.isArray(message.comments) ? message.comments : [];
+				if (text.length === 0 && !(Array.isArray(message.attachments) && message.attachments.length > 0) && comments.length === 0) return;
 				try {
 					await this.session.submit(
 						member,
@@ -228,6 +229,7 @@ export class Room {
 						message.mode === "steer" ? "steer" : "followUp",
 						message.where === "device" ? "device" : "vm",
 						Array.isArray(message.attachments) ? message.attachments : [],
+						comments,
 					);
                     this.#send(client, { type: "accepted", requestId: message.requestId });
 				} catch (error) {

@@ -1,6 +1,7 @@
 // Turns a conversation's agent events (pi-durable `watchEvents`: one snapshot, then one batch per commit) into a flat
 // list of display items. The terminal UI and the web view both render this state, so they show the same thread.
 import type { AgentEvent } from "@earendil-works/pi-durable";
+import type { LineComment } from "./protocol.ts";
 
 type Json = unknown;
 type Block = { type: string; text?: string; thinking?: string; id?: string; name?: string; arguments?: Record<string, Json> };
@@ -16,6 +17,8 @@ export type UserItem = {
 	text: string;
 	/** Files added to the message; images also as data URLs, from what the model was sent. */
 	attachments?: { name: string; kind: "image" | "text"; url?: string }[];
+	/** Comments on lines of project files sent with this message. */
+	comments?: LineComment[];
 	rev: number;
 };
 /** `model` is the `provider/model` that wrote it, when known. */
@@ -306,14 +309,14 @@ export class Thread {
 				this.#push({ kind: "notice", key, text: String((entry.data as { text?: string })?.text ?? ""), rev: 0 });
 				return;
 			case "syncpi.message": {
-				const data = entry.data as { author?: string; memberId?: string; text?: string; attachments?: { name: string; kind: "image" | "text" }[] };
+				const data = entry.data as { author?: string; memberId?: string; text?: string; attachments?: { name: string; kind: "image" | "text" }[]; comments?: LineComment[] };
 				const images = Array.isArray(message?.content) ? message.content.filter((b) => b.type === "image") : [];
 				let image = 0;
 				const attachments = data.attachments?.map((a) => {
 					const block = a.kind === "image" ? (images[image++] as { data?: string; mimeType?: string } | undefined) : undefined;
 					return block?.data ? { ...a, url: `data:${block.mimeType};base64,${block.data}` } : a;
 				});
-				this.#push({ kind: "user", key, author: data.author, memberId: data.memberId, text: data.text ?? textOf(message?.content), attachments, rev: 0 });
+				this.#push({ kind: "user", key, author: data.author, memberId: data.memberId, text: data.text ?? textOf(message?.content), attachments, comments: data.comments, rev: 0 });
 				return;
 			}
 			default:
