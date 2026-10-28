@@ -119,13 +119,18 @@ pub fn blocks(source: &str) -> Vec<Block> {
     result
 }
 fn markdown_text(id: String, source: String, window: &mut Window, cx: &mut App) -> TextView {
-    TextView::markdown(SharedString::from(id), source, window, cx)
-        .selectable(true)
-        .scrollable(false)
-        .w_full()
-        .h_auto()
-        .min_w_0()
-        .flex_shrink_0()
+    TextView::markdown(
+        SharedString::from(id),
+        crate::citations::rewrite(&source),
+        window,
+        cx,
+    )
+    .selectable(true)
+    .scrollable(false)
+    .w_full()
+    .h_auto()
+    .min_w_0()
+    .flex_shrink_0()
 }
 pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyElement {
     let border = cx.theme().border;

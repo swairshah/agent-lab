@@ -1,4 +1,5 @@
 mod backend;
+mod citations;
 mod diagram;
 mod icons;
 mod keymap;
@@ -139,6 +140,8 @@ struct Desktop {
     file_hash: String,
     /// The open file as the project has it, to tell a real local edit from the file as loaded.
     file_text: String,
+    /// A cited file being opened, and the line to put the cursor on when it arrives.
+    cite_line: Option<(String, usize)>,
     git: Value,
     share_url: String,
     models: Vec<Value>,
@@ -289,6 +292,7 @@ impl Desktop {
             file_path: String::new(),
             file_hash: String::new(),
             file_text: String::new(),
+            cite_line: None,
             git: Value::Null,
             share_url: String::new(),
             models: vec![],
@@ -305,6 +309,10 @@ impl Desktop {
             busy: false,
             sidebar,
         };
+        // The project's files, so file names in backticks can link to them.
+        if !this.active.is_empty() {
+            this.request("files", "GET", "files", None);
+        }
         cx.spawn_in(window, async move |entity, cx| {
             loop {
                 smol::Timer::after(Duration::from_millis(60)).await;
@@ -392,6 +400,7 @@ impl Desktop {
                                     .iter()
                                     .filter_map(|v| v.as_str().map(String::from))
                                     .collect();
+                                citations::set_files(&self.files);
                             }
                             "git" => self.git = value,
                             "models" => self.models = array(&value, "models"),
@@ -411,9 +420,25 @@ impl Desktop {
                                     text(&value, "text")
                                 };
                                 let language = language_of(&self.file_path);
+                                let cited = self
+                                    .cite_line
+                                    .take()
+                                    .filter(|(path, _)| *path == self.file_path)
+                                    .map(|(_, line)| line);
                                 self.editor.update(cx, |editor, cx| {
                                     editor.set_highlighter(language, cx);
                                     editor.set_value(content, window, cx);
+                                    // Opened from a citation: the cursor goes to the cited line.
+                                    if let Some(line) = cited {
+                                        editor.set_cursor_position(
+                                            gpui_component::input::Position::new(
+                                                line.saturating_sub(1) as u32,
+                                                0,
+                                            ),
+                                            window,
+                                            cx,
+                                        );
+                                    }
                                 });
                             }
                             _ if tag.starts_with("saved:") => {
@@ -455,6 +480,11 @@ impl Desktop {
                 _ => {}
             }
         }
+        for (path, lines) in citations::take() {
+            self.cite_line = lines.map(|(start, _)| (path.clone(), start));
+            self.open_file(path, cx);
+            changed = true;
+        }
         if !self.toast.is_empty() && self.toast_at.elapsed() > Duration::from_secs(7) {
             self.toast.clear();
             changed = true;
@@ -495,6 +525,7 @@ impl Desktop {
         self.active = id.clone();
         self.prefs.active = id.clone();
         self.backend.select(&id);
+        self.request("files", "GET", "files", None);
         self.native = Value::Null;
         self.file_path.clear();
         self.files.clear();
@@ -2049,101 +2080,102 @@ impl Render for Desktop {
 fn main() -> anyhow::Result<()> {
     let (backend, receiver) = Backend::launch()?;
     let shutdown = backend.clone();
-    Application::new()
-        .with_assets(icons::Assets)
-        .run(move |cx| {
-            gpui_component::init(cx);
-            theme::load_fonts(cx);
-            keymap::bind(cx);
-            cx.on_action(|action: &RunCommand, cx| {
-                if action.id == "app.quit" {
-                    cx.quit();
-                }
-            });
-            let item = |id: &str| {
-                let title = keymap::command(id).map(|c| c.title).unwrap_or_default();
-                MenuItem::action(
-                    title,
-                    RunCommand {
-                        id: id.to_owned().into(),
-                    },
-                )
-            };
-            cx.set_menus(vec![
-                Menu {
-                    name: "SyncPi".into(),
-                    items: vec![item("app.keymap"), MenuItem::separator(), item("app.quit")],
-                },
-                Menu {
-                    name: "File".into(),
-                    items: vec![
-                        item("thread.new"),
-                        item("project.add"),
-                        item("thread.join"),
-                        MenuItem::separator(),
-                        item("thread.share"),
-                        item("thread.rename"),
-                        item("thread.archive"),
-                    ],
-                },
-                Menu {
-                    name: "View".into(),
-                    items: vec![
-                        item("palette.all"),
-                        item("palette.commands"),
-                        item("palette.threads"),
-                        item("palette.files"),
-                        MenuItem::separator(),
-                        item("view.sidebar"),
-                        item("view.changes"),
-                        item("view.files"),
-                        item("view.terminal"),
-                        MenuItem::separator(),
-                        item("app.theme"),
-                    ],
-                },
-                Menu {
-                    name: "Agent".into(),
-                    items: vec![
-                        item("agent.model"),
-                        item("agent.compact"),
-                        item("agent.newContext"),
-                        item("agent.branches"),
-                        item("agent.setup"),
-                        MenuItem::separator(),
-                        item("agent.stop"),
-                    ],
-                },
-            ]);
-            cx.on_window_closed(|cx| {
-                if cx.windows().is_empty() {
-                    cx.quit();
-                }
-            })
-            .detach();
-            cx.open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-                        None,
-                        size(px(1380.), px(900.)),
-                        cx,
-                    ))),
-                    window_min_size: Some(size(px(840.), px(580.))),
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("SyncPi".into()),
-                        appears_transparent: true,
-                        traffic_light_position: Some(point(px(16.), px(17.))),
-                    }),
-                    ..Default::default()
-                },
-                move |window, cx| {
-                    let view = cx.new(|cx| Desktop::new(backend, receiver, window, cx));
-                    cx.new(|cx| Root::new(view, window, cx))
+    let app = Application::new().with_assets(icons::Assets);
+    // File citations come back from the OS as syncpi://open/... URLs (see citations.rs).
+    app.on_open_urls(|urls| urls.iter().for_each(|url| citations::handle_url(url)));
+    app.run(move |cx| {
+        gpui_component::init(cx);
+        theme::load_fonts(cx);
+        keymap::bind(cx);
+        cx.on_action(|action: &RunCommand, cx| {
+            if action.id == "app.quit" {
+                cx.quit();
+            }
+        });
+        let item = |id: &str| {
+            let title = keymap::command(id).map(|c| c.title).unwrap_or_default();
+            MenuItem::action(
+                title,
+                RunCommand {
+                    id: id.to_owned().into(),
                 },
             )
-            .expect("Open SyncPi window");
-            cx.activate(true);
-        });
+        };
+        cx.set_menus(vec![
+            Menu {
+                name: "SyncPi".into(),
+                items: vec![item("app.keymap"), MenuItem::separator(), item("app.quit")],
+            },
+            Menu {
+                name: "File".into(),
+                items: vec![
+                    item("thread.new"),
+                    item("project.add"),
+                    item("thread.join"),
+                    MenuItem::separator(),
+                    item("thread.share"),
+                    item("thread.rename"),
+                    item("thread.archive"),
+                ],
+            },
+            Menu {
+                name: "View".into(),
+                items: vec![
+                    item("palette.all"),
+                    item("palette.commands"),
+                    item("palette.threads"),
+                    item("palette.files"),
+                    MenuItem::separator(),
+                    item("view.sidebar"),
+                    item("view.changes"),
+                    item("view.files"),
+                    item("view.terminal"),
+                    MenuItem::separator(),
+                    item("app.theme"),
+                ],
+            },
+            Menu {
+                name: "Agent".into(),
+                items: vec![
+                    item("agent.model"),
+                    item("agent.compact"),
+                    item("agent.newContext"),
+                    item("agent.branches"),
+                    item("agent.setup"),
+                    MenuItem::separator(),
+                    item("agent.stop"),
+                ],
+            },
+        ]);
+        cx.on_window_closed(|cx| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
+        cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                    None,
+                    size(px(1380.), px(900.)),
+                    cx,
+                ))),
+                window_min_size: Some(size(px(840.), px(580.))),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("SyncPi".into()),
+                    appears_transparent: true,
+                    traffic_light_position: Some(point(px(16.), px(17.))),
+                }),
+                ..Default::default()
+            },
+            move |window, cx| {
+                let view = cx.new(|cx| Desktop::new(backend, receiver, window, cx));
+                cx.new(|cx| Root::new(view, window, cx))
+            },
+        )
+        .expect("Open SyncPi window");
+        cx.activate(true);
+    });
     shutdown.shutdown();
     Ok(())
 }
