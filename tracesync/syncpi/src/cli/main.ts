@@ -32,6 +32,8 @@ import {
 } from "./provision.ts";
 import { home, identity, loadSession, projectsDir, removeSession, type SessionRecord, saveSession, sessionLog, sessions } from "./store.ts";
 import { LocalDevice } from "./device.ts";
+import { loadPiContext, printPiContext } from "./pi-context.ts";
+import { extractSnapshot, safeName, safeVm } from "./snapshot.ts";
 import { Mirror } from "./sync.ts";
 import { App, parseInvite } from "./tui.ts";
 
@@ -49,6 +51,7 @@ const { values: opts, positionals } = parseArgs({
 		model: { type: "string", default: process.env.SYNCPI_MODEL },
 		"setup-model": { type: "string", default: process.env.SYNCPI_SETUP_MODEL },
 		"no-sync": { type: "boolean", default: false },
+		"no-pi": { type: "boolean", default: false },
 		headless: { type: "boolean", default: false },
 		name: { type: "string" },
 		vm: { type: "string" },
@@ -85,6 +88,7 @@ Models use your pi login locally, and the exe.dev LLM integration on a VM;
 no API keys are copied anywhere.
   --dir <path>      where to put a joined project
   --no-sync         don't sync files with the local folder
+  --no-pi           don't offer your pi setup (skills, AGENTS.md, prompt templates)
   --name <name>     your display name (default: git user.name)
 
 inside: /session-share  /web  /env  /who  /steer  /stop  /sync  /ssh  /quit`);
@@ -118,7 +122,7 @@ async function start(dir: string): Promise<SessionRecord> {
 	}
 	const name = basename(dir);
 	// Sessions share one host VM unless --vm names another; a session id is its path there.
-	const vm = local ? undefined : (opts.vm ?? DEFAULT_HOST);
+	const vm = local ? undefined : safeVm(opts.vm ?? DEFAULT_HOST);
 	const port = local ? await freePort() : undefined;
 	const record: SessionRecord = {
 		id,
@@ -214,25 +218,25 @@ async function joinFromUrl(url: string): Promise<SessionRecord> {
 		openUrl(url);
 	});
 	const info = (await (await fetch(`${share.origin}/api/info`, { headers: { authorization: `Bearer ${joined.token}` } })).json()) as { id: string; name: string; vm?: string };
-	const dir = resolve(opts.dir ?? uniqueDir(join(projectsDir(), info.name)));
+	// The server chooses these; a malicious one must not steer where files land or what runs.
+	const projectName = safeName(info.name);
+	const vm = safeVm(info.vm);
+	const dir = resolve(opts.dir ?? uniqueDir(join(projectsDir(), projectName)));
 	mkdirSync(dir, { recursive: true });
 	progress(`downloading the project into ${dir}`);
 	const conn = new Connection(share.origin, joined.token);
 	const res = await conn.snapshot();
-	await new Promise<void>((done, fail) => {
-		const tar = spawn("tar", ["-xzf", "-", "-C", dir], { stdio: ["pipe", "inherit", "inherit"] });
-		tar.on("close", (code) => (code === 0 ? done() : fail(new Error(`tar exited with ${code}`))));
-		Readable.fromWeb(res.body as never).pipe(tar.stdin);
-	});
+	if (res.body === null) throw new Error("empty snapshot");
+	await extractSnapshot(res.body, dir);
 	const record: SessionRecord = {
-		id: info.id,
-		name: info.name,
+		id: String(info.id),
+		name: projectName,
 		url: share.origin,
 		token: joined.token,
 		role: "editor",
 		dir: realpathSync(dir),
 		compute: "remote",
-		vm: info.vm,
+		vm,
 		createdAt: Date.now(),
 	};
 	await Mirror.adopt(record.id, record.dir);
@@ -258,10 +262,13 @@ async function attach(record: SessionRecord): Promise<void> {
 		conn.onOpen = () => device.register();
 		conn.onBinary = (data) => device.binary(data);
 	}
+	// Your pi setup (skills, AGENTS.md, prompt templates), loaded the way pi loads it for this folder.
+	const piContext = opts["no-pi"] ? undefined : loadPiContext(record.dir);
+	void piContext?.then(({ prompts: _, ...offered }) => device?.setContext(offered));
 	// The UI opens now. Messages typed before the server is up are queued and sent once it is.
 	const ui: { setup(state: { step?: string; error?: string } | undefined): void; run(): Promise<void> } = opts.headless
 		? headless(record, conn, mirror, device)
-		: new App(record, conn, mirror, device);
+		: new App(record, conn, mirror, device, piContext);
 	const done = ui.run();
 	void untilReady(record.id, (step) => ui.setup({ step }))
 		.then(async (ready) => {
@@ -361,6 +368,7 @@ async function main(): Promise<void> {
 	if (opts.help) return usage();
 	const [command, arg] = positionals;
 	if (command === "__provision") return provision(arg!);
+	if (command === "__pi-context") return printPiContext(arg!);
 	if (command === "ls") {
 		const all = sessions();
 		if (all.length === 0) say("no sessions yet");

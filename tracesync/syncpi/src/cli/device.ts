@@ -4,7 +4,7 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { hostname } from "node:os";
 import { localDaemon } from "@earendil-works/pi-env";
-import { channelFrame, parseChannelFrame, type ServerMessage } from "../shared/protocol.ts";
+import { channelFrame, type PiContext, parseChannelFrame, type ServerMessage } from "../shared/protocol.ts";
 import type { Connection } from "./client.ts";
 import type { Mirror } from "./sync.ts";
 
@@ -14,6 +14,9 @@ export class LocalDevice {
 	readonly #daemons = new Map<number, ChildProcessWithoutNullStreams>();
 	/** Tool activity on this machine, for the UI. */
 	onActivity: (running: number) => void = () => {};
+	/** Your pi setup (skills, AGENTS.md), sent along so your requests get it; set once it has loaded. */
+	#context: PiContext | undefined;
+	#registered = false;
 
 	constructor(conn: Connection, mirror: Mirror) {
 		this.#conn = conn;
@@ -22,7 +25,17 @@ export class LocalDevice {
 
 	/** Offers this machine on every (re)connect; the server forgets devices when their connection closes. */
 	register(): void {
-		this.#conn.send({ type: "device", device: { hostname: hostname().replace(/\.local$/, ""), platform: process.platform, arch: process.arch, dir: this.#mirror.dir } });
+		this.#registered = true;
+		this.#conn.send({
+			type: "device",
+			device: { hostname: hostname().replace(/\.local$/, ""), platform: process.platform, arch: process.arch, dir: this.#mirror.dir, context: this.#context },
+		});
+	}
+
+	/** Your pi setup finished loading: offer it, re-registering if this machine is already registered. */
+	setContext(context: PiContext): void {
+		this.#context = context;
+		if (this.#registered && this.#conn.state === "open") this.register();
 	}
 
 	/** Handles device messages; returns false for messages that are not about the device. */

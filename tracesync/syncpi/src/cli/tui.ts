@@ -22,6 +22,7 @@ import { type Item, Thread, toolSummary } from "../shared/thread.ts";
 import type { Connection, ConnectionState } from "./client.ts";
 import type { SessionRecord } from "./store.ts";
 import type { LocalDevice } from "./device.ts";
+import { expandTemplate, type LoadedPiContext, type PromptTemplateInfo } from "./pi-context.ts";
 import type { Mirror } from "./sync.ts";
 
 // ---------- colors ----------
@@ -219,7 +220,10 @@ export class App {
 	#spinner: NodeJS.Timeout | undefined;
 	#done: () => void = () => {};
 
-	constructor(record: SessionRecord, conn: Connection, mirror: Mirror | undefined, device: LocalDevice | undefined) {
+	/** Your pi prompt templates: `/name args` expands before sending, as in pi. */
+	#templates: PromptTemplateInfo[] = [];
+
+	constructor(record: SessionRecord, conn: Connection, mirror: Mirror | undefined, device: LocalDevice | undefined, piContext?: Promise<LoadedPiContext>) {
 		this.#record = record;
 		this.#conn = conn;
 		this.#mirror = mirror;
@@ -235,6 +239,14 @@ export class App {
 		this.#view = new ThreadView(this.#threads.main);
 		this.#editor = new Editor(this.#tui, editorTheme, { paddingX: 1 });
 		this.#editor.setAutocompleteProvider(new CombinedAutocompleteProvider(COMMANDS, mirror?.dir ?? process.cwd()));
+		void piContext?.then((context) => {
+			this.#templates = context.prompts;
+			const templates = context.prompts.map((p) => ({ name: p.name, description: `${p.description} (prompt template)`, argumentHint: p.argumentHint }));
+			this.#editor.setAutocompleteProvider(new CombinedAutocompleteProvider([...COMMANDS, ...templates], mirror?.dir ?? process.cwd()));
+			if (device !== undefined && (context.skillCount > 0 || context.agents.length > 0)) {
+				this.#note(c.gray(`your pi setup joins your requests: ${context.skillCount} skills, ${context.agents.length} AGENTS file${context.agents.length === 1 ? "" : "s"}${context.prompts.length ? `, ${context.prompts.length} prompt templates` : ""}`), 8_000);
+			}
+		});
 		this.#editor.onSubmit = (text) => this.#submit(text);
 		this.#tui.addChild(this.#header);
 		this.#tui.addChild(this.#view);
@@ -356,7 +368,13 @@ export class App {
 		const text = raw.trim();
 		if (text.length === 0) return;
 		this.#editor.addToHistory(text);
+		const expanded = text.startsWith("/") ? expandTemplate(text, this.#templates) : undefined;
+		if (expanded !== undefined) return this.#send(expanded);
 		if (text.startsWith("/")) return this.#command(text);
+		this.#send(text);
+	}
+
+	#send(text: string): void {
 		if (this.#me?.role === "viewer") return this.#note(c.gray("you're a viewer in this session; an admin can make you an editor"), 6_000);
 		if (this.#showing === "setup") this.#show("main");
 		this.#conn.send({ type: "submit", requestId: randomUUID(), text, mode: "followUp", where: this.#where });

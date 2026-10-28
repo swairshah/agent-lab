@@ -68,6 +68,11 @@ export class Devices {
 		}
 	}
 
+	/** The pi setup a member's machine offered, used while their request runs there. */
+	context(memberId: string): DeviceInfo["context"] {
+		return this.#devices.get(memberId)?.info.context;
+	}
+
 	online(memberId: string): DeviceInfo | undefined {
 		return this.#devices.get(memberId)?.info;
 	}

@@ -19,7 +19,7 @@ import { dirname, extname, join } from "node:path";
 import { type AgentEvent, type AgentEventStream, LiveDoc } from "@earendil-works/pi-durable";
 import { WebSocket } from "ws";
 import { hashBytes, listFiles, MAX_FILE_BYTES, safePath } from "../shared/files.ts";
-import { type ClientMessage, type ConvName, type InviteInfo, type Presence, parseChannelFrame, ROLES, type Role, type ServerMessage } from "../shared/protocol.ts";
+import { type ClientMessage, type ConvName, type InviteInfo, type PiContext, type Presence, parseChannelFrame, ROLES, type Role, type ServerMessage } from "../shared/protocol.ts";
 import { type DeviceClient, Devices } from "./devices.ts";
 import { context, Session } from "./session.ts";
 import { StateFile, type StoredMember, token } from "./state.ts";
@@ -98,6 +98,16 @@ function slim(events: readonly AgentEvent[]): AgentEvent[] {
 		else out.push(event);
 	}
 	return out;
+}
+
+/** A member's pi setup as their client sent it, bounded and type-checked. */
+function piContext(value: unknown): PiContext | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	const v = value as Partial<PiContext>;
+	const agents = Array.isArray(v.agents)
+		? v.agents.filter((a) => typeof a?.path === "string" && typeof a?.content === "string").slice(0, 20).map((a) => ({ path: a.path.slice(0, 500), content: a.content.slice(0, 64 * 1024) }))
+		: [];
+	return { skills: typeof v.skills === "string" ? v.skills.slice(0, 48 * 1024) : "", skillCount: Number(v.skillCount) || 0, agents };
 }
 
 /** A terminal waiting for its owner to approve the sign-in in a browser. */
@@ -300,7 +310,13 @@ export class Room {
 					label: `${info.hostname} (${info.platform})`,
 				};
 				client.device = device;
-				this.devices.register(device, { hostname: String(info.hostname).slice(0, 80), platform: String(info.platform), arch: String(info.arch), dir: String(info.dir) });
+				this.devices.register(device, {
+					hostname: String(info.hostname).slice(0, 80),
+					platform: String(info.platform),
+					arch: String(info.arch),
+					dir: String(info.dir),
+					context: piContext(info.context),
+				});
 				this.#broadcast(this.#presence());
 				return;
 			}
