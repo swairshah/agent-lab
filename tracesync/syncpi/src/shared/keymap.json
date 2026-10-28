@@ -31,6 +31,7 @@
 	{ "id": "view.files", "title": "Show files", "group": "View", "keys": "cmd-shift-e", "apps": ["desktop"] },
 	{ "id": "view.people", "title": "People and invites", "group": "View", "apps": ["web", "desktop"] },
 	{ "id": "view.terminal", "title": "Toggle terminal", "group": "View", "keys": "ctrl-`", "apps": ["desktop"] },
+	{ "id": "file.comment", "title": "Comment on the selected lines", "group": "View", "keys": "cmd-alt-m", "apps": ["desktop"] },
 
 	{ "id": "project.sync", "title": "Sync the project now", "group": "Project", "apps": ["desktop"] },
 	{ "id": "project.reveal", "title": "Reveal the project in Finder", "group": "Project", "apps": ["desktop"] },
