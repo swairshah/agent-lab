@@ -77,7 +77,7 @@ async function main(): Promise<void> {
 	// was made (thread-view.ts).
 	const sendComment = (comment: LineComment) => {
 		if (session.role === "viewer") return toast("Viewers can't comment; ask an admin to make you an editor.", "error");
-		session.submit(composer.takeText(), "followUp", where, [], [comment]);
+		session.submit(composer.takeText(), "interrupt", where, [], [comment]);
 	};
 	// A project file as an artifact, for a tab in the panel.
 	const loadFile = async (path: string, lines?: string) => {
@@ -169,7 +169,7 @@ async function main(): Promise<void> {
 			);
 		return recordings.get(name)!;
 	};
-	const threadView = new ThreadView($("thread"), $("scroller"), session, { onOpenArtifact: (a) => panel.open(a), onFork: fork, onOpenFile: (path, lines) => void openFile(path, lines), loadImage, loadRecording, onComment: sendComment });
+	const threadView = new ThreadView($("thread"), $("scroller"), session, { onOpenArtifact: (a) => panel.open(a), onFork: fork, onOpenFile: (path, lines) => void openFile(path, lines), loadImage, loadRecording, onComment: sendComment, draftOwner: () => composer.owner, onJoinDraft: (owner) => composer.join(owner) });
 	const settings = new Settings(session, {
 		onTheme: (theme) => {
 			applyTheme(theme as Theme);
@@ -250,7 +250,7 @@ async function main(): Promise<void> {
 		$("sync-status").addEventListener("click", () => app.command("project.sync"));
 	}
 
-	session.on("typing", () => threadView.renderTyping());
+	session.on("drafts", () => threadView.renderTyping());
 	session.on("thread", () => {
 		threadView.render();
 		panel.update();
@@ -343,14 +343,21 @@ async function main(): Promise<void> {
 		if (me === undefined || info === undefined) return [];
 		return mentionsOf(session.threads.main.state, me).map((m) => ({ ...m, author: session.nameOf(m.memberId, m.author), thread: info.id, threadTitle: info.name }));
 	};
-	const inbox = app ? undefined : new Inbox({ load: inboxItems, open: (item) => threadView.reveal(item.key), many: false });
+	// Showing a draft you were tagged in also joins it, to write it with them.
+	const reveal = (key: string) => {
+		const shown = threadView.reveal(key);
+		const item = session.threads.main.state.items.find((i) => i.key === key);
+		if (item?.kind === "notice" && item.tag !== undefined) composer.join(item.tag.owner);
+		return shown;
+	};
+	const inbox = app ? undefined : new Inbox({ load: inboxItems, open: (item) => reveal(item.key), many: false });
 	if (inbox) {
 		session.on("thread", () => {
-			for (const m of inbox.fresh(inboxItems())) toast(`${m.author} mentioned you: ${m.text.split("\n")[0]!.slice(0, 90)}`);
+			for (const m of inbox.fresh(inboxItems())) toast(`${m.author} ${m.draft !== undefined ? "tagged you in a draft" : "mentioned you"}: ${m.text.split("\n")[0]!.slice(0, 90)}`);
 			inbox.update();
 		});
 	}
-	(window as Window & { syncpiReveal?: (key: string) => boolean }).syncpiReveal = (key) => threadView.reveal(key);
+	(window as Window & { syncpiReveal?: (key: string) => boolean }).syncpiReveal = reveal;
 
 	// What each command in src/shared/keymap.json does here; in the app, the shell's commands go up to it.
 	const fromShell = Object.fromEntries((app ? SHELL_COMMANDS : []).map((id) => [id, () => void app!.command(id)]));

@@ -25,6 +25,8 @@ export type UserItem = {
 	requestId?: string;
 	/** Where it ran: on the sender's own machine ("device") or the session VM. */
 	where?: "device" | "vm";
+	/** Who else wrote it, when it was a draft written together (by name at the time). */
+	with?: string[];
 	rev: number;
 };
 /** `model` is the `provider/model` that wrote it, when known. */
@@ -40,7 +42,9 @@ export type ToolItem = {
 	details?: Json;
 	rev: number;
 };
-export type NoticeItem = { kind: "notice"; key: string; text: string; rev: number };
+/** A line for people, not the model. `tag`: someone tagged members in a draft (whose writer is `owner`). */
+export type NoticeItem = { kind: "notice"; key: string; text: string; tag?: DraftTag; rev: number };
+export type DraftTag = { by: string; byId: string; owner: string; memberIds: string[]; text: string; at: number };
 export type Item = UserItem | AssistantItem | ToolItem | NoticeItem;
 
 export type ThreadState = {
@@ -314,15 +318,21 @@ export class Thread {
 			case "syncpi.notice":
 				this.#push({ kind: "notice", key, text: String((entry.data as { text?: string })?.text ?? ""), rev: 0 });
 				return;
+			case "syncpi.tag": {
+				const tag = entry.data as DraftTag & { names?: string[] };
+				const names = tag.names?.join(", ") ?? "someone";
+				this.#push({ kind: "notice", key, text: `${tag.by} tagged ${names} in ${tag.byId === tag.owner ? "their" : "a"} draft`, tag, rev: 0 });
+				return;
+			}
 			case "syncpi.message": {
-				const data = entry.data as { author?: string; memberId?: string; text?: string; attachments?: { name: string; kind: "image" | "text" }[]; comments?: LineComment[]; at?: number; requestId?: string; where?: "device" | "vm" };
+				const data = entry.data as { author?: string; memberId?: string; text?: string; attachments?: { name: string; kind: "image" | "text" }[]; comments?: LineComment[]; at?: number; requestId?: string; where?: "device" | "vm"; with?: string[] };
 				const images = Array.isArray(message?.content) ? message.content.filter((b) => b.type === "image") : [];
 				let image = 0;
 				const attachments = data.attachments?.map((a) => {
 					const block = a.kind === "image" ? (images[image++] as { data?: string; mimeType?: string } | undefined) : undefined;
 					return block?.data ? { ...a, url: `data:${block.mimeType};base64,${block.data}` } : a;
 				});
-				this.#push({ kind: "user", key, author: data.author, memberId: data.memberId, text: data.text ?? textOf(message?.content), attachments, comments: data.comments, at: data.at, requestId: data.requestId, where: data.where, rev: 0 });
+				this.#push({ kind: "user", key, author: data.author, memberId: data.memberId, text: data.text ?? textOf(message?.content), attachments, comments: data.comments, at: data.at, requestId: data.requestId, where: data.where, with: data.with, rev: 0 });
 				return;
 			}
 			default:

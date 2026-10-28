@@ -86,7 +86,12 @@ export type SessionInfo = {
 export type FileHash = string | null;
 
 export type ClientMessage =
-	| { type: "submit"; requestId: string; text: string; mode?: "followUp" | "steer"; where?: Where; attachments?: Attachment[]; comments?: LineComment[] }
+	/**
+	 * A message for the agent. mode "interrupt" (what the composer sends, as in Delta) stops the current run and starts
+	 * this one, when the sender may stop it, and otherwise queues it; "followUp" queues it behind the current run;
+	 * "steer" joins the current run. `draft`: it was the shared draft of this member, which is cleared for everyone.
+	 */
+	| { type: "submit"; requestId: string; text: string; mode?: "interrupt" | "followUp" | "steer"; where?: Where; attachments?: Attachment[]; comments?: LineComment[]; draft?: string }
 	/** This client runs its member's requests on its machine. */
 	| { type: "device"; device: DeviceInfo }
 	/** A fence finished: the local copy is in step with the session as of the fence. */
@@ -113,8 +118,12 @@ export type ClientMessage =
 	/** Admins: switch the thread back to another branch. */
 	| { type: "switchBranch"; id: number }
 	| { type: "configure"; model: string; thinkingLevel?: string }
-	/** What this person is writing, as they write it, for the others in the thread; "" when they stop. Never stored. */
-	| { type: "typing"; text: string }
+	/** A change to a member's unsent draft (theirs, or one this person joined): a Yjs update, base64 (drafts.ts). */
+	| { type: "draft"; owner: string; update: string }
+	/** Where this person's cursor is: in whose draft, as Yjs relative positions; no owner when in none. */
+	| { type: "caret"; owner?: string; anchor?: unknown; head?: unknown }
+	/** Tags members in a draft: they find it in their inbox, and can join it. */
+	| { type: "tag"; owner: string; memberIds: string[] }
 	| { type: "ping" };
 
 export type ServerMessage =
@@ -128,8 +137,13 @@ export type ServerMessage =
 	 */
 	| { type: "history"; conv: ConvName; entries: unknown[] }
 	| { type: "presence"; online: Presence[]; members: Member[] }
-	/** Someone's unsent draft, live; "" when they sent or cleared it, or left. */
-	| { type: "typing"; memberId: string; name: string; text: string }
+	/**
+	 * A change to `owner`'s unsent draft, live; all of each draft right after connecting. `sent`: the member who sent
+	 * it to the agent, and it's now empty.
+	 */
+	| { type: "draft"; owner: string; name: string; update?: string; sent?: string }
+	/** Someone's cursor, in a draft or none (they left). */
+	| { type: "caret"; memberId: string; name: string; owner?: string; anchor?: unknown; head?: unknown }
 	| { type: "env"; env: EnvStatus }
 	/**
 	 * Files the server saw change since the previous frame (hash null = deleted). The first frame after connecting is

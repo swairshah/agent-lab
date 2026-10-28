@@ -1,6 +1,7 @@
-// The inbox, as in Delta (⇧⌘J, or "Inbox" in the palette): messages that mention you. Unread first (⌘1) or all
-// (⌘2); arrows move, Enter opens the message where it was left, in its thread. In the app it spans every thread
-// (the host follows shared threads, src/desktop/host.ts); in a browser it's this thread's.
+// The inbox, as in Delta (⇧⌘J, or "Inbox" in the palette): messages that mention you, and drafts you're tagged in
+// (opening one joins it). Unread first (⌘1) or all (⌘2); arrows move, Enter opens the message where it was left, in
+// its thread. In the app it spans every thread (the host follows shared threads, src/desktop/host.ts); in a browser
+// it's this thread's.
 //
 // What you've read is kept in this browser (or the app).
 import type { Mention } from "../shared/mentions.ts";
@@ -130,7 +131,7 @@ export class Inbox {
 			const where = this.#many ? ` in <span class="inbox-thread">${escapeHtml(item.threadTitle)}</span>` : "";
 			const when = item.at ? `<span class="inbox-time">${escapeHtml(relativeTime(item.at))}</span>` : "";
 			row.innerHTML = `<span class="avatar" style="--person:${personColor(item.author)}">${escapeHtml(initials(item.author))}</span><div class="inbox-main"><div class="inbox-head"><strong>${escapeHtml(item.author)}</strong> ${
-				item.comment !== undefined ? "mentioned you in a comment" : "mentioned you"
+				item.draft !== undefined ? "tagged you in a draft" : item.comment !== undefined ? "mentioned you in a comment" : "mentioned you"
 			}${where}${when}</div><div class="inbox-text">${escapeHtml(item.text)}</div></div>`;
 			this.#list.append(row);
 		});

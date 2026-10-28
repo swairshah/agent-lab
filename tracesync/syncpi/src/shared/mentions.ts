@@ -28,12 +28,19 @@ export type Mention = {
 	author: string;
 	text: string;
 	at?: number;
+	/** They were tagged in a draft, written by this member: opening it joins the draft. */
+	draft?: string;
 };
 
-/** The messages in a thread that mention `me` (by name), written by someone else; the newest first. */
+/** The messages in a thread that mention `me` (by name), written by someone else, and the drafts they were tagged
+ *  in; the newest first. */
 export function mentionsOf(state: ThreadState, me: { id: string; name: string }): Mention[] {
 	const out: Mention[] = [];
 	for (const item of state.items) {
+		if (item.kind === "notice" && item.tag !== undefined && item.tag.byId !== me.id && item.tag.memberIds.includes(me.id)) {
+			const { byId, by, text, at, owner } = item.tag;
+			out.push({ key: item.key, memberId: byId, author: by, text, at, draft: owner });
+		}
 		if (item.kind !== "user" || item.memberId === me.id) continue;
 		const user = item as UserItem;
 		const base = { key: user.key, memberId: user.memberId, author: user.author ?? "someone", at: user.at };

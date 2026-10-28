@@ -196,6 +196,8 @@ export type SessionEvents = {
 	branch(): void;
 };
 
+type TaskId = Parameters<Harness["abortTask"]>[0];
+
 /** Who started a run and where its tools execute, read back from the request ID of its first input. */
 type Route = { memberId?: string; where: Where };
 
@@ -441,13 +443,15 @@ export class Session {
 		return watchEvents(this.harness, this.conversation(name).id, context);
 	}
 
-	async submit(member: StoredMember, requestId: string, text: string, mode: "followUp" | "steer", where: Where, attachments: Attachment[] = [], comments: LineComment[] = []): Promise<void> {
+	/** `others`: who else wrote it, when it was a draft written together. */
+	async submit(member: StoredMember, requestId: string, text: string, mode: "followUp" | "steer", where: Where, attachments: Attachment[] = [], comments: LineComment[] = [], others: string[] = []): Promise<void> {
 		const checked = checkComments(comments);
 		// A request can only run on its sender's own machine, and only while it is connected.
 		const destination: Where = where === "device" && this.devices.online(member.id) !== undefined ? "device" : "vm";
 		// The model sees where each message runs, so it can tell people where their requests ran.
 		const place = destination === "device" ? `on ${this.devices.label(member.id) ?? "their own machine"}` : "on the session VM";
-		const { content, shown } = messageContent(`[${member.name}, running ${place}] ${text}${commentText(checked)}`, attachments);
+		const writers = others.length > 0 ? ` (written with ${others.join(", ")})` : "";
+		const { content, shown } = messageContent(`[${member.name}${writers}, running ${place}] ${text}${commentText(checked)}`, attachments);
 		// A steer joins the running run and its tools. Nobody steers a run that executes on someone else's machine;
 		// it waits for its own run instead.
 		if (mode === "steer") {
@@ -461,7 +465,7 @@ export class Session {
 				// The route is part of the request ID, so it is stored with the submission and survives restarts.
 				requestId: `${member.id}:${destination}:${requestId}`,
 				whenBusy: mode,
-				entry: { kind: "syncpi.message", data: { author: member.name, memberId: member.id, text, at: Date.now(), requestId, where: destination, ...(shown.length > 0 ? { attachments: shown } : {}), ...(checked.length > 0 ? { comments: checked } : {}) } },
+				entry: { kind: "syncpi.message", data: { author: member.name, memberId: member.id, text, at: Date.now(), requestId, where: destination, ...(others.length > 0 ? { with: others } : {}), ...(shown.length > 0 ? { attachments: shown } : {}), ...(checked.length > 0 ? { comments: checked } : {}) } },
 			},
 			context,
 		);
@@ -472,6 +476,11 @@ export class Session {
 		await this.main.submit({ type: "write", entry: { kind: "syncpi.notice", data: { text } } }, context);
 	}
 
+	/** People were tagged in a draft: a line in the thread (not for the model), and an item in their inboxes. */
+	async tag(data: { by: string; byId: string; owner: string; memberIds: string[]; names: string[]; text: string; at: number }): Promise<void> {
+		await this.main.submit({ type: "write", entry: { kind: "syncpi.tag", data } }, context);
+	}
+
 	/**
 	 * Stops the current run only. Queued messages, including other people's, stay queued; the next one starts a new run.
 	 * (Conversation.abort would withdraw every queued input.)
@@ -479,6 +488,27 @@ export class Session {
 	async abort(): Promise<void> {
 		const live = await this.harness.snapshot(LiveDoc, this.main.id, context);
 		if (live?.run !== undefined) await this.harness.abortTask(live.run.taskId, context);
+	}
+
+	/**
+	 * Stops the run `taskId`, if it's still going, and resolves once it has ended: a message sent then starts a run
+	 * at once, with the messages queued behind the stopped run.
+	 */
+	async interrupt(taskId: TaskId): Promise<void> {
+		await this.harness.abortTask(taskId, context).catch(() => {});
+		const deadline = Date.now() + 15_000;
+		while (Date.now() < deadline) {
+			const live = await this.harness.snapshot(LiveDoc, this.main.id, context);
+			if (live?.run?.taskId !== taskId) return;
+			await new Promise((r) => setTimeout(r, 50));
+		}
+	}
+
+	/** The shared thread's current run, if one is running, and who started it. */
+	async current(): Promise<{ taskId: TaskId; memberId?: string } | undefined> {
+		const live = await this.harness.snapshot(LiveDoc, this.main.id, context);
+		if (live?.run === undefined) return undefined;
+		return { taskId: live.run.taskId, memberId: (await this.#route(this.harness)).memberId };
 	}
 
 	/** Who started the shared thread's current run, if one is running. */
@@ -693,7 +723,7 @@ export class Session {
 function mainInstructions(name: string, workdir: string): string {
 	return `You are syncpi, a coding agent in a shared session for the project "${name}". The session's server and its copy of the project (${workdir}) are on a Linux VM (Ubuntu; sudo works without a password).
 
-Several people can be in this thread at once, from the syncpi terminal app, the desktop app or a browser. Each user message starts with the sender's name and where that request runs, in brackets, like "[Ada, running on Ada's machine (ada-mbp, darwin arm64)] fix the tests" or "[Ada, running on the session VM] deploy it". Keep track of who asked for what, and use names when it helps. When two people ask for conflicting things, say so instead of picking silently.
+Several people can be in this thread at once, from the syncpi terminal app, the desktop app or a browser. Each user message starts with the sender's name and where that request runs, in brackets, like "[Ada, running on Ada's machine (ada-mbp, darwin arm64)] fix the tests" or "[Ada, running on the session VM] deploy it". People can also write a message together before sending it: then the bracket names the others too, like "[Ada (written with Bo), running on the session VM]". Keep track of who asked for what, and use names when it helps. When two people ask for conflicting things, say so instead of picking silently.
 
 Your tools run where the bracket says, which can differ from message to message and from person to person: on the sender's own computer when they wrote from the terminal app or the desktop app (in their copy of the project, with their toolchains, for example Xcode on a Mac), or on the session's Linux VM when they wrote from a browser, sent /remote, or switched to the VM. When asked where things ran, answer per message from those brackets; don't assume one person's requests ran where another's did. The syncpi section says which machine you are on right now, and its working directory is the project. Do not assume tools or files outside the project carry over between machines.
 

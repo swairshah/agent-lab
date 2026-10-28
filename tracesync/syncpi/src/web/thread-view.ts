@@ -2,6 +2,7 @@
 // avatar column and its content, as in a conversation; thinking and tool calls are one quiet line until opened.
 // Items are rendered once per revision and replaced in place when they change, so a long thread stays cheap.
 import { type Artifact, kindOfPath, patchStats, replyArtifacts, toolArtifacts } from "../shared/artifacts.ts";
+import { draftText, isCommand } from "../shared/drafts.ts";
 import type { LineComment } from "../shared/protocol.ts";
 import type { Item, ToolItem, UserItem } from "../shared/thread.ts";
 import { isQuietTool, toolGroupSummary, toolSummary } from "../shared/thread.ts";
@@ -10,6 +11,7 @@ import { renderDiagram } from "./diagrams.ts";
 import { el, escapeHtml, initials, personColor } from "./dom.ts";
 import { modelAvatar, whereMark } from "./icons.ts";
 import { renderMarkdown } from "./markdown.ts";
+import { peersHtml, peersIn } from "./peers.ts";
 import type { SessionClient } from "./session.ts";
 
 export type ThreadViewOptions = {
@@ -22,6 +24,10 @@ export type ThreadViewOptions = {
 	loadRecording: (name: string) => Promise<string | undefined>;
 	/** Sends a comment on lines of a file, from a diff or file in the thread. */
 	onComment: CommentHandler;
+	/** Whose draft the composer is writing (it isn't shown in the thread too). */
+	draftOwner: () => string | undefined;
+	/** Joins someone's draft, to write it with them. */
+	onJoinDraft: (owner: string) => void;
 };
 
 const TOOL_VERB: Record<string, string> = { bash: "Ran", edit: "Edited", write: "Wrote", read: "Read", remote_bash: "Ran on the VM", record_browser: "Recorded" };
@@ -177,12 +183,35 @@ export class ThreadView {
 		if (follow) scroller.scrollTop = scroller.scrollHeight;
 	}
 
+	/**
+	 * Each draft being written by someone else, keystroke by keystroke, with the cursors in it and who's writing it;
+	 * an editor can join it. Not the one the composer is writing, and not commands (/…, !…).
+	 */
 	#renderTyping(): void {
 		for (const old of this.#box.querySelectorAll(":scope > .typing")) old.remove();
 		if (this.#conv !== "main") return;
-		for (const [memberId, draft] of this.#session.typing) {
-			const node = this.#user(this.#session.nameOf(memberId, draft.name), draft.text, [], "typing…");
+		const session = this.#session;
+		const mine = this.#options.draftOwner();
+		for (const [owner, { name, doc }] of session.drafts) {
+			if (owner === session.me?.id || owner === mine) continue;
+			const text = draftText(doc).toString();
+			if (text.trim() === "" || isCommand(text)) continue;
+			const peers = peersIn(session, owner);
+			const others = peers.filter((p) => p.id !== owner).map((p) => p.name);
+			const node = this.#user(session.nameOf(owner, name), "", [], others.length > 0 ? `writing with ${others.join(", ")}…` : "typing…");
 			node.classList.add("typing");
+			node.dataset.draft = owner;
+			const body = el("div", "msg-body draft-body");
+			body.innerHTML = peersHtml(text, peers);
+			this.#markMentions(body);
+			node.querySelector(".msg-content")!.append(body);
+			if (session.role === "editor" || session.role === "admin") {
+				const join = el("button", "msg-action", "Write together");
+				join.type = "button";
+				join.title = "Join this draft: write it with them; either of you can send it";
+				join.onclick = () => this.#options.onJoinDraft(owner);
+				node.querySelector(".msg-meta")!.append(join);
+			}
 			this.#box.append(node);
 		}
 	}
@@ -202,7 +231,7 @@ export class ThreadView {
 		switch (item.kind) {
 			case "user": {
 				const name = this.#session.nameOf(item.memberId, item.author ?? "someone");
-				const node = this.#user(name, item.text, item.attachments ?? [], undefined, item.comments, item.where);
+				const node = this.#user(name, item.text, item.attachments ?? [], item.with?.length ? `with ${item.with.join(", ")}` : undefined, item.comments, item.where);
 				if (this.#session.role === "admin" && this.#conv === "main" && /^\d+$/.test(item.key)) {
 					const fork = el("button", "msg-action", "Edit & fork");
 					fork.type = "button";

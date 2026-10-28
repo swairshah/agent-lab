@@ -20,6 +20,7 @@ import { type AgentEvent, type AgentEventStream, LiveDoc } from "@earendil-works
 import { WebSocket } from "ws";
 import { hashBytes, listFiles, MAX_FILE_BYTES, safePath } from "../shared/files.ts";
 import { type ClientMessage, type ConvName, type InviteInfo, type PiContext, type Presence, parseChannelFrame, ROLES, type Role, type ServerMessage } from "../shared/protocol.ts";
+import { DRAFT_LIMITS, draftText, fromBase64, toBase64, Y } from "../shared/drafts.ts";
 import { type DeviceClient, Devices } from "./devices.ts";
 import { RECORDINGS } from "./remote-tools.ts";
 import { context, Session } from "./session.ts";
@@ -31,9 +32,15 @@ type Client = {
 	ws: WebSocket;
 	watches: Partial<Record<ConvName, AgentEventStream>>;
 	device?: DeviceClient & { label: string };
-	/** What they're writing now, shown live to the others. */
-	draft?: string;
+	/** Where their cursor is, in whose draft, shown live to the others. */
+	caret?: { owner: string; anchor?: unknown; head?: unknown };
 };
+
+/**
+ * A member's unsent draft, merged here as people write it (shared/drafts.ts), in memory only. `writers`: who changed
+ * its text since it was last empty; `tagged`: who has been told about it since then.
+ */
+type Draft = { doc: Y.Doc; writers: Set<string>; tagged: Set<string> };
 
 const RANK: Record<Role, number> = { viewer: 0, editor: 1, admin: 2 };
 const atLeast = (member: StoredMember, role: Role) => RANK[member.role] >= RANK[role];
@@ -135,6 +142,7 @@ export class Room {
 	readonly #webDir: string;
 	readonly #clients = new Set<Client>();
 	readonly #cliLogins = new Map<string, CliLogin>();
+	readonly #drafts = new Map<string, Draft>();
 	#lastActive = Date.now();
 
 	constructor(stateDir: string, base: string, webDir: string, faux: boolean) {
@@ -190,11 +198,37 @@ export class Room {
 		for (const client of this.#clients) this.#send(client, message);
 	}
 
-	/** Tells the others in the thread what `client` is writing ("" when they stopped). */
-	#typing(client: Client, text: string): void {
-		if ((client.draft ?? "") === text) return;
-		client.draft = text || undefined;
-		const message: ServerMessage = { type: "typing", memberId: client.member.id, name: client.member.name, text };
+	#draft(owner: string): Draft {
+		let draft = this.#drafts.get(owner);
+		if (draft === undefined) this.#drafts.set(owner, (draft = { doc: new Y.Doc(), writers: new Set(), tagged: new Set() }));
+		return draft;
+	}
+
+	/** Merges a change to someone's draft and passes it on to everyone else. */
+	#draftUpdate(client: Client, owner: string, update: string): void {
+		const writer = this.state.value.members[owner];
+		if (writer === undefined || update.length > (DRAFT_LIMITS.updateBytes * 4) / 3) return;
+		const draft = this.#draft(owner);
+		const text = draftText(draft.doc);
+		const before = text.toString();
+		try {
+			Y.applyUpdate(draft.doc, fromBase64(update));
+		} catch {
+			return;
+		}
+		if (text.length === 0) {
+			draft.writers.clear();
+			draft.tagged.clear();
+		} else if (text.toString() !== before) draft.writers.add(client.member.id);
+		const message: ServerMessage = { type: "draft", owner, name: writer.name, update };
+		for (const other of this.#clients) if (other !== client) this.#send(other, message);
+	}
+
+	/** Tells the others where `client`'s cursor is now (in no draft when it's undefined). */
+	#caret(client: Client, caret: Client["caret"]): void {
+		if (caret === undefined && client.caret === undefined) return;
+		client.caret = caret;
+		const message: ServerMessage = { type: "caret", memberId: client.member.id, name: client.member.name, ...caret };
 		for (const other of this.#clients) if (other !== client) this.#send(other, message);
 	}
 
@@ -232,6 +266,22 @@ export class Room {
 				const text = message.text.trim();
 				const comments = Array.isArray(message.comments) ? message.comments : [];
 				if (text.length === 0 && !(Array.isArray(message.attachments) && message.attachments.length > 0) && comments.length === 0) return;
+				// A draft written together goes out with the names of the others who wrote it. Read before anything is
+				// awaited: the sender's client empties the draft right after sending it.
+				const draft = typeof message.draft === "string" ? this.#drafts.get(message.draft) : undefined;
+				const others = [...(draft?.writers ?? [])].filter((id) => id !== member.id).flatMap((id) => this.state.value.members[id]?.name ?? []);
+				// As in Delta, a new message stops the run in progress and starts its own (with anything queued behind
+				// that run), when the sender may stop it: their own run, or anyone's for an admin. Otherwise it waits.
+				let stop: Awaited<ReturnType<Session["current"]>>;
+				if (message.mode === "interrupt") {
+					const current = await this.session.current();
+					if (current !== undefined && (atLeast(member, "admin") || current.memberId === member.id)) stop = current;
+					else if (current !== undefined) this.#send(client, { type: "notice", text: `Queued: ${this.state.value.members[current.memberId ?? ""]?.name ?? "someone"}'s request is running, and only admins can stop someone else's.` });
+				}
+				if (stop !== undefined) {
+					await this.session.interrupt(stop.taskId);
+					await this.session.notice(`${member.name} interrupted the agent`);
+				}
 				try {
 					await this.session.submit(
 						member,
@@ -241,10 +291,17 @@ export class Room {
 						message.where === "device" ? "device" : "vm",
 						Array.isArray(message.attachments) ? message.attachments : [],
 						comments,
+						others,
 					);
                     this.#send(client, { type: "accepted", requestId: message.requestId });
 				} catch (error) {
 					this.#send(client, { type: "error", message: String((error as Error).message ?? error), requestId: message.requestId });
+					return;
+				}
+				if (draft !== undefined) {
+					draft.writers.clear();
+					draft.tagged.clear();
+					this.#broadcast({ type: "draft", owner: message.draft!, name: this.state.value.members[message.draft!]?.name ?? "someone", sent: member.id });
 				}
 				return;
 			}
@@ -329,10 +386,31 @@ export class Room {
 			case "ping":
 				this.#send(client, { type: "pong" });
 				return;
-			case "typing":
-				if (!atLeast(member, "editor")) return;
-				this.#typing(client, typeof message.text === "string" ? message.text.slice(0, 4000) : "");
+			case "draft":
+				if (!atLeast(member, "editor") || typeof message.owner !== "string" || typeof message.update !== "string") return;
+				this.#draftUpdate(client, message.owner, message.update);
 				return;
+			case "caret": {
+				if (!atLeast(member, "editor")) return;
+				const owner = typeof message.owner === "string" && this.state.value.members[message.owner] !== undefined ? message.owner : undefined;
+				const fits = JSON.stringify([message.anchor ?? null, message.head ?? null]).length < 1000;
+				this.#caret(client, owner === undefined || !fits ? undefined : { owner, anchor: message.anchor, head: message.head });
+				return;
+			}
+			case "tag": {
+				if (!atLeast(member, "editor")) return this.#error(client, "viewers can't tag people in drafts");
+				const members = this.state.value.members;
+				const draft = this.#drafts.get(message.owner);
+				const text = draft === undefined ? "" : draftText(draft.doc).toString().trim();
+				if (draft === undefined || text === "" || members[message.owner] === undefined) return;
+				const ids = [...new Set(Array.isArray(message.memberIds) ? message.memberIds : [])]
+					.filter((id) => typeof id === "string" && members[id] !== undefined && id !== member.id && !draft.tagged.has(id))
+					.slice(0, 20);
+				if (ids.length === 0) return;
+				for (const id of ids) draft.tagged.add(id);
+				await this.session.tag({ by: member.name, byId: member.id, owner: message.owner, memberIds: ids, names: ids.map((id) => members[id]!.name), text: text.slice(0, 500), at: Date.now() });
+				return;
+			}
             case "configure":
                 if (!atLeast(member, "admin")) return this.#error(client, "only admins can change the model");
                 await this.session.configure(message.model, message.thinkingLevel);
@@ -419,7 +497,11 @@ export class Room {
 		this.#send(client, { type: "branches", branches: this.session.branches(), current: this.session.branchId });
 		this.#broadcast(this.#presence());
 		this.#send(client, { type: "target", label: this.session.targetLabel });
-		for (const other of this.#clients) if (other.draft) this.#send(client, { type: "typing", memberId: other.member.id, name: other.member.name, text: other.draft });
+		for (const [owner, draft] of this.#drafts) {
+			const name = this.state.value.members[owner]?.name ?? "someone";
+			this.#send(client, { type: "draft", owner, name, update: toBase64(Y.encodeStateAsUpdate(draft.doc)) });
+		}
+		for (const other of this.#clients) if (other.caret && other !== client) this.#send(client, { type: "caret", memberId: other.member.id, name: other.member.name, ...other.caret });
 		receive = (data, isBinary) => {
 			if (isBinary) {
 				if (client.device === undefined) return;
@@ -437,7 +519,7 @@ export class Room {
 		};
 		for (const [data, isBinary] of early.splice(0)) receive(data, isBinary);
 		ws.on("close", () => {
-			this.#typing(client, "");
+			this.#caret(client, undefined);
 			this.#clients.delete(client);
 			this.#lastActive = Date.now();
 			if (client.device !== undefined) this.devices.unregister(client.device);

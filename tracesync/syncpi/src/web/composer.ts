@@ -1,9 +1,17 @@
-// The composer: the next row of the thread. Enter starts a new line, ⌘↩ (Ctrl+Enter) sends. `/` completes commands,
-// `@` completes project files, and files can be dropped, pasted or attached: images go to the model as images, text
-// files go in the message. The draft survives reloads. Commands mirror the terminal UI's.
+// The composer: the next row of the thread. Enter starts a new line, ⌘↩ (Ctrl+Enter) sends, stopping the agent's
+// current run for it, as in Delta (/steer joins the run instead, /stop stops it). `/` completes commands, `@` people
+// and project files, and files can be dropped, pasted or attached: images go to the model as images, text files go in
+// the message. Commands mirror the terminal UI's.
+//
+// What's written here is a shared draft (shared/drafts.ts): the others see it as it's written, with your cursor. Tag
+// someone in it (@name) and it's in their inbox; they can join it and write it with you, their cursor showing here,
+// and whichever of you sends it sends it for both. The draft survives reloads.
 import { parseInvite } from "../shared/commands.ts";
+import { draftText, fromBase64, isCommand, toBase64, Y } from "../shared/drafts.ts";
+import { mentioned } from "../shared/mentions.ts";
 import { ATTACHMENT_LIMITS, type Attachment, IMAGE_TYPES, type Role, type Where } from "../shared/protocol.ts";
 import { $, escapeHtml, storage } from "./dom.ts";
+import { peersHtml, peersIn } from "./peers.ts";
 import type { SessionClient } from "./session.ts";
 import type { Section } from "./settings.ts";
 
@@ -59,9 +67,10 @@ const COMMANDS: Command[] = [
 	{ name: "settings", description: "Settings (⌘,)", run: (_a, _w, c) => c.openSettings() },
 	{ name: "remote", description: "Run this request on the session VM (keeps going if you close the app): /remote <task>", run: (arg, _w, c) => {
 		if (!arg) return c.notify("Say what to do: /remote <task>");
-		c.session.submit(arg, "followUp", "vm");
+		c.session.submit(arg, "interrupt", "vm");
 	} },
-	{ name: "steer", description: "Join the current run instead of queueing", run: (arg, _w, c) => arg && c.session.submit(arg, "steer", c.where()) },
+	{ name: "steer", description: "Add to what the agent is doing, without stopping it: /steer <message>", run: (arg, _w, c) => arg && c.session.submit(arg, "steer", c.where()) },
+	{ name: "queue", description: "Send after the agent's current run, without stopping it: /queue <message>", run: (arg, _w, c) => arg && c.session.submit(arg, "followUp", c.where()) },
 	{ name: "stop", description: "Stop the agent", run: (_a, _w, c) => c.session.send({ type: "abort" }) },
 	{ name: "env", description: "The setup agent's thread", run: (_a, _w, c) => c.showSetup() },
 	{ name: "changes", description: "Changes and artifacts", run: (_a, _w, c) => c.togglePanel() },
@@ -103,6 +112,9 @@ async function toAttachment(file: File): Promise<Attachment | string> {
 	return { name: file.name, mimeType: file.type || "text/plain", data: base64(buffer) };
 }
 
+/** The textarea's styles a layer over it copies, so its text lines up with the textarea's (peers' cursors). */
+const MIRROR = ["boxSizing", "width", "height", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth", "fontFamily", "fontSize", "fontWeight", "fontStyle", "lineHeight", "letterSpacing", "wordSpacing", "tabSize", "textIndent", "textTransform"] as const;
+
 /** A touch screen without a fine pointer: a phone or tablet. */
 const TOUCH = matchMedia("(pointer: coarse)").matches && !matchMedia("(any-pointer: fine)").matches;
 
@@ -111,9 +123,15 @@ export class Composer {
 	readonly #input: HTMLTextAreaElement;
 	readonly #draftKey: string;
 	#attachments: Attachment[] = [];
-	/** The draft the others last saw, and the pending update to it. */
-	#shared = "";
-	#sharing: ReturnType<typeof setTimeout> | undefined;
+	/** Whose draft this composer writes: yours, or one you joined. Unset until the session says who you are. */
+	#owner: string | undefined;
+	#text: Y.Text | undefined;
+	#unbind: (() => void) | undefined;
+	/** People already tagged in this draft, and the wait before tagging someone whose name was just typed. */
+	#tagged = new Set<string>();
+	#tagTimer: ReturnType<typeof setTimeout> | undefined;
+	#caretFrame = 0;
+	readonly #peers: HTMLElement;
 	/** Prompt template names offered by an embedding app; they expand there. */
 	prompts: string[] = [];
 
@@ -127,18 +145,41 @@ export class Composer {
 		this.#draftKey = `draft:${draftKey}`;
 		const input = this.#input;
 		input.value = storage.get(this.#draftKey) ?? "";
+		this.#peers = document.createElement("div");
+		this.#peers.className = "peer-layer";
+		this.#peers.setAttribute("aria-hidden", "true");
+		input.after(this.#peers);
 		this.#fit();
-		window.addEventListener("pagehide", () => this.#saveDraft());
-		// After a (re)connect the server knows no draft of ours: show it again.
-		context.session.on("connection", () => {
-			this.#shared = "";
-			this.#share();
+		const session = context.session;
+		// Your own draft, once the session says who you are; as you left it, merged with what the server has.
+		session.on("session", () => {
+			if (this.#owner === undefined && session.me !== undefined) this.#bindOwn();
 		});
+		session.on("connection", () => this.#shareCaret());
+		session.on("drafts", () => {
+			this.#renderPeers();
+			this.#renderWith();
+		});
+		session.on("people", () => this.#renderWith());
+		session.onDraftSent = (owner, by) => {
+			if (by === session.me?.id) return;
+			if (owner === this.#owner && owner !== session.me?.id) {
+				this.#bindOwn();
+				this.#c.notify(`${session.nameOf(by)} sent ${session.nameOf(owner)}'s draft`);
+			} else if (owner === session.me?.id) this.#c.notify(`${session.nameOf(by)} sent your draft`);
+		};
 
 		input.addEventListener("input", () => {
-			this.#saveDraft();
-			this.#fit();
+			this.#changed();
 			this.#complete();
+		});
+		for (const type of ["keyup", "mouseup", "focus", "select"]) input.addEventListener(type, () => this.#shareCaret());
+		document.addEventListener("selectionchange", () => {
+			if (document.activeElement === input) this.#shareCaret();
+		});
+		input.addEventListener("scroll", () => this.#renderPeers());
+		$("draft-with").addEventListener("click", (event) => {
+			if ((event.target as HTMLElement).closest("[data-leave]")) this.leave();
 		});
 		input.addEventListener("keydown", (event) => this.#key(event));
 		input.addEventListener("paste", (event) => {
@@ -179,8 +220,34 @@ export class Composer {
 	/** Puts text in the composer to edit, e.g. a message being branched from. */
 	setText(text: string): void {
 		this.#input.value = text;
-		this.#saveDraft();
-		this.#fit();
+		this.#changed();
+		this.#input.focus();
+	}
+
+	/** Whose draft this composer is writing. */
+	get owner(): string | undefined {
+		return this.#owner;
+	}
+
+	/** Writes `owner`'s draft with them, from here; your own draft waits, as you left it. */
+	join(owner: string): void {
+		const session = this.#c.session;
+		if (owner === session.me?.id || session.me === undefined) return this.leave();
+		if (session.role === "viewer") return this.#c.notify("Viewers can't write in drafts; ask an admin to make you an editor.", "error");
+		const entry = session.drafts.get(owner);
+		if (entry === undefined || draftText(entry.doc).toString().trim() === "") return this.#c.notify(`${session.nameOf(owner)}'s draft was sent or cleared.`);
+		this.#bind(owner);
+		const input = this.#input;
+		input.focus();
+		input.setSelectionRange(input.value.length, input.value.length);
+		this.#shareCaret();
+	}
+
+	/** Back to your own draft. */
+	leave(): void {
+		if (this.#c.session.me === undefined) return;
+		this.#bindOwn();
+		this.#shareCaret();
 		this.#input.focus();
 	}
 
@@ -192,8 +259,7 @@ export class Composer {
 	takeText(): string {
 		const text = this.#input.value.trim();
 		this.#input.value = "";
-		this.#saveDraft();
-		this.#fit();
+		this.#changed();
 		return text;
 	}
 
@@ -227,16 +293,18 @@ export class Composer {
 			// Prompt templates expand in an embedding app; elsewhere an unknown command stays in the box.
 			if (command === undefined && !this.prompts.includes(name)) return this.#c.notify(`Unknown command /${name}. Type / to see commands.`, "error");
 			if (command !== undefined) command.run(words.join(" "), words, this.#c);
-			else this.#c.session.submit(text, "followUp", this.#c.where());
+			else this.#c.session.submit(text, "interrupt", this.#c.where());
 		} else {
-			this.#c.session.submit(text, "followUp", this.#c.where(), this.#attachments);
+			this.#c.session.submit(text, "interrupt", this.#c.where(), this.#attachments, [], this.#owner);
 			this.#attachments = [];
 			this.#renderAttachments();
 		}
+		const joined = this.#owner !== this.#c.session.me?.id;
 		this.#input.value = "";
-		this.#saveDraft();
-		this.#fit();
+		this.#changed();
 		this.#hideCompletions();
+		// A draft you joined is sent: back to yours.
+		if (joined && this.#c.session.me !== undefined) this.#bindOwn();
 	}
 
 	#key(event: KeyboardEvent): void {
@@ -302,31 +370,159 @@ export class Composer {
 		input.style.height = `${input.scrollHeight}px`;
 	}
 
-	#saveDraft(): void {
-		storage.set(this.#draftKey, this.#input.value);
-		this.#share();
+	/** Your own draft: restored from this browser, kept here as it changes, and written from the composer. */
+	#bindOwn(): void {
+		const session = this.#c.session;
+		const me = session.me!.id;
+		const doc = session.draft(me);
+		if (!this.#restored) {
+			this.#restored = true;
+			const saved = storage.get(`y${this.#draftKey}`);
+			const text = draftText(doc);
+			try {
+				if (saved) Y.applyUpdate(doc, fromBase64(saved));
+				else if (text.length === 0 && this.#input.value) text.insert(0, this.#input.value);
+			} catch {}
+			doc.on("update", () => {
+				storage.set(`y${this.#draftKey}`, toBase64(Y.encodeStateAsUpdate(doc)));
+				storage.set(this.#draftKey, text.toString());
+			});
+		}
+		this.#bind(me);
+	}
+
+	#restored = false;
+
+	/** Writes `owner`'s draft from here: the textarea shows it, and what's typed goes into it. */
+	#bind(owner: string): void {
+		this.#unbind?.();
+		const text = draftText(this.#c.session.draft(owner));
+		this.#owner = owner;
+		this.#text = text;
+		this.#tagged = new Set();
+		const observe = (event: Y.YTextEvent, transaction: Y.Transaction) => {
+			if (transaction.origin !== this) this.#remote(event);
+		};
+		text.observe(observe);
+		this.#unbind = () => text.unobserve(observe);
+		this.#input.value = text.toString();
+		this.#fit();
+		this.#renderPeers();
+		this.#renderWith();
+	}
+
+	/** Someone else changed the draft: show it, keeping your cursor where it was in the text. */
+	#remote(event: Y.YTextEvent): void {
+		const input = this.#input;
+		let start = input.selectionStart;
+		let end = input.selectionEnd;
+		let at = 0;
+		for (const op of event.delta) {
+			if (op.retain !== undefined) at += op.retain;
+			else if (typeof op.insert === "string") {
+				const n = op.insert.length;
+				if (at < start) start += n;
+				if (at < end) end += n;
+				at += n;
+			} else if (op.delete !== undefined) {
+				start -= Math.max(0, Math.min(op.delete, start - at));
+				end -= Math.max(0, Math.min(op.delete, end - at));
+			}
+		}
+		const focused = document.activeElement === input;
+		input.value = this.#text!.toString();
+		if (focused) input.setSelectionRange(start, end);
+		if (input.value.trim() === "") this.#tagged.clear();
+		this.#fit();
+		this.#renderPeers();
+	}
+
+	/** The textarea changed here: the same change goes into the draft, for everyone. */
+	#changed(): void {
+		this.#fit();
+		const text = this.#text;
+		if (text === undefined) return storage.set(this.#draftKey, this.#input.value);
+		const before = text.toString();
+		const after = this.#input.value;
+		if (before === after) return;
+		// One replaced span: what's between the common start and the common end. The end can't reach left of the cursor,
+		// so typing a letter that repeats the next one inserts it where it was typed.
+		const most = Math.min(before.length, after.length);
+		let start = 0;
+		while (start < most && before[start] === after[start]) start++;
+		const tail = Math.min(most - start, Math.max(0, after.length - this.#input.selectionEnd));
+		let end = 0;
+		while (end < tail && before[before.length - 1 - end] === after[after.length - 1 - end]) end++;
+		text.doc!.transact(() => {
+			if (before.length - start - end > 0) text.delete(start, before.length - start - end);
+			if (after.length - start - end > 0) text.insert(start, after.slice(start, after.length - end));
+		}, this);
+		if (after.trim() === "") this.#tagged.clear();
+		clearTimeout(this.#tagTimer);
+		this.#tagTimer = setTimeout(() => this.#tag(), 1500);
+		this.#renderPeers();
+		this.#shareCaret();
+	}
+
+	/** Your cursor, for the others: in this draft, at most once a frame. */
+	#shareCaret(): void {
+		if (this.#caretFrame !== 0) return;
+		this.#caretFrame = requestAnimationFrame(() => {
+			this.#caretFrame = 0;
+			const text = this.#text;
+			if (text === undefined || this.#owner === undefined) return;
+			const at = (index: number) => Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(text, index));
+			this.#c.session.send({ type: "caret", owner: this.#owner, anchor: at(this.#input.selectionStart), head: at(this.#input.selectionEnd) });
+		});
 	}
 
 	/**
-	 * Others in the thread see the draft as it's written, as in Delta: at most every 120ms while typing, and its end
-	 * at once when it's sent or cleared. Commands (/…, !…) stay private.
+	 * People named in the draft (@name) are tagged: it's in their inbox, and they can join it. Each once per draft;
+	 * a name that's still being typed waits a moment (`now` when it was picked from the list).
 	 */
-	#share(): void {
-		const current = () => (/^\s*[/!]/.test(this.#input.value) ? "" : this.#input.value);
-		const send = (text: string) => {
-			this.#shared = text;
-			this.#c.session.send({ type: "typing", text });
-		};
-		if (current() === "") {
-			clearTimeout(this.#sharing);
-			this.#sharing = undefined;
-			if (this.#shared !== "") send("");
-			return;
-		}
-		this.#sharing ??= setTimeout(() => {
-			this.#sharing = undefined;
-			if (current() !== this.#shared) send(current());
-		}, 120);
+	#tag(): void {
+		clearTimeout(this.#tagTimer);
+		const session = this.#c.session;
+		const text = this.#text?.toString() ?? "";
+		if (this.#owner === undefined || text.trim() === "" || isCommand(text) || session.role === "viewer") return;
+		const others = session.members.filter((m) => m.id !== session.me?.id);
+		const named = new Set(mentioned(text, others.map((m) => m.name)));
+		const fresh = others.filter((m) => named.has(m.name) && !this.#tagged.has(m.id)).map((m) => m.id);
+		if (fresh.length === 0) return;
+		for (const id of fresh) this.#tagged.add(id);
+		session.send({ type: "tag", owner: this.#owner, memberIds: fresh });
+	}
+
+	/** The others' cursors and selections, drawn over the textarea in a layer that lines up with its text. */
+	#renderPeers(): void {
+		const layer = this.#peers;
+		const peers = this.#owner === undefined ? [] : peersIn(this.#c.session, this.#owner);
+		layer.hidden = peers.length === 0;
+		if (peers.length === 0) return;
+		const input = this.#input;
+		const style = getComputedStyle(input);
+		for (const prop of MIRROR) layer.style[prop] = style[prop];
+		layer.style.top = `${input.offsetTop}px`;
+		layer.style.left = `${input.offsetLeft}px`;
+		// Names above the first line show outside the textarea, so the layer doesn't clip; it scrolls with it instead.
+		layer.innerHTML = `<div style="transform: translateY(${-input.scrollTop}px)">${peersHtml(input.value, peers)}</div>`;
+	}
+
+	/** Who's writing this draft with you, above it; and whose draft it is when it isn't yours. */
+	#renderWith(): void {
+		const session = this.#c.session;
+		const box = $("draft-with");
+		const owner = this.#owner;
+		const me = session.me?.id;
+		if (owner === undefined || me === undefined) return void (box.hidden = true);
+		const others = [...session.carets].filter(([id, c]) => c.owner === owner && id !== owner).map(([id, c]) => session.nameOf(id, c.name));
+		const mine = owner === me;
+		box.hidden = mine && others.length === 0;
+		if (box.hidden) return;
+		const names = (list: string[]) => list.map((n) => `<strong>${escapeHtml(n)}</strong>`).join(", ");
+		box.innerHTML = mine
+			? `${names(others)} ${others.length === 1 ? "is" : "are"} writing this with you`
+			: `Writing <strong>${escapeHtml(session.nameOf(owner))}</strong>'s draft${others.length > 0 ? ` with ${names(others)}` : ""}. ⌘↩ sends it for everyone who wrote it. <button type="button" class="link" data-leave>Back to yours</button>`;
 	}
 
 	#complete(): void {
@@ -377,7 +573,9 @@ export class Composer {
 		if (match === null) return;
 		input.setRangeText(`${match[1]}${name} `, before.length - match[0].length, input.selectionStart, "end");
 		this.#hideCompletions();
-		this.#saveDraft();
+		this.#changed();
+		// Picking a person tags them now.
+		if (match[1] === "@" && this.#c.session.members.some((m) => m.name === name)) this.#tag();
 		input.focus();
 	}
 

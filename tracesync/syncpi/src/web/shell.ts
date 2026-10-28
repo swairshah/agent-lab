@@ -208,11 +208,12 @@ const inbox = new Inbox({ load: () => inboxItems, open: (item) => reveal(item.th
 
 /** A new mention: a toast here, and a notification from the system when the app isn't in front. */
 async function announce(item: InboxItem): Promise<void> {
-	toast(`${item.author} mentioned you in ${item.threadTitle}`);
+	const what = item.draft !== undefined ? "tagged you in a draft" : "mentioned you";
+	toast(`${item.author} ${what} in ${item.threadTitle}`);
 	const notes = tauri?.notification;
 	if (notes === undefined || document.hasFocus()) return;
 	if (!(await notes.isPermissionGranted()) && (await notes.requestPermission()) !== "granted") return;
-	notes.sendNotification({ title: `${item.author} mentioned you`, body: `${item.threadTitle}: ${item.text.split("\n")[0]!.slice(0, 140)}` });
+	notes.sendNotification({ title: `${item.author} ${what}`, body: `${item.threadTitle}: ${item.text.split("\n")[0]!.slice(0, 140)}` });
 }
 
 async function pollInbox(): Promise<void> {

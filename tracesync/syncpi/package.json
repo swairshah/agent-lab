@@ -19,7 +19,8 @@
     "marked": "^15.0.12",
     "mermaid": "^12.2.0",
     "node-pty": "^1.1.0",
-    "ws": "^8.22.0"
+    "ws": "^8.22.0",
+    "yjs": "^13.6.33"
   },
   "devDependencies": {
     "@lobehub/icons-static-svg": "^1.101.0",

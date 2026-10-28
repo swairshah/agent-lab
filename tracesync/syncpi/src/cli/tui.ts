@@ -22,6 +22,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { type BranchInfo, type ConvName, type EnvStatus, type InviteInfo, type Member, type Presence, ROLES, type Role, type ServerMessage, type SessionInfo } from "../shared/protocol.ts";
 import { type Artifact, patchStats, replyArtifacts, threadArtifacts, toolArtifacts } from "../shared/artifacts.ts";
+import { draftText, fromBase64, isCommand, Y } from "../shared/drafts.ts";
 import { type Item, Thread, toolSummary } from "../shared/thread.ts";
 import type { Connection, ConnectionState } from "./client.ts";
 import { home, type SessionRecord } from "./store.ts";
@@ -218,7 +219,8 @@ const COMMANDS = [
 	{ name: "tree", description: "Messages and branches; /tree <n> branches before message n, /tree b<k> switches (admins)", argumentHint: "[n | b<k>]" },
 	{ name: "web", description: "Open this session in your browser" },
 	{ name: "env", description: "Show or hide the setup agent's thread" },
-	{ name: "steer", description: "Send a message that joins the agent's current run", argumentHint: "<message>" },
+	{ name: "steer", description: "Add to what the agent is doing, without stopping it", argumentHint: "<message>" },
+	{ name: "queue", description: "Send after the agent's current run, without stopping it", argumentHint: "<message>" },
 	{ name: "remote", description: "Run this request on the session VM; it keeps going if you quit", argumentHint: "<task>" },
 	{ name: "stop", description: "Stop the agent (also Esc)" },
 	{ name: "sync", description: "File sync status" },
@@ -248,8 +250,8 @@ export class App {
 	#session: SessionInfo | undefined;
 	#me: Member | undefined;
 	#online: Presence[] = [];
-	/** Who is writing a message right now (from the web or desktop app), by member id. */
-	#typing = new Map<string, string>();
+	/** Drafts being written (from the web or desktop app), by their writer's member id; shown as they're typed. */
+	#drafts = new Map<string, { name: string; doc: Y.Doc }>();
 	#members: Member[] = [];
 	#env: EnvStatus = { status: "pending" };
 	#connState: ConnectionState = "connecting";
@@ -371,7 +373,6 @@ export class App {
 				this.#target = message.label;
 				break;
 			case "welcome":
-				this.#typing.clear();
 				this.#session = message.session;
 				this.#me = message.me;
 				this.#setMembers(message.members);
@@ -385,11 +386,13 @@ export class App {
 				if (message.conv === "main") this.#numberArtifacts();
 				this.#view.invalidate();
 				break;
-			case "typing":
-				if (message.memberId === this.#me?.id) break;
-				if (message.text === "") this.#typing.delete(message.memberId);
-				else this.#typing.set(message.memberId, message.name);
+			case "draft": {
+				let draft = this.#drafts.get(message.owner);
+				if (draft === undefined) this.#drafts.set(message.owner, (draft = { name: message.name, doc: new Y.Doc() }));
+				draft.name = message.name;
+				if (message.update !== undefined) Y.applyUpdate(draft.doc, fromBase64(message.update));
 				break;
+			}
 			case "presence":
 				this.#online = message.online;
 				this.#setMembers(message.members);
@@ -438,7 +441,8 @@ export class App {
 	#send(text: string): void {
 		if (this.#me?.role === "viewer") return this.#note(c.gray("you're a viewer in this session; an admin can make you an editor"), 6_000);
 		if (this.#showing === "setup") this.#show("main");
-		this.#conn.send({ type: "submit", requestId: randomUUID(), text, mode: "followUp", where: this.#where });
+		// As in Delta, a new message stops the agent's current run and starts its own (/steer and /queue don't).
+		this.#conn.send({ type: "submit", requestId: randomUUID(), text, mode: "interrupt", where: this.#where });
 	}
 
 	#command(text: string): void {
@@ -512,7 +516,11 @@ export class App {
 			}
 			case "remote":
 				if (arg.length === 0) return this.#note(c.gray("usage: /remote <task>"), 4_000);
-				this.#conn.send({ type: "submit", requestId: randomUUID(), text: arg, mode: "followUp", where: "vm" });
+				this.#conn.send({ type: "submit", requestId: randomUUID(), text: arg, mode: "interrupt", where: "vm" });
+				return;
+			case "queue":
+				if (arg.length === 0) return this.#note(c.gray("usage: /queue <message>"), 4_000);
+				this.#conn.send({ type: "submit", requestId: randomUUID(), text: arg, mode: "followUp", where: this.#where });
 				return;
 			case "steer":
 				if (arg.length === 0) return this.#note(c.gray("usage: /steer <message>"), 4_000);
@@ -718,7 +726,13 @@ export class App {
 			parts.push(c.gray(`yours run ${this.#where === "device" ? "here" : "on the VM"}`));
 			if (thread.busy && this.#target) parts.push(this.#localTools > 0 ? c.accent(`tools on this machine`) : c.gray(`tools on ${this.#target}`));
 		}
-		if (this.#typing.size > 0) parts.push(c.gray(`${[...this.#typing.values()].join(", ")} ${this.#typing.size === 1 ? "is" : "are"} typing…`));
+		// Others' drafts as they type them: the end of what they're writing.
+		for (const [owner, draft] of this.#drafts) {
+			const text = draftText(draft.doc).toString().trim();
+			if (owner === this.#me?.id || text === "" || isCommand(text)) continue;
+			const tail = text.replace(/\s+/g, " ");
+			parts.push(`${c.gray(`${draft.name}:`)} ${tail.length > 48 ? `…${tail.slice(-47)}` : tail}${c.accent("▍")}`);
+		}
 		if (thread.cost > 0) parts.push(c.gray(`$${thread.cost.toFixed(2)}`));
 		if (thread.model) parts.push(c.gray(thread.model));
 		this.#status.lines = ["", parts.join(c.gray(" · "))];

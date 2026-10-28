@@ -2,15 +2,22 @@
 // and an outbox so a message typed while offline is sent once the connection is back. Views subscribe to the parts
 // they show; this module knows nothing about the DOM.
 import type { Attachment, BranchInfo, ClientMessage, LineComment, ConvName, EnvStatus, InviteInfo, Member, Presence, ServerMessage, SessionInfo, Where } from "../shared/protocol.ts";
+import { draftText, fromBase64, toBase64, Y } from "../shared/drafts.ts";
 import { Thread } from "../shared/thread.ts";
 import { storage } from "./dom.ts";
 
-export type Change = "session" | "thread" | "people" | "env" | "invites" | "branches" | "files" | "connection" | "target" | "typing";
+export type Change = "session" | "thread" | "people" | "env" | "invites" | "branches" | "files" | "connection" | "target" | "drafts";
 
 type Submit = Extract<ClientMessage, { type: "submit" }>;
 
 /** WebSocket close code for a member who was removed. */
 const REMOVED = 4001;
+
+/** The origin of draft changes that came from the server, so they aren't sent back. */
+const REMOTE = Symbol("remote");
+
+/** `at`: when it last moved here, so its name can show for a moment, then fade. */
+export type Caret = { name: string; owner: string; anchor?: unknown; head?: unknown; at: number };
 
 export class SessionClient {
 	readonly threads: Record<ConvName, Thread> = { main: new Thread(), setup: new Thread() };
@@ -31,14 +38,18 @@ export class SessionClient {
 	connection: "connecting" | "open" | "reconnecting" | "removed" = "connecting";
 	/** Messages sent but not yet acknowledged by the server; resent after a reconnect, kept across reloads. */
 	readonly outbox = new Map<string, Submit>();
-	/** Other people's unsent drafts, live, by member id. */
-	readonly typing = new Map<string, { name: string; text: string }>();
+	/** Unsent drafts, everyone's, by their writer's member id (shared/drafts.ts). */
+	readonly drafts = new Map<string, { name: string; doc: Y.Doc }>();
+	/** Where other people's cursors are, by member id: in whose draft. */
+	readonly carets = new Map<string, Caret>();
 	/** Current names by member id, so a renamed person shows under their new name everywhere. */
 	names = new Map<string, string>();
 
 	onInvite: (url: string, invite: InviteInfo) => void = () => {};
 	onNotice: (text: string) => void = () => {};
 	onError: (message: string) => void = () => {};
+	/** Someone (`by`) sent `owner`'s draft to the agent. */
+	onDraftSent: (owner: string, by: string) => void = () => {};
 
 	readonly #token: string;
 	readonly #storageKey: string;
@@ -86,6 +97,8 @@ export class SessionClient {
 			this.#retry = 0;
 			this.#setConnection("open");
 			for (const m of this.outbox.values()) this.send(m);
+			// The server may have restarted, or missed changes made offline: it merges each draft whole.
+			for (const [owner, { doc }] of this.drafts) if (draftText(doc).length > 0 || owner === this.me?.id) this.send({ type: "draft", owner, update: toBase64(Y.encodeStateAsUpdate(doc)) });
 		};
 		ws.onmessage = (event) => this.#receive(JSON.parse(String(event.data)) as ServerMessage);
 		ws.onclose = (event) => {
@@ -109,14 +122,32 @@ export class SessionClient {
 		if (this.#ws?.readyState === WebSocket.OPEN) this.#ws.send(JSON.stringify(message));
 	}
 
-	/** Sends a message to the agent; it stays in the outbox until the server acknowledges it. */
-	submit(text: string, mode: "followUp" | "steer", where: Where, attachments: Attachment[] = [], comments: LineComment[] = []): void {
+	/** A member's draft, to read and to write in: changes made here go to everyone. */
+	draft(owner: string): Y.Doc {
+		let entry = this.drafts.get(owner);
+		if (entry === undefined) {
+			const doc = new Y.Doc();
+			doc.on("update", (update: Uint8Array, origin: unknown) => {
+				if (origin !== REMOTE) this.send({ type: "draft", owner, update: toBase64(update) });
+				this.#emit("drafts");
+			});
+			this.drafts.set(owner, (entry = { name: this.nameOf(owner), doc }));
+		}
+		return entry.doc;
+	}
+
+	/**
+	 * Sends a message to the agent; it stays in the outbox until the server acknowledges it. "interrupt" stops the
+	 * current run for it (as in Delta). `draft`: whose shared draft it was.
+	 */
+	submit(text: string, mode: "interrupt" | "followUp" | "steer", where: Where, attachments: Attachment[] = [], comments: LineComment[] = [], draft?: string): void {
 		const message: Submit = {
 			type: "submit",
 			requestId: crypto.randomUUID(),
 			text,
 			mode,
 			where,
+			...(draft !== undefined ? { draft } : {}),
 			...(attachments.length > 0 ? { attachments } : {}),
 			...(comments.length > 0 ? { comments } : {}),
 		};
@@ -157,8 +188,8 @@ export class SessionClient {
 	#receive(message: ServerMessage): void {
 		switch (message.type) {
 			case "welcome":
-				// The server sends the drafts in progress again after this.
-				this.typing.clear();
+				// The server sends the cursors again after this; drafts are merged, so they stay.
+				this.carets.clear();
 				this.info = message.session;
 				this.me = message.me;
 				this.#setMembers(message.members);
@@ -171,11 +202,18 @@ export class SessionClient {
 				this.threads[message.conv].prepend(message.entries);
 				this.#arrived();
 				return this.#emit("thread");
-			case "typing":
+			case "draft": {
+				const doc = this.draft(message.owner);
+				this.drafts.get(message.owner)!.name = message.name;
+				if (message.update !== undefined) Y.applyUpdate(doc, fromBase64(message.update), REMOTE);
+				if (message.sent !== undefined) this.onDraftSent(message.owner, message.sent);
+				return this.#emit("drafts");
+			}
+			case "caret":
 				if (message.memberId === this.me?.id) return;
-				if (message.text === "") this.typing.delete(message.memberId);
-				else this.typing.set(message.memberId, { name: message.name, text: message.text });
-				return this.#emit("typing");
+				if (message.owner === undefined) this.carets.delete(message.memberId);
+				else this.carets.set(message.memberId, { name: message.name, owner: message.owner, anchor: message.anchor, head: message.head, at: Date.now() });
+				return this.#emit("drafts");
 			case "presence":
 				this.online = message.online;
 				this.#setMembers(message.members);
