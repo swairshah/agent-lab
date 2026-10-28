@@ -141,8 +141,6 @@ struct Desktop {
     comment_lines: Option<(usize, usize)>,
     /// The thread's line cursor (cursor.rs): the line it's on, where a Shift selection started, focus, and a comment
     /// being written on the selection (message key, the quoted text, the line the box goes under).
-    thread_cursor: Option<String>,
-    thread_anchor: Option<String>,
     thread_focus: FocusHandle,
     thread_comment: Option<(String, String, String)>,
     comment_input: Entity<InputState>,
@@ -352,8 +350,6 @@ impl Desktop {
             palette_input,
             palette_scroll: ScrollHandle::new(),
             comment_lines: None,
-            thread_cursor: None,
-            thread_anchor: None,
             thread_focus: cx.focus_handle(),
             thread_comment: None,
             comment_input,
@@ -1021,8 +1017,7 @@ impl Desktop {
                 "comments": [{ "path": "", "start": 0, "end": 0, "excerpt": excerpt, "text": note, "message": message }],
             }));
             self.thread_comment = None;
-            self.thread_cursor = None;
-            self.thread_anchor = None;
+            crate::cursor::clear();
             self.comment_input
                 .update(cx, |input, cx| input.set_value("", window, cx));
             self.notice("Comment sent", cx);

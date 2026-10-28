@@ -1,60 +1,50 @@
-// A line cursor in the thread, as in Delta (and the web view's text cursor): each line of a message as it's shown on
-// screen (a wrapped line of a paragraph, a line of a code block) is a stop. Up and Down move between lines across messages, Shift extends a range, Enter
-// comments on it with the box right under it, Esc clears. Up from the composer's first line enters at the bottom,
-// and Down past the last line goes back to the composer.
+// A text cursor in the thread, as in Delta: a caret that moves through the messages' text like in a document. Left
+// and Right move by character, Up and Down by line (keeping the column), across messages; Shift or a mouse drag
+// selects; Enter comments on the selection (or the caret's line) with the box right under it; Esc clears. Up from the
+// composer's first line puts the caret at the end of the thread, and Down past the end goes back.
 //
-// Messages are drawn by free functions (message.rs, prose.rs), so the lines they draw are collected here as the frame
-// renders, in order; the next key press moves through the list from the frame before.
-use gpui::{AnyElement, Hsla, ScrollHandle};
+// Messages are drawn by free functions (message.rs, prose.rs), so each text registers itself here as the frame
+// renders, in order, with its layout; keys and clicks move through the texts of the frame before. Each text paints
+// its own part of the selection and the caret (prose::visual_lines).
+use gpui::{AnyElement, Hsla, Pixels, Point, ScrollHandle, TextLayout, point, px};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+
+/// A place in the thread's text: a text (by id) and a byte offset in it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pos {
+    pub id: String,
+    pub index: usize,
+}
 
 #[derive(Clone)]
-pub struct Line {
-    /// The element id of the line's block, stable across frames.
-    pub id: String,
-    /// The key of the message it's in.
-    pub message: String,
-    pub text: String,
+struct Text {
+    id: String,
+    message: String,
+    text: String,
+    layout: TextLayout,
 }
 
 #[derive(Default)]
-struct Frame {
-    drawing: Vec<Line>,
-    last: Vec<Line>,
-    highlight: HashSet<String>,
+struct State {
+    drawing: Vec<Text>,
+    last: Vec<Text>,
+    caret: Option<Pos>,
+    anchor: Option<Pos>,
+    /// The column Up and Down keep to.
+    goal_x: Option<Pixels>,
+    dragging: bool,
+    clicked: bool,
+    focused: bool,
     tint: Option<Hsla>,
-    /// An element to draw right after the line with this id (the comment box).
+    caret_color: Option<Hsla>,
+    /// An element to draw right after the block with this id (the comment box).
     after: Option<(String, AnyElement)>,
-    clicked: Option<String>,
-    /// Where each text's visual lines start (byte offsets), measured after layout, keyed by the text's id, with the
-    /// text's length and width they were measured at.
-    starts: HashMap<String, (usize, f32, Vec<usize>)>,
-    /// The line to scroll into view once it's drawn, and the thread's scroll handle.
-    follow: Option<String>,
+    follow: bool,
     scroll: Option<ScrollHandle>,
 }
 
 thread_local! {
-    static FRAME: RefCell<Frame> = RefCell::new(Frame::default());
-}
-
-/// Starts collecting a frame's lines; `highlight` are the ids to tint, `after` goes right under its line.
-pub fn begin(
-    highlight: HashSet<String>,
-    tint: Hsla,
-    after: Option<(String, AnyElement)>,
-    scroll: &ScrollHandle,
-) {
-    FRAME.with_borrow_mut(|f| {
-        f.scroll = Some(scroll.clone());
-        if !f.drawing.is_empty() {
-            f.last = std::mem::take(&mut f.drawing);
-        }
-        f.highlight = highlight;
-        f.tint = Some(tint);
-        f.after = after;
-    });
+    static STATE: RefCell<State> = RefCell::new(State::default());
 }
 
 /// The message key in an id like "assistant-12-block-0-3" or "user-live:4-block-1".
@@ -63,107 +53,361 @@ fn message_of(id: &str) -> String {
     rest.split("-block").next().unwrap_or(rest).to_owned()
 }
 
-/// Records a line as it's drawn; returns the tint to draw it with, if it's in the selection.
-pub fn line(id: &str, text: &str) -> Option<Hsla> {
-    FRAME.with_borrow_mut(|f| {
-        if !(id.starts_with("assistant-") || id.starts_with("user-")) {
-            return None;
+/// Starts a frame: the selection tint, the caret color, whether the thread has focus (the caret shows only then),
+/// and the comment box to draw under its block.
+pub fn begin(
+    tint: Hsla,
+    caret: Hsla,
+    focused: bool,
+    after: Option<(String, AnyElement)>,
+    scroll: &ScrollHandle,
+) {
+    STATE.with_borrow_mut(|s| {
+        if !s.drawing.is_empty() {
+            s.last = std::mem::take(&mut s.drawing);
         }
-        f.drawing.push(Line {
+        s.tint = Some(tint);
+        s.caret_color = Some(caret);
+        s.focused = focused;
+        s.after = after;
+        s.scroll = Some(scroll.clone());
+    });
+}
+
+fn texts(s: &State) -> &Vec<Text> {
+    if s.drawing.is_empty() {
+        &s.last
+    } else {
+        &s.drawing
+    }
+}
+
+/// Registers a text as it's drawn. Only messages' texts take the cursor.
+pub fn register(id: &str, text: &str, layout: &TextLayout) {
+    if !(id.starts_with("assistant-") || id.starts_with("user-")) {
+        return;
+    }
+    STATE.with_borrow_mut(|s| {
+        s.drawing.push(Text {
             id: id.to_owned(),
             message: message_of(id),
-            text: text.trim().to_owned(),
-        });
-        if f.highlight.contains(id) {
-            f.tint
-        } else {
-            None
+            text: text.to_owned(),
+            layout: layout.clone(),
+        })
+    });
+}
+
+/// What a text paints: its selected byte range, the caret's offset if it's in it, and the colors.
+pub struct Paint {
+    pub selected: Option<(usize, usize)>,
+    pub caret: Option<usize>,
+    pub tint: Hsla,
+    pub caret_color: Hsla,
+    /// The caret just moved here: scroll it into view.
+    pub follow: bool,
+}
+
+pub fn paint_for(id: &str, len: usize) -> Option<Paint> {
+    STATE.with_borrow_mut(|s| {
+        let (tint, caret_color) = (s.tint?, s.caret_color?);
+        let list = texts(s).clone();
+        let order = |p: &Pos| list.iter().position(|t| t.id == p.id);
+        let me = list.iter().position(|t| t.id == id)?;
+        let mut selected = None;
+        if let (Some(a), Some(b)) = (&s.anchor, &s.caret) {
+            if a != b {
+                if let (Some(oa), Some(ob)) = (order(a), order(b)) {
+                    let (start, end) = if (oa, a.index) <= (ob, b.index) {
+                        ((oa, a.index), (ob, b.index))
+                    } else {
+                        ((ob, b.index), (oa, a.index))
+                    };
+                    if start.0 <= me && me <= end.0 {
+                        let from = if me == start.0 { start.1 } else { 0 };
+                        let to = if me == end.0 { end.1 } else { len };
+                        if from < to {
+                            selected = Some((from, to.min(len)));
+                        }
+                    }
+                }
+            }
         }
+        let caret = s
+            .caret
+            .as_ref()
+            .filter(|c| c.id == id && s.focused)
+            .map(|c| c.index.min(len));
+        let follow = caret.is_some() && std::mem::take(&mut s.follow);
+        Some(Paint {
+            selected,
+            caret,
+            tint,
+            caret_color,
+            follow,
+        })
     })
 }
 
-/// The element to draw right under the block `id` when the box belongs to one of its lines, if any (taken once).
+pub fn scroll() -> Option<ScrollHandle> {
+    STATE.with_borrow(|s| s.scroll.clone())
+}
+
+/// The element to draw right under the block `id` when the comment box belongs to it (taken once).
 pub fn after(id: &str) -> Option<AnyElement> {
-    FRAME.with_borrow_mut(|f| {
-        let in_block = |at: &str| {
-            let block = at.split('#').next().unwrap_or(at);
-            block == id || block.starts_with(&format!("{id}-"))
+    STATE.with_borrow_mut(|s| {
+        let mine = |at: &str| at == id || at.starts_with(&format!("{id}-"));
+        if s.after.as_ref().is_some_and(|(at, _)| mine(at)) {
+            s.after.take().map(|(_, e)| e)
+        } else {
+            None
+        }
+    })
+}
+
+/// A press on a text: the caret goes there (Shift keeps the selection's start), and a drag can follow.
+pub fn press(id: &str, index: usize, shift: bool) {
+    STATE.with_borrow_mut(|s| {
+        let pos = Pos {
+            id: id.to_owned(),
+            index,
         };
-        if f.after.as_ref().is_some_and(|(at, _)| in_block(at)) {
-            f.after.take().map(|(_, e)| e)
+        if !(shift && s.caret.is_some()) {
+            s.anchor = Some(pos.clone());
+        }
+        s.caret = Some(pos);
+        s.goal_x = None;
+        s.dragging = true;
+        s.clicked = true;
+    });
+}
+
+/// The pointer moved over a text with the button down: the selection follows it.
+pub fn drag(id: &str, index: usize) -> bool {
+    STATE.with_borrow_mut(|s| {
+        if !s.dragging {
+            return false;
+        }
+        let pos = Pos {
+            id: id.to_owned(),
+            index,
+        };
+        if s.caret.as_ref() == Some(&pos) {
+            return false;
+        }
+        s.caret = Some(pos);
+        true
+    })
+}
+
+pub fn release() {
+    STATE.with_borrow_mut(|s| s.dragging = false);
+}
+
+/// Whether a text was pressed since last asked (the thread then takes focus).
+pub fn take_click() -> bool {
+    STATE.with_borrow_mut(|s| std::mem::take(&mut s.clicked))
+}
+
+pub fn clear() {
+    STATE.with_borrow_mut(|s| {
+        s.caret = None;
+        s.anchor = None;
+        s.goal_x = None;
+    });
+}
+
+/// Puts the caret at the end of the thread's text. Returns false when there's no text.
+pub fn to_end() -> bool {
+    STATE.with_borrow_mut(|s| {
+        let Some(last) = texts(s).last().cloned() else {
+            return false;
+        };
+        let pos = Pos {
+            id: last.id,
+            index: last.text.len(),
+        };
+        s.anchor = Some(pos.clone());
+        s.caret = Some(pos);
+        s.goal_x = None;
+        s.follow = true;
+        true
+    })
+}
+
+fn safe<T>(f: impl FnOnce() -> T) -> Option<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok()
+}
+
+fn index_at(layout: &TextLayout, at: Point<Pixels>) -> usize {
+    match layout.index_for_position(at) {
+        Ok(i) | Err(i) => i,
+    }
+}
+
+/// What a key did.
+pub enum Moved {
+    /// Nothing (not a cursor key, or no caret).
+    No,
+    /// The caret moved, or the selection changed.
+    Yes,
+    /// Down past the end of the thread: back to the composer.
+    Out,
+}
+
+/// Arrow keys: Left/Right by character, Up/Down by line keeping the column; Shift extends the selection.
+pub fn key(key: &str, shift: bool) -> Moved {
+    STATE.with_borrow_mut(|s| {
+        let Some(caret) = s.caret.clone() else {
+            return Moved::No;
+        };
+        let list = texts(s).clone();
+        let Some(at) = list.iter().position(|t| t.id == caret.id) else {
+            return Moved::No;
+        };
+        let here = &list[at];
+        let index = caret.index.min(here.text.len());
+        let next = match key {
+            "left" => {
+                if index > 0 {
+                    let i = here.text[..index]
+                        .char_indices()
+                        .last()
+                        .map_or(0, |(i, _)| i);
+                    Some(Pos {
+                        id: here.id.clone(),
+                        index: i,
+                    })
+                } else {
+                    at.checked_sub(1).and_then(|i| list.get(i)).map(|t| Pos {
+                        id: t.id.clone(),
+                        index: t.text.len(),
+                    })
+                }
+            }
+            "right" => {
+                if index < here.text.len() {
+                    let i = here.text[index..]
+                        .char_indices()
+                        .nth(1)
+                        .map_or(here.text.len(), |(i, _)| index + i);
+                    Some(Pos {
+                        id: here.id.clone(),
+                        index: i,
+                    })
+                } else {
+                    list.get(at + 1).map(|t| Pos {
+                        id: t.id.clone(),
+                        index: 0,
+                    })
+                }
+            }
+            "up" | "down" => {
+                let Some(Some(p)) = safe(|| here.layout.position_for_index(index)) else {
+                    return Moved::No;
+                };
+                let Some(height) = safe(|| here.layout.line_height()) else {
+                    return Moved::No;
+                };
+                let Some(bounds) = safe(|| here.layout.bounds()) else {
+                    return Moved::No;
+                };
+                let x = *s.goal_x.get_or_insert(p.x);
+                let y = if key == "up" {
+                    p.y - height * 0.5
+                } else {
+                    p.y + height * 1.5
+                };
+                if y >= bounds.top() && y < bounds.bottom() {
+                    Some(Pos {
+                        id: here.id.clone(),
+                        index: index_at(&here.layout, point(x, y)),
+                    })
+                } else {
+                    // Into the text before or after, on its last or first line.
+                    let other = if key == "up" {
+                        at.checked_sub(1).and_then(|i| list.get(i))
+                    } else {
+                        list.get(at + 1)
+                    };
+                    match other {
+                        Some(t) => safe(|| {
+                            let b = t.layout.bounds();
+                            let h = t.layout.line_height();
+                            let y = if key == "up" {
+                                b.bottom() - h * 0.5
+                            } else {
+                                b.top() + h * 0.5
+                            };
+                            Pos {
+                                id: t.id.clone(),
+                                index: index_at(&t.layout, point(x.max(b.left()), y)),
+                            }
+                        }),
+                        None if key == "down" => {
+                            s.caret = None;
+                            s.anchor = None;
+                            s.goal_x = None;
+                            return Moved::Out;
+                        }
+                        None => None,
+                    }
+                }
+            }
+            _ => return Moved::No,
+        };
+        let Some(next) = next else { return Moved::Yes };
+        if key == "left" || key == "right" {
+            s.goal_x = None;
+        }
+        if !shift {
+            s.anchor = Some(next.clone());
+        }
+        s.caret = Some(next);
+        s.follow = true;
+        Moved::Yes
+    })
+}
+
+/// What Enter comments on: the selected text, or the caret's line; with the message key and the block to put the
+/// box under.
+pub fn quote() -> Option<(String, String, String)> {
+    STATE.with_borrow(|s| {
+        let list = texts(s);
+        let (a, b) = (s.anchor.as_ref()?, s.caret.as_ref()?);
+        let order = |p: &Pos| list.iter().position(|t| t.id == p.id);
+        let (oa, ob) = (order(a)?, order(b)?);
+        let ((i, from), (j, to)) = if (oa, a.index) <= (ob, b.index) {
+            ((oa, a.index), (ob, b.index))
         } else {
-            None
+            ((ob, b.index), (oa, a.index))
+        };
+        if (i, from) == (j, to) {
+            // No selection: the line the caret is on.
+            let t = &list[i];
+            let line = safe(|| {
+                let p = t.layout.position_for_index(from)?;
+                let b = t.layout.bounds();
+                let start = index_at(&t.layout, point(b.left(), p.y + px(1.)));
+                let end = index_at(&t.layout, point(b.right(), p.y + px(1.)));
+                Some((start, end.max(start)))
+            })
+            .flatten()
+            .unwrap_or((0, t.text.len()));
+            let text = t
+                .text
+                .get(line.0..line.1)
+                .unwrap_or(&t.text)
+                .trim()
+                .to_owned();
+            return (!text.is_empty()).then(|| (t.message.clone(), text, t.id.clone()));
         }
-    })
-}
-
-/// The lines of the last frame drawn, in order.
-pub fn lines() -> Vec<Line> {
-    FRAME.with_borrow(|f| {
-        if f.drawing.is_empty() {
-            f.last.clone()
-        } else {
-            f.drawing.clone()
+        let mut parts = vec![];
+        for (k, t) in list.iter().enumerate().take(j + 1).skip(i) {
+            let start = if k == i { from } else { 0 };
+            let end = if k == j { to } else { t.text.len() };
+            parts.push(t.text.get(start..end).unwrap_or("").to_owned());
         }
-    })
-}
-
-/// A line was clicked; the thread picks it up on the same click.
-pub fn click(id: &str) {
-    FRAME.with_borrow_mut(|f| f.clicked = Some(id.to_owned()));
-}
-
-pub fn take_click() -> Option<String> {
-    FRAME.with_borrow_mut(|f| f.clicked.take())
-}
-
-/// Where the visual lines of text `id` start, as measured last time it was drawn.
-pub fn starts(id: &str, len: usize) -> Vec<usize> {
-    FRAME.with_borrow(|f| {
-        f.starts
-            .get(id)
-            .filter(|(l, _, _)| *l == len)
-            .map(|(_, _, s)| s.clone())
-            .unwrap_or_else(|| vec![0])
-    })
-}
-
-/// Records where text `id`'s visual lines start; returns whether that changed (the lines need drawing again).
-pub fn store_starts(id: &str, len: usize, width: f32, starts: Vec<usize>) -> bool {
-    FRAME.with_borrow_mut(|f| {
-        let changed = f
-            .starts
-            .get(id)
-            .is_none_or(|(l, w, s)| *l != len || (*w - width).abs() > 0.5 || *s != starts);
-        if changed {
-            f.starts.insert(id.to_owned(), (len, width, starts));
-        }
-        changed
-    })
-}
-
-/// Whether text `id` was measured at this length and width (no need to measure again).
-pub fn measured(id: &str, len: usize, width: f32) -> bool {
-    FRAME.with_borrow(|f| {
-        f.starts
-            .get(id)
-            .is_some_and(|(l, w, _)| *l == len && (*w - width).abs() <= 0.5)
-    })
-}
-
-/// Asks for the line `id` to be scrolled into view when it's next drawn.
-pub fn follow(id: &str) {
-    FRAME.with_borrow_mut(|f| f.follow = Some(id.to_owned()));
-}
-
-/// The line to follow if it's this one (taken), with the thread's scroll handle.
-pub fn take_follow(id: &str) -> Option<ScrollHandle> {
-    FRAME.with_borrow_mut(|f| {
-        if f.follow.as_deref() == Some(id) {
-            f.follow = None;
-            f.scroll.clone()
-        } else {
-            None
-        }
+        let text = parts.join("\n").trim().to_owned();
+        (!text.is_empty()).then(|| (list[i].message.clone(), text, list[j].id.clone()))
     })
 }

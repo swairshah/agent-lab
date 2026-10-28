@@ -159,105 +159,114 @@ fn text(id: String, nodes: &[Node], p: &Palette) -> AnyElement {
     })
 }
 
-/// The visual line of `layout` under a point, 0 when it isn't laid out yet.
-fn line_at(layout: &TextLayout, y: Pixels) -> usize {
+/// The byte offset in `layout` under a point; 0 when it isn't laid out yet.
+fn index_at(layout: &TextLayout, at: Point<Pixels>) -> usize {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let bounds = layout.bounds();
-        let height = layout.line_height();
-        if height <= px(0.) {
-            return 0;
+        match layout.index_for_position(at) {
+            Ok(i) | Err(i) => i,
         }
-        (f32::from((y - bounds.top()).max(px(0.))) / f32::from(height)) as usize
     }))
     .unwrap_or(0)
 }
 
-/// Text whose lines on screen are stops of the thread's cursor (cursor.rs): each visual line is registered (from the
-/// line starts measured the last time it was drawn), tinted when selected, and clickable; after layout, the line
-/// starts are measured again, and the line the cursor moved to is scrolled into view.
+/// Text the thread's cursor moves through (cursor.rs): registered as it's drawn; a press puts the caret where it
+/// lands and a drag selects; after layout it paints its part of the selection and the caret, and scrolls the caret
+/// into view when it just moved here.
 pub(crate) fn visual_lines(
     id: &str,
     full: &str,
     styled: StyledText,
-    p: &Palette,
+    _p: &Palette,
     wrap: impl FnOnce(StyledText) -> AnyElement,
 ) -> AnyElement {
     let layout = styled.layout().clone();
+    crate::cursor::register(id, full, &layout);
     let len = full.len();
-    let starts = crate::cursor::starts(id, len);
-    let mut tinted: Vec<(usize, Hsla)> = vec![];
-    for (k, start) in starts.iter().enumerate() {
-        let end = starts.get(k + 1).copied().unwrap_or(len).min(len);
-        let text = full.get(*start..end).unwrap_or("");
-        if let Some(tint) = crate::cursor::line(&format!("{id}#{k}"), text) {
-            tinted.push((k, tint));
-        }
-    }
-    let line_count = starts.len();
-    let (measure, click, follow_id) = (layout.clone(), layout.clone(), id.to_owned());
-    let click_id = id.to_owned();
-    let _ = p;
+    let (measure, press, drag) = (layout.clone(), layout.clone(), layout.clone());
+    let (paint_id, press_id, drag_id) = (id.to_owned(), id.to_owned(), id.to_owned());
     div()
         .relative()
         .w_full()
         .min_w_0()
         .child(
-            // Under the text: measures its visual lines and tints the selected ones.
+            // Under the text: the selection, then the caret over it.
             canvas(
                 |_, _, _| {},
-                move |bounds, _, window, _| {
-                    let Ok(text_bounds) =
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| measure.bounds()))
+                move |_, _, window, _| {
+                    let Some(paint) = crate::cursor::paint_for(&paint_id, len) else {
+                        return;
+                    };
+                    let Ok((bounds, height)) =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            (measure.bounds(), measure.line_height())
+                        }))
                     else {
                         return;
                     };
-                    let height = measure.line_height();
                     if height <= px(0.) {
                         return;
                     }
-                    let width = f32::from(text_bounds.size.width);
-                    let lines = (f32::from(text_bounds.size.height) / f32::from(height))
-                        .round()
-                        .max(1.) as usize;
-                    if !crate::cursor::measured(&follow_id, len, width) || lines != line_count {
-                        let mut found = vec![0];
-                        for k in 1..lines {
-                            let y = text_bounds.top() + height * (k as f32 + 0.5);
-                            let index =
-                                match measure.index_for_position(point(text_bounds.left(), y)) {
-                                    Ok(i) | Err(i) => i,
+                    let at = |i: usize| -> Option<Point<Pixels>> {
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            measure.position_for_index(i)
+                        }))
+                        .ok()
+                        .flatten()
+                        .or_else(|| {
+                            // The end of the text: just after its last character.
+                            let last = full_len_prev(len);
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                measure.position_for_index(last)
+                            }))
+                            .ok()
+                            .flatten()
+                            .map(|p| point(p.x + height * 0.45, p.y))
+                        })
+                    };
+                    if let Some((from, to)) = paint.selected {
+                        if let (Some(a), Some(b)) = (at(from), at(to)) {
+                            let mut y = a.y;
+                            while y <= b.y + px(0.5) {
+                                let left = if (y - a.y).abs() < px(0.5) {
+                                    a.x
+                                } else {
+                                    bounds.left()
                                 };
-                            if index > *found.last().unwrap() && index < len {
-                                found.push(index);
+                                let right = if (y - b.y).abs() < px(0.5) {
+                                    b.x
+                                } else {
+                                    bounds.right()
+                                };
+                                if right > left {
+                                    window.paint_quad(fill(
+                                        Bounds::new(point(left, y), size(right - left, height)),
+                                        paint.tint,
+                                    ));
+                                }
+                                y += height;
                             }
                         }
-                        if crate::cursor::store_starts(&follow_id, len, width, found) {
-                            window.refresh();
-                        }
                     }
-                    for (k, tint) in &tinted {
-                        let top = text_bounds.top() + height * *k as f32;
-                        window.paint_quad(fill(
-                            Bounds::new(point(bounds.left(), top), size(bounds.size.width, height)),
-                            *tint,
-                        ));
-                    }
-                    // The cursor moved to one of these lines: keep it in view.
-                    for k in 0..line_count {
-                        if let Some(scroll) =
-                            crate::cursor::take_follow(&format!("{follow_id}#{k}"))
-                        {
-                            let top = text_bounds.top() + height * k as f32;
-                            let view = scroll.bounds();
-                            let mut offset = scroll.offset();
-                            let margin = height * 2.;
-                            if top < view.top() + margin {
-                                offset.y += view.top() + margin - top;
-                            } else if top + height > view.bottom() - margin {
-                                offset.y -= top + height - (view.bottom() - margin);
+                    if let Some(index) = paint.caret {
+                        if let Some(c) = at(index) {
+                            window.paint_quad(fill(
+                                Bounds::new(point(c.x - px(1.), c.y), size(px(2.), height)),
+                                paint.caret_color,
+                            ));
+                            if paint.follow {
+                                if let Some(scroll) = crate::cursor::scroll() {
+                                    let view = scroll.bounds();
+                                    let mut offset = scroll.offset();
+                                    let margin = height * 2.;
+                                    if c.y < view.top() + margin {
+                                        offset.y += view.top() + margin - c.y;
+                                    } else if c.y + height > view.bottom() - margin {
+                                        offset.y -= c.y + height - (view.bottom() - margin);
+                                    }
+                                    scroll.set_offset(offset);
+                                    window.refresh();
+                                }
                             }
-                            scroll.set_offset(offset);
-                            window.refresh();
                         }
                     }
                 },
@@ -267,10 +276,22 @@ pub(crate) fn visual_lines(
         )
         .child(wrap(styled))
         .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _, _| {
-            let k = line_at(&click, e.position.y).min(line_count.saturating_sub(1));
-            crate::cursor::click(&format!("{click_id}#{k}"));
+            crate::cursor::press(&press_id, index_at(&press, e.position), e.modifiers.shift);
         })
+        .on_mouse_move(move |e: &MouseMoveEvent, window, _| {
+            if e.pressed_button == Some(MouseButton::Left)
+                && crate::cursor::drag(&drag_id, index_at(&drag, e.position))
+            {
+                window.refresh();
+            }
+        })
+        .on_mouse_up(MouseButton::Left, |_, _, _| crate::cursor::release())
         .into_any_element()
+}
+
+/// A position just before the end, for measuring where the end of a text is.
+fn full_len_prev(len: usize) -> usize {
+    len.saturating_sub(1)
 }
 
 fn block(id: String, node: &Node, p: &Palette) -> AnyElement {

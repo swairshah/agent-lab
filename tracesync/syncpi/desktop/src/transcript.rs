@@ -254,41 +254,38 @@ impl Desktop {
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
             .track_focus(&self.thread_focus)
-            // A click on a line (prose.rs) puts the cursor there; Shift extends the selection.
+            // A press on a message's text (prose.rs) put the caret there: the thread takes focus.
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, e: &MouseDownEvent, window, cx| {
-                    if let Some(id) = crate::cursor::take_click() {
-                        if !(e.modifiers.shift && this.thread_cursor.is_some()) {
-                            this.thread_anchor = Some(id.clone());
-                        }
-                        this.thread_cursor = Some(id);
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    if crate::cursor::take_click() {
                         this.thread_comment = None;
                         this.thread_focus.focus(window);
                         cx.notify();
                     }
                 }),
             )
+            .on_mouse_up(MouseButton::Left, |_, _, _| crate::cursor::release())
             .px(px(28.))
             .pt(px(28.))
             .pb(px(160.))
             .flex()
             .flex_col()
             .items_center();
-        // The thread's line cursor (cursor.rs): which lines to tint, and the comment box under them.
-        let showing_cursor = self.thread_focus.is_focused(window) || self.thread_comment.is_some();
-        let highlight = if showing_cursor {
-            self.cursor_range()
-                .map(|(lines, a, b)| lines[a..=b].iter().map(|l| l.id.clone()).collect())
-                .unwrap_or_default()
-        } else {
-            Default::default()
-        };
+        // The thread's text cursor (cursor.rs): the caret shows while the thread has focus; the comment box goes under
+        // the block it's about.
+        let focused = self.thread_focus.is_focused(window);
         let after = self
             .thread_comment
             .as_ref()
             .map(|c| (c.2.clone(), self.quote_box(&p, cx).into_any_element()));
-        crate::cursor::begin(highlight, p.accent.opacity(0.12), after, &self.scroll);
+        crate::cursor::begin(
+            p.accent.opacity(0.22),
+            p.accent,
+            focused,
+            after,
+            &self.scroll,
+        );
         let mut previous_agent = false;
         let mut model_of_turn = text(&state, "model");
         for unit in display_units(&items) {
@@ -994,93 +991,47 @@ impl Desktop {
         .mt(px(26.))
     }
 
-    /// The lines of the last frame and the selected range in them (first, last), if the cursor is on one.
-    fn cursor_range(&self) -> Option<(Vec<crate::cursor::Line>, usize, usize)> {
-        let lines = crate::cursor::lines();
-        let at = |id: &Option<String>| {
-            id.as_ref()
-                .and_then(|id| lines.iter().position(|l| &l.id == id))
-        };
-        let cursor = at(&self.thread_cursor)?;
-        let anchor = at(&self.thread_anchor).unwrap_or(cursor);
-        let (a, b) = (anchor.min(cursor), anchor.max(cursor));
-        Some((lines, a, b))
-    }
-
-    /// Up on the composer's first line moves the cursor to the thread's last line, as in Delta.
+    /// Up on the composer's first line puts the caret at the end of the thread, as in Delta.
     pub(crate) fn composer_up(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.composer.read(cx).cursor_position().line != 0 {
+        if self.composer.read(cx).cursor_position().line != 0 || !crate::cursor::to_end() {
             return false;
         }
-        let Some(last) = crate::cursor::lines().last().cloned() else {
-            return false;
-        };
-        self.thread_cursor = Some(last.id.clone());
-        self.thread_anchor = Some(last.id.clone());
         self.thread_focus.focus(window);
-        crate::cursor::follow(&last.id);
         cx.notify();
         true
     }
 
-    /// Keys while the thread has focus: arrows move the line cursor, Enter comments, Esc clears. They come from a
-    /// keystroke interceptor (main.rs), ahead of key bindings, so Esc here doesn't also stop the agent.
+    /// Keys while the thread has focus: arrows move the caret (Shift selects), Enter comments, Esc clears. They come
+    /// from a keystroke interceptor (main.rs), ahead of key bindings, so Esc here doesn't also stop the agent.
     pub(crate) fn thread_key(
         &mut self,
         e: &Keystroke,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let lines = crate::cursor::lines();
-        if lines.is_empty() || e.modifiers.platform || e.modifiers.alt || e.modifiers.control {
+        if e.modifiers.platform || e.modifiers.alt || e.modifiers.control {
             return false;
         }
-        let at = self
-            .thread_cursor
-            .as_ref()
-            .and_then(|id| lines.iter().position(|l| &l.id == id));
         match e.key.as_str() {
-            "up" | "down" => {
-                let next = match (e.key.as_str(), at) {
-                    ("up", None) => lines.len() - 1,
-                    ("up", Some(i)) => i.saturating_sub(1),
-                    ("down", Some(i)) if i + 1 < lines.len() => i + 1,
-                    // Down past the last line goes back to the composer.
-                    _ => {
-                        self.thread_cursor = None;
-                        self.thread_anchor = None;
-                        self.composer.update(cx, |s, cx| s.focus(window, cx));
-                        cx.notify();
-                        return true;
-                    }
-                };
-                if !e.modifiers.shift || self.thread_anchor.is_none() {
-                    self.thread_anchor = Some(lines[next].id.clone());
-                }
-                self.thread_cursor = Some(lines[next].id.clone());
-                crate::cursor::follow(&lines[next].id);
-            }
+            "up" | "down" | "left" | "right" => match crate::cursor::key(&e.key, e.modifiers.shift)
+            {
+                crate::cursor::Moved::No => return false,
+                crate::cursor::Moved::Yes => {}
+                // Down past the end of the thread: back to the composer.
+                crate::cursor::Moved::Out => self.composer.update(cx, |s, cx| s.focus(window, cx)),
+            },
             "enter" => {
-                let Some((lines, a, b)) = self.cursor_range() else {
+                let Some(quote) = crate::cursor::quote() else {
                     return false;
                 };
-                let excerpt = lines[a..=b]
-                    .iter()
-                    .map(|l| l.text.clone())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                self.thread_comment =
-                    Some((lines[a].message.clone(), excerpt, lines[b].id.clone()));
+                self.thread_comment = Some(quote);
                 self.comment_input.update(cx, |input, cx| {
                     input.set_placeholder("Comment on this", window, cx);
                     input.set_value("", window, cx);
                     input.focus(window, cx);
                 });
             }
-            "escape" => {
-                self.thread_cursor = None;
-                self.thread_anchor = None;
-            }
+            "escape" => crate::cursor::clear(),
             _ => return false,
         }
         cx.notify();
