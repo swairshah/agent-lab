@@ -221,6 +221,7 @@ const COMMANDS = [
 	{ name: "env", description: "Show or hide the setup agent's thread" },
 	{ name: "steer", description: "Add to what the agent is doing, without stopping it", argumentHint: "<message>" },
 	{ name: "queue", description: "Send after the agent's current run, without stopping it", argumentHint: "<message>" },
+	{ name: "land", description: "Land this thread's changes on main (the project's land skill; runs where yours do)" },
 	{ name: "remote", description: "Run this request on the session VM; it keeps going if you quit", argumentHint: "<task>" },
 	{ name: "stop", description: "Stop the agent (also Esc)" },
 	{ name: "sync", description: "File sync status" },
@@ -240,7 +241,7 @@ export class App {
 	/** Where the shared thread's current run executes, as the server reports it. */
 	#target = "";
 	#localTools = 0;
-	readonly #threads: Record<ConvName, Thread> = { main: new Thread(), setup: new Thread() };
+	readonly #threads: Record<ConvName, Thread> = { main: new Thread(), setup: new Thread(), land: new Thread() };
 	readonly #view: ThreadView;
 	readonly #header = new Lines();
 	readonly #notes = new Lines();
@@ -518,6 +519,10 @@ export class App {
 				if (arg.length === 0) return this.#note(c.gray("usage: /remote <task>"), 4_000);
 				this.#conn.send({ type: "submit", requestId: randomUUID(), text: arg, mode: "interrupt", where: "vm" });
 				return;
+			case "land":
+				if (this.#me?.role === "viewer") return this.#note(c.gray("viewers can't land changes"), 4_000);
+				this.#conn.send({ type: "land", where: this.#where });
+				return this.#note(c.gray("landing: an agent commits, rebases, runs the checks and pushes to main; its progress shows here"), 8_000);
 			case "queue":
 				if (arg.length === 0) return this.#note(c.gray("usage: /queue <message>"), 4_000);
 				this.#conn.send({ type: "submit", requestId: randomUUID(), text: arg, mode: "followUp", where: this.#where });

@@ -1,12 +1,12 @@
 // The web view's live session: one WebSocket (reconnecting, each time from a fresh snapshot), the state it carries,
 // and an outbox so a message typed while offline is sent once the connection is back. Views subscribe to the parts
 // they show; this module knows nothing about the DOM.
-import type { Attachment, BranchInfo, ClientMessage, LineComment, ConvName, EnvStatus, InviteInfo, Member, Presence, ServerMessage, SessionInfo, Where } from "../shared/protocol.ts";
+import type { Attachment, BranchInfo, ClientMessage, LineComment, ConvName, EnvStatus, InviteInfo, LandInfo, Member, Presence, ServerMessage, SessionInfo, Where } from "../shared/protocol.ts";
 import { draftText, fromBase64, toBase64, Y } from "../shared/drafts.ts";
 import { Thread } from "../shared/thread.ts";
 import { storage } from "./dom.ts";
 
-export type Change = "session" | "thread" | "people" | "env" | "invites" | "branches" | "files" | "connection" | "target" | "drafts";
+export type Change = "session" | "thread" | "people" | "env" | "invites" | "branches" | "files" | "connection" | "target" | "drafts" | "land";
 
 type Submit = Extract<ClientMessage, { type: "submit" }>;
 
@@ -20,7 +20,7 @@ const REMOTE = Symbol("remote");
 export type Caret = { name: string; owner: string; anchor?: unknown; head?: unknown; at: number };
 
 export class SessionClient {
-	readonly threads: Record<ConvName, Thread> = { main: new Thread(), setup: new Thread() };
+	readonly threads: Record<ConvName, Thread> = { main: new Thread(), setup: new Thread(), land: new Thread() };
 	info: SessionInfo | undefined;
 	me: Member | undefined;
 	members: Member[] = [];
@@ -33,6 +33,8 @@ export class SessionClient {
 	files: string[] = [];
 	/** Each project file's content hash, so an open file can tell it changed. */
 	readonly hashes = new Map<string, string>();
+	/** The latest land subthread and how it went; null before the first. */
+	land: LandInfo | null = null;
 	/** Where the current run's tools execute. */
 	target = "";
 	connection: "connecting" | "open" | "reconnecting" | "removed" = "connecting";
@@ -140,7 +142,7 @@ export class SessionClient {
 	 * Sends a message to the agent; it stays in the outbox until the server acknowledges it. "interrupt" stops the
 	 * current run for it (as in Delta). `draft`: whose shared draft it was.
 	 */
-	submit(text: string, mode: "interrupt" | "followUp" | "steer", where: Where, attachments: Attachment[] = [], comments: LineComment[] = [], draft?: string): void {
+	submit(text: string, mode: "interrupt" | "followUp" | "steer", where: Where, attachments: Attachment[] = [], comments: LineComment[] = [], draft?: string, conv?: "land"): void {
 		const message: Submit = {
 			type: "submit",
 			requestId: crypto.randomUUID(),
@@ -148,6 +150,7 @@ export class SessionClient {
 			mode,
 			where,
 			...(draft !== undefined ? { draft } : {}),
+			...(conv !== undefined ? { conv } : {}),
 			...(attachments.length > 0 ? { attachments } : {}),
 			...(comments.length > 0 ? { comments } : {}),
 		};
@@ -221,6 +224,9 @@ export class SessionClient {
 			case "env":
 				this.env = message.env;
 				return this.#emit("env");
+			case "land":
+				this.land = message.land;
+				return this.#emit("land");
 			case "files": {
 				const names = new Set(message.full ? [] : this.files);
 				if (message.full) this.hashes.clear();

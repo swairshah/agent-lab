@@ -158,6 +158,11 @@ export class Room {
 			env: (env) => this.#broadcast({ type: "env", env }),
 			files: (version, changed) => this.#broadcast({ type: "files", version, changed }),
 			branch: () => void this.#rewatchMain(),
+			land: (land, started) => {
+				// A new land subthread: everyone attaches to it.
+				if (started) for (const client of this.#clients) void this.#watch(client, "land").catch(() => {});
+				this.#broadcast({ type: "land", land });
+			},
 		});
 	}
 
@@ -273,7 +278,8 @@ export class Room {
 				// As in Delta, a new message stops the run in progress and starts its own (with anything queued behind
 				// that run), when the sender may stop it: their own run, or anyone's for an admin. Otherwise it waits.
 				let stop: Awaited<ReturnType<Session["current"]>>;
-				if (message.mode === "interrupt") {
+				const conv = message.conv === "land" ? "land" : undefined;
+				if (message.mode === "interrupt" && conv === undefined) {
 					const current = await this.session.current();
 					if (current !== undefined && (atLeast(member, "admin") || current.memberId === member.id)) stop = current;
 					else if (current !== undefined) this.#send(client, { type: "notice", text: `Queued: ${this.state.value.members[current.memberId ?? ""]?.name ?? "someone"}'s request is running, and only admins can stop someone else's.` });
@@ -292,6 +298,7 @@ export class Room {
 						Array.isArray(message.attachments) ? message.attachments : [],
 						comments,
 						others,
+						conv,
 					);
                     this.#send(client, { type: "accepted", requestId: message.requestId });
 				} catch (error) {
@@ -306,6 +313,12 @@ export class Room {
 				return;
 			}
 			case "abort": {
+				if (message.conv === "land") {
+					if (!atLeast(member, "editor")) return;
+					await this.session.abort("land");
+					await this.session.notice(`${member.name} stopped the land`);
+					return;
+				}
 				const runner = await this.session.runner();
 				if (runner === undefined) return;
 				if (!atLeast(member, "admin") && runner !== member.id) return this.#error(client, "only admins can stop someone else's request");
@@ -385,6 +398,10 @@ export class Room {
 			}
 			case "ping":
 				this.#send(client, { type: "pong" });
+				return;
+			case "land":
+				if (!atLeast(member, "editor")) return this.#error(client, "viewers can't land changes; ask an admin for the editor role");
+				await this.session.startLand(member, message.where === "device" ? "device" : "vm");
 				return;
 			case "draft":
 				if (!atLeast(member, "editor") || typeof message.owner !== "string" || typeof message.update !== "string") return;
@@ -494,6 +511,8 @@ export class Room {
 		this.#send(client, { type: "env", env: this.session.envStatus() });
 		this.#send(client, { type: "files", version: this.session.filesVersion, full: true, changed: this.session.manifest() });
 		for (const conv of ["main", "setup"] as ConvName[]) await this.#watch(client, conv);
+		if (this.session.land !== undefined) await this.#watch(client, "land");
+		this.#send(client, { type: "land", land: this.session.landInfo() });
 		this.#send(client, { type: "branches", branches: this.session.branches(), current: this.session.branchId });
 		this.#broadcast(this.#presence());
 		this.#send(client, { type: "target", label: this.session.targetLabel });

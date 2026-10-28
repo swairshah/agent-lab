@@ -13,7 +13,7 @@
 //   dialogs.ts      share link, keyboard shortcuts and confirmations
 //   bridge.ts       talking to an app that embeds this view
 import { kindOfPath } from "../shared/artifacts.ts";
-import type { LineComment, Where } from "../shared/protocol.ts";
+import type { ConvName, LineComment, Where } from "../shared/protocol.ts";
 import { commentOnSelection } from "./artifacts.ts";
 import { BASE, signIn, TOKEN_KEY } from "./auth.ts";
 import { embedded, onHostAction, toHost } from "./bridge.ts";
@@ -128,7 +128,7 @@ async function main(): Promise<void> {
 		return ((await res.json()) as { hash: string }).hash;
 	};
 
-	let showing: "main" | "setup" = "main";
+	let showing: ConvName = "main";
 		const setWhere = (next: Where) => {
 		where = embedded ? next : "vm";
 		storage.set("syncpi-where", where);
@@ -139,9 +139,11 @@ async function main(): Promise<void> {
 		session.send({ type: "fork", before: key });
 		composer.setText(text);
 	};
-	const show = (conv: "main" | "setup") => {
+	const show = (conv: ConvName) => {
+		if (conv === "land" && session.land === null) return toast("Nothing has been landed yet: /land starts it.");
 		showing = conv;
-		$("setup-banner").hidden = conv !== "setup";
+		$("setup-banner").hidden = conv === "main";
+		updateLandBanner();
 		threadView.show(conv);
 		threadMap.enabled = conv === "main";
 		threadMap.update();
@@ -172,7 +174,7 @@ async function main(): Promise<void> {
 			);
 		return recordings.get(name)!;
 	};
-	const threadView = new ThreadView($("thread"), $("scroller"), session, { onOpenArtifact: (a) => panel.open(a), onFork: fork, onOpenFile: (path, lines) => void openFile(path, lines), loadImage, loadRecording, onComment: sendComment, draftOwner: () => composer.owner, onJoinDraft: (owner) => composer.join(owner) });
+	const threadView = new ThreadView($("thread"), $("scroller"), session, { onOpenArtifact: (a) => panel.open(a), onFork: fork, onOpenFile: (path, lines) => void openFile(path, lines), loadImage, loadRecording, onComment: sendComment, onShowLand: () => show("land"), draftOwner: () => composer.owner, onJoinDraft: (owner) => composer.join(owner) });
 	const threadMap = new ThreadMap(session, $("scroller"), $("thread"));
 	const settings = new Settings(session, {
 		onTheme: (theme) => {
@@ -190,6 +192,8 @@ async function main(): Promise<void> {
 			embedded,
 			notify: toast,
 			showSetup: () => show("setup"),
+			conv: () => (showing === "land" ? "land" : "main"),
+			land: () => land(),
 			togglePanel: () => panel.toggle(),
 			openSettings: (section) => settings.open(section),
 			confirm: (id) => dialogs.open(id),
@@ -208,13 +212,35 @@ async function main(): Promise<void> {
 	$("where-label").addEventListener("click", () => setWhere(where === "device" ? "vm" : "device"));
 	$<HTMLSelectElement>("where").addEventListener("change", (event) => setWhere((event.target as HTMLSelectElement).value as Where));
 
+	/** The rocket: open the land in progress, or ask to start one. */
+	const land = () => {
+		if (session.role === "viewer") return toast("Viewers can't land changes.", "error");
+		if (session.land?.status === "running") return show("land");
+		$("land-where").textContent =
+			where === "device" ? "It runs on this machine, where your git credentials are." : "It runs on the session VM, which needs credentials to push (a deploy key or token there).";
+		$<HTMLDialogElement>("land-dialog").showModal();
+	};
+	/** The rocket and the side thread's banner say how the latest land is going. */
+	const updateLandBanner = () => {
+		const info = session.land;
+		const button = $("land-button");
+		button.dataset.state = info?.status ?? "";
+		button.title = info === null ? "Land changes on main" : info.status === "running" ? `Landing (${info.by})… click to follow` : info.status === "landed" ? `Landed on main (${info.detail ?? ""}). Click to land again` : `Not landed: ${info.detail ?? ""}. Click to try again`;
+		$("land-stop").hidden = showing !== "land" || info?.status !== "running";
+		if (showing === "setup") $("side-title").textContent = "Setup agent's thread";
+		else if (showing === "land" && info !== null)
+			$("side-title").textContent = info.status === "running" ? `Landing, started by ${info.by}` : info.status === "landed" ? `Landed on main (${info.detail?.slice(0, 12)})` : `Not landed: ${info.detail}`;
+	};
 	const updateComposer = () => {
 		const viewer = session.role === "viewer";
-		$("composer").hidden = showing !== "main";
+		// The land thread can be answered too (it may ask how this project ships).
+		const talks = showing === "main" || showing === "land";
+		$("composer").hidden = !talks;
 		$("viewer-note").hidden = !viewer;
 		$<HTMLTextAreaElement>("input").hidden = viewer;
-		$("send").hidden = viewer || showing !== "main";
-		$("attach").hidden = viewer || showing !== "main";
+		$("send").hidden = viewer || !talks;
+		$("attach").hidden = viewer || !talks;
+		$("land-button").hidden = viewer || session.role === undefined;
 		const name = session.me?.name ?? "";
 		$("me-avatar").textContent = initials(name);
 		$("me-avatar").style.setProperty("--person", personColor(name));
@@ -319,6 +345,23 @@ async function main(): Promise<void> {
 	$("share").addEventListener("click", () => session.send({ type: "invite" }));
 	$("stop").addEventListener("click", () => session.send({ type: "abort" }));
 	$("setup-back").addEventListener("click", () => show("main"));
+	$("land-stop").addEventListener("click", () => session.send({ type: "abort", conv: "land" }));
+	$("land-button").addEventListener("click", () => land());
+	$("land-form").addEventListener("submit", (event) => {
+		event.preventDefault();
+		$<HTMLDialogElement>("land-dialog").close();
+		session.send({ type: "land", where });
+		landing = true;
+	});
+	// After asking to land: its thread, once it's started.
+	let landing = false;
+	session.on("land", () => {
+		if (landing && session.land?.status === "running") {
+			landing = false;
+			show("land");
+		}
+		updateLandBanner();
+	});
 	$("model-chip").addEventListener("click", () => session.role === "admin" && pickModel());
 	$("branch-chip").addEventListener("click", () => settings.open("branches"));
 	// Clicking empty space in the conversation puts the cursor in the composer.
@@ -408,6 +451,8 @@ async function main(): Promise<void> {
 			"agent.newContext": admin(() => dialogs.open("reset")),
 			"agent.branches": () => settings.open("branches"),
 			"agent.setup": () => show(showing === "setup" ? "main" : "setup"),
+			"agent.land": () => land(),
+			"agent.landThread": () => show(showing === "land" ? "main" : "land"),
 			"view.changes": () => panel.toggle(),
 			"view.files": () => panel.toggleTree(),
 			"view.people": () => settings.open("people"),

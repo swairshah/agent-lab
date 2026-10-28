@@ -21,6 +21,10 @@ export type CommandContext = {
 	embedded: boolean;
 	notify(text: string, tone?: "info" | "error"): void;
 	showSetup(): void;
+	/** Which thread the composer talks to: the shared thread, or the land subthread being shown. */
+	conv(): "main" | "land";
+	/** Lands the thread's changes (asks first), or shows the land in progress. */
+	land(): void;
 	togglePanel(): void;
 	openSettings(section?: Section): void;
 	confirm(id: "compact" | "reset"): void;
@@ -73,6 +77,7 @@ const COMMANDS: Command[] = [
 	{ name: "queue", description: "Send after the agent's current run, without stopping it: /queue <message>", run: (arg, _w, c) => arg && c.session.submit(arg, "followUp", c.where()) },
 	{ name: "stop", description: "Stop the agent", run: (_a, _w, c) => c.session.send({ type: "abort" }) },
 	{ name: "env", description: "The setup agent's thread", run: (_a, _w, c) => c.showSetup() },
+	{ name: "land", description: "Land this thread's changes on main (the project's land skill)", run: (_a, _w, c) => c.land() },
 	{ name: "changes", description: "Changes and artifacts", run: (_a, _w, c) => c.togglePanel() },
 	{ name: "sync", description: "Sync the project with this machine now", app: true, run: (_a, _w, c) => c.app?.("project.sync") },
 	{ name: "web", description: "Open the thread in a browser", app: true, run: (_a, _w, c) => c.app?.("project.web") },
@@ -295,7 +300,8 @@ export class Composer {
 			if (command !== undefined) command.run(words.join(" "), words, this.#c);
 			else this.#c.session.submit(text, "interrupt", this.#c.where());
 		} else {
-			this.#c.session.submit(text, "interrupt", this.#c.where(), this.#attachments, [], this.#owner);
+			const land = this.#c.conv() === "land";
+			this.#c.session.submit(text, land ? "followUp" : "interrupt", this.#c.where(), this.#attachments, [], this.#owner, land ? "land" : undefined);
 			this.#attachments = [];
 			this.#renderAttachments();
 		}
@@ -323,6 +329,7 @@ export class Composer {
 			this.submit();
 		} else if (event.key === "Escape") {
 			if (open) this.#hideCompletions();
+			else if (this.#c.conv() === "land" && this.#c.session.threads.land.state.busy) this.#c.session.send({ type: "abort", conv: "land" });
 			else if (this.#c.session.threads.main.state.busy) this.#c.session.send({ type: "abort" });
 		}
 	}

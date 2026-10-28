@@ -6,7 +6,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { BranchInfo, EnvStatus, InviteInfo, Member, Role } from "../shared/protocol.ts";
+import type { BranchInfo, EnvStatus, InviteInfo, LandInfo, Member, Role } from "../shared/protocol.ts";
 
 export type StoredMember = Member & { tokens: string[]; joinedAt: number };
 
@@ -35,6 +35,8 @@ export type ServerState = {
 	/** The thread's branches, and the one everyone is on (pi-durable conversation ids). */
 	branches?: BranchInfo[];
 	main?: number;
+	/** The latest land subthread (a pi-durable conversation id) and how it went. */
+	land?: LandInfo & { conversationId: number };
 };
 
 export function token(bytes = 18): string {

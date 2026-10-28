@@ -31,6 +31,8 @@
 	{ "id": "agent.newContext", "title": "Start a new context", "group": "Agent", "apps": ["web", "desktop"] },
 	{ "id": "agent.branches", "title": "Thread branches", "group": "Agent", "apps": ["web", "desktop"] },
 	{ "id": "agent.setup", "title": "Show the setup agent's thread", "group": "Agent", "apps": ["web", "desktop"] },
+	{ "id": "agent.land", "title": "Land changes on main", "group": "Agent", "apps": ["web", "desktop"] },
+	{ "id": "agent.landThread", "title": "Show the land thread", "group": "Agent", "apps": ["web", "desktop"] },
 
 	{ "id": "view.sidebar", "title": "Toggle sidebar", "group": "View", "keys": "cmd-b", "apps": ["desktop"] },
 	{ "id": "view.changes", "title": "Review changes", "group": "View", "keys": "cmd-shift-d", "apps": ["web", "desktop"] },

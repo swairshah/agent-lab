@@ -2,8 +2,15 @@
 // One WebSocket per client at /ws?token=…; every frame is one JSON object.
 import type { AgentEvent } from "@earendil-works/pi-durable";
 
-/** "main" is the shared thread. "setup" is the background agent that prepares the VM; it is visible but not shared. */
-export type ConvName = "main" | "setup";
+/**
+ * "main" is the shared thread. "setup" is the background agent that prepares the VM; it is visible but not shared.
+ * "land" is the latest land subthread: an agent that gets the thread's changes onto the main branch (a fork of the
+ * thread, so it knows what changed); people can watch it and answer it.
+ */
+export type ConvName = "main" | "setup" | "land";
+
+/** The latest land: who started it, and how it went (`detail`: the commit when landed, else why not). */
+export type LandInfo = { by: string; at: number; status: "running" | "landed" | "failed"; detail?: string };
 
 /**
  * admin: everything, including inviting, removing and changing roles. The session's creator is an admin and can't be
@@ -91,14 +98,16 @@ export type ClientMessage =
 	 * this one, when the sender may stop it, and otherwise queues it; "followUp" queues it behind the current run;
 	 * "steer" joins the current run. `draft`: it was the shared draft of this member, which is cleared for everyone.
 	 */
-	| { type: "submit"; requestId: string; text: string; mode?: "interrupt" | "followUp" | "steer"; where?: Where; attachments?: Attachment[]; comments?: LineComment[]; draft?: string }
+	| { type: "submit"; requestId: string; text: string; mode?: "interrupt" | "followUp" | "steer"; where?: Where; attachments?: Attachment[]; comments?: LineComment[]; draft?: string; conv?: "land" }
 	/** This client runs its member's requests on its machine. */
 	| { type: "device"; device: DeviceInfo }
 	/** A fence finished: the local copy is in step with the session as of the fence. */
 	| { type: "fenceDone"; id: number; error?: string }
 	/** The local daemon for a channel exited. */
 	| { type: "envClose"; channel: number }
-	| { type: "abort" }
+	| { type: "abort"; conv?: "land" }
+	/** Editors: land the thread's changes on the main branch, in a land subthread, running where this person's run. */
+	| { type: "land"; where?: Where }
 	/** Admins: create an invite. With `email`, only that person can use it (signing in with exe.dev). */
 	| { type: "invite"; email?: string; role?: Role; expiresInDays?: number; maxUses?: number }
 	| { type: "invites" }
@@ -145,6 +154,8 @@ export type ServerMessage =
 	/** Someone's cursor, in a draft or none (they left). */
 	| { type: "caret"; memberId: string; name: string; owner?: string; anchor?: unknown; head?: unknown }
 	| { type: "env"; env: EnvStatus }
+	/** The latest land (null: none yet); sent on connect and whenever it changes. */
+	| { type: "land"; land: LandInfo | null }
 	/**
 	 * Files the server saw change since the previous frame (hash null = deleted). The first frame after connecting is
 	 * `full`: every synced file with its hash.

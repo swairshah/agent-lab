@@ -4,11 +4,11 @@ import type { InviteInfo } from "../shared/protocol.ts";
 import { $ } from "./dom.ts";
 import type { SessionClient } from "./session.ts";
 
-export type DialogId = "compact" | "reset" | "share" | "keymap";
+export type DialogId = "compact" | "reset" | "share" | "keymap" | "land";
 
 export class Dialogs {
 	constructor(session: SessionClient) {
-		for (const id of ["compact", "reset", "share", "keymap"] as DialogId[]) {
+		for (const id of ["compact", "reset", "share", "keymap", "land"] as DialogId[]) {
 			const dialog = this.#dialog(id);
 			dialog.querySelector("[data-close]")?.addEventListener("click", () => dialog.close());
 		}

@@ -43,7 +43,7 @@ export type ToolItem = {
 	rev: number;
 };
 /** A line for people, not the model. `tag`: someone tagged members in a draft (whose writer is `owner`). */
-export type NoticeItem = { kind: "notice"; key: string; text: string; tag?: DraftTag; rev: number };
+export type NoticeItem = { kind: "notice"; key: string; text: string; tag?: DraftTag; land?: "running" | "landed" | "failed"; rev: number };
 export type DraftTag = { by: string; byId: string; owner: string; memberIds: string[]; text: string; at: number };
 export type Item = UserItem | AssistantItem | ToolItem | NoticeItem;
 
@@ -315,9 +315,11 @@ export class Thread {
 			case "pi.compaction":
 				this.#push({ kind: "notice", key, text: "older messages were summarized; the agent now sees the summary instead", rev: 0 });
 				return;
-			case "syncpi.notice":
-				this.#push({ kind: "notice", key, text: String((entry.data as { text?: string })?.text ?? ""), rev: 0 });
+			case "syncpi.notice": {
+				const data = entry.data as { text?: string; land?: NoticeItem["land"] };
+				this.#push({ kind: "notice", key, text: String(data?.text ?? ""), ...(data?.land ? { land: data.land } : {}), rev: 0 });
 				return;
+			}
 			case "syncpi.tag": {
 				const tag = entry.data as DraftTag & { names?: string[] };
 				const names = tag.names?.join(", ") ?? "someone";

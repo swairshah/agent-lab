@@ -34,7 +34,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { diff, Scanner } from "../shared/files.ts";
-import { ATTACHMENT_LIMITS, type Attachment, type BranchInfo, type ConvName, type EnvStatus, type FileHash, IMAGE_TYPES, type Where, COMMENT_LIMITS, type LineComment } from "../shared/protocol.ts";
+import { ATTACHMENT_LIMITS, type Attachment, type BranchInfo, type ConvName, type EnvStatus, type FileHash, IMAGE_TYPES, type LandInfo, type Where, COMMENT_LIMITS, type LineComment } from "../shared/protocol.ts";
 import { Thread, toolSummary } from "../shared/thread.ts";
 import type { Devices } from "./devices.ts";
 import { History } from "./history.ts";
@@ -154,7 +154,17 @@ function installFaux(models: MutableModels): void {
 			const blocks = typeof last.content === "string" ? [{ type: "text", text: last.content }] : (last.content as { type: string; text?: string }[]);
 			const images = blocks.filter((b) => b.type === "image").length;
 			const text = blocks.map((b) => b.text ?? "").join("") + (images > 0 ? ` [${images} image${images === 1 ? "" : "s"}]` : "");
-			if (last.role === "toolResult") return fauxAssistantMessage(images > 0 ? `Done. I see ${images} image${images === 1 ? "" : "s"}.` : "Done.");
+			if (last.role === "toolResult") {
+				const outcome = text.match(/^(?:LANDED \S+|NOT LANDED: .+)$/m);
+				if (outcome) return fauxAssistantMessage(`(faux) That's it.\n\n${outcome[0]}`);
+				return fauxAssistantMessage(images > 0 ? `Done. I see ${images} image${images === 1 ? "" : "s"}.` : "Done.");
+			}
+			// Landing: commit everything and push it to the remote's main.
+			if (text.includes("Land this thread's changes on the project's main branch"))
+				return fauxAssistantMessage(
+					[fauxToolCall("bash", { command: 'git add -A && git -c user.name=syncpi -c user.email=syncpi@example.test commit -qm "Land the thread" && git push -q origin HEAD:main && echo "LANDED $(git rev-parse --short HEAD)" || echo "NOT LANDED: the push failed"' })],
+					{ stopReason: "toolUse" },
+				);
 			if (text.includes("prepare this VM")) {
 				return fauxAssistantMessage([fauxToolCall("write", { path: ".syncpi/ENVIRONMENT.md", content: "# Environment\n\nfaux setup: nothing to install.\n" })], {
 					stopReason: "toolUse",
@@ -199,7 +209,18 @@ export type SessionEvents = {
 	target(label: string): void;
 	/** The thread switched to another branch: clients re-attach to `main`. */
 	branch(): void;
+	/** The latest land changed: a new land subthread (`started`, clients attach to it), or how it went. */
+	land(info: LandInfo, started: boolean): void;
 };
+
+/** What the land subthread is asked to do (see LandInfo). Its last line says how it went. */
+const LAND_REQUEST = `Land this thread's changes on the project's main branch, the way a teammate would, without a pull request.
+
+1. Look for the project's land skill: a skill named "land" among your skills, or .agents/skills/land/SKILL.md or .pi/skills/land/SKILL.md in the project. If there is one, read it and follow it.
+2. If there isn't one, work out how this project ships from its README, CONTRIBUTING, CI config (for example .github/workflows), package scripts and git remotes. Write that down as a skill at .agents/skills/land/SKILL.md (frontmatter with "name: land" and a one-line description, then the steps), so landing is one step next time, and follow it. It usually comes to: commit what this thread changed, with a message that says what and why; fetch and rebase onto the remote main branch; run the tests and checks CI would run; fix failures and resolve conflicts; push to main.
+3. When something needs a decision from people (tests you can't fix, a conflict that changes behaviour, no permission to push), stop and say what's needed; they can answer in this thread.
+
+End your last message with exactly one line: "LANDED <commit sha>" once the changes are on the remote main branch, or "NOT LANDED: <why>".`;
 
 type TaskId = Parameters<Harness["abortTask"]>[0];
 
@@ -217,6 +238,9 @@ export class Session {
     models!: Models;
 	main!: Conversation;
 	setup!: Conversation;
+	/** The latest land subthread, if there has been one. */
+	land: Conversation | undefined;
+	#landWatch: AgentEventStream | undefined;
 	readonly #listeners: SessionEvents;
 	readonly #scanner: Scanner;
 	/** The project before the shared thread's last turn. */
@@ -285,10 +309,12 @@ export class Session {
 				registry,
 				// The setup agent always works on the VM. The shared thread works wherever its current run's sender asked:
 				// their own machine from a terminal, or the VM.
+				// A land subthread works where the person who started it asked, too (their git credentials are there).
 				env: async (target) => {
 					const vm = () => new NodeExecutionEnv({ cwd: target.cwd ?? this.workdir, shellEnv: env });
-					if (this.main === undefined || target.conversationId !== this.main.id) return vm();
-					return this.#envFor(await this.#route(target.read), vm);
+					const routed = this.main !== undefined && (target.conversationId === this.main.id || target.conversationId === this.land?.id);
+					if (!routed) return vm();
+					return this.#envFor(await this.#route(target.read, target.conversationId as ConversationId), vm);
 				},
 				settings: { retry: { maxRetries: 4 }, afterFailedRun: "continue" },
 				identity: { attribution: { name: "syncpi", url: "https://github.com/swairshah" } },
@@ -320,6 +346,8 @@ export class Session {
 			this.state.save();
 		}
 		this.setup = setup;
+		if (s.land !== undefined) this.land = await this.harness.conversation(s.land.conversationId as ConversationId, context);
+		if (this.land !== undefined) await this.#watchLand();
 
 		this.#files = await this.#scanner.scan();
 		this.#scanTimer = setInterval(() => this.scanSoon(), 3_000);
@@ -330,7 +358,66 @@ export class Session {
 	}
 
 	conversation(name: ConvName): Conversation {
+		if (name === "land") {
+			if (this.land === undefined) throw new Error("nothing has been landed yet");
+			return this.land;
+		}
 		return name === "main" ? this.main : this.setup;
+	}
+
+	// ---------- land: the thread's changes onto the main branch ----------
+
+	landInfo(): LandInfo | null {
+		const land = this.state.value.land;
+		return land === undefined ? null : { by: land.by, at: land.at, status: land.status, detail: land.detail };
+	}
+
+	/**
+	 * Starts a land subthread: a fork of the thread as it is now, so it knows what changed, asked to land it (the
+	 * project's land skill, written first if there's none). It runs where `member` asked, like their messages.
+	 */
+	async startLand(member: StoredMember, where: Where): Promise<void> {
+		if (this.state.value.land?.status === "running" && this.land !== undefined) {
+			const live = await this.harness.snapshot(LiveDoc, this.land.id, context);
+			if (live?.run !== undefined) throw new Error("already landing; open the land thread to follow it");
+		}
+		const last = (await this.main.entries({ order: "descending" }, 1, undefined, context)).items[0];
+		const agent = await this.main.agent(context);
+		const land =
+			last === undefined
+				? await this.harness.createConversation({ ownership: { kind: "ownerless" }, agent: { model: agent.model, thinkingLevel: agent.thinkingLevel, instructions: agent.instructions, cwd: agent.cwd } }, context)
+				: await this.main.fork(last.id, { ownership: { kind: "ownerless" } }, context);
+		this.land = land;
+		this.state.value.land = { conversationId: land.id as number, by: member.name, at: Date.now(), status: "running" };
+		this.state.save();
+		await this.#watchLand();
+		this.#listeners.land(this.landInfo()!, true);
+		await this.notice(`${member.name} started landing this thread's changes`, { land: "running" });
+		await this.submit(member, `land-${Date.now()}`, LAND_REQUEST, "followUp", where, [], [], [], "land", "Land this thread's changes on main");
+	}
+
+	/** After each run of the land subthread: its last line says whether it landed. */
+	async #watchLand(): Promise<void> {
+		await this.#landWatch?.stop();
+		const land = this.land!;
+		this.#landWatch = await watchEvents(this.harness, land.id, context);
+		this.#landWatch.start(async (events) => {
+			if (events.some((e) => e.type === "tool_execution_end")) this.scanSoon();
+			if (!events.some((e) => e.type === "run_end") || this.land !== land) return;
+			const page = await land.entries({ order: "descending" }, 10, undefined, context);
+			const reply = page.items.find((e) => e.kind === "pi.assistant");
+			const content = (reply?.model?.[0] as { content?: unknown } | undefined)?.content;
+			const text = typeof content === "string" ? content : Array.isArray(content) ? content.map((b: { text?: string }) => b.text ?? "").join("") : "";
+			const landed = text.match(/^\s*LANDED\s+(\S+)\s*$/m);
+			const failed = text.match(/^\s*NOT LANDED:?\s*(.+)$/m);
+			const info = this.state.value.land;
+			if (info === undefined) return;
+			if (landed) Object.assign(info, { status: "landed", detail: landed[1]!.replace(/[`.]/g, "") });
+			else Object.assign(info, { status: "failed", detail: failed?.[1]?.trim() ?? "it stopped without landing" });
+			this.state.save();
+			this.#listeners.land(this.landInfo()!, false);
+			await this.notice(info.status === "landed" ? `Landed on main (${info.detail!.slice(0, 12)})` : `Not landed: ${info.detail}`, { land: info.status });
+		});
 	}
 
 	/** Every finished tool call may have touched files: rescan right away instead of at the next tick. */
@@ -448,8 +535,13 @@ export class Session {
 		return watchEvents(this.harness, this.conversation(name).id, context);
 	}
 
-	/** `others`: who else wrote it, when it was a draft written together. */
-	async submit(member: StoredMember, requestId: string, text: string, mode: "followUp" | "steer", where: Where, attachments: Attachment[] = [], comments: LineComment[] = [], others: string[] = []): Promise<void> {
+	/**
+	 * `others`: who else wrote it, when it was a draft written together. `conv` "land": an answer in the land
+	 * subthread. `shownText`: what people see of it, when not the text itself.
+	 */
+	async submit(member: StoredMember, requestId: string, text: string, mode: "followUp" | "steer", where: Where, attachments: Attachment[] = [], comments: LineComment[] = [], others: string[] = [], conv?: "land", shownText?: string): Promise<void> {
+		const conversation = conv === "land" ? this.land : this.main;
+		if (conversation === undefined) throw new Error("there's no land thread");
 		const checked = checkComments(comments);
 		// A request can only run on its sender's own machine, and only while it is connected.
 		const destination: Where = where === "device" && this.devices.online(member.id) !== undefined ? "device" : "vm";
@@ -460,25 +552,25 @@ export class Session {
 		// A steer joins the running run and its tools. Nobody steers a run that executes on someone else's machine;
 		// it waits for its own run instead.
 		if (mode === "steer") {
-			const current = await this.#route(this.harness);
+			const current = await this.#route(this.harness, conversation.id);
 			if (current.where === "device" && current.memberId !== member.id) mode = "followUp";
 		}
-		await this.main.submit(
+		await conversation.submit(
 			{
 				type: "input",
 				content,
 				// The route is part of the request ID, so it is stored with the submission and survives restarts.
 				requestId: `${member.id}:${destination}:${requestId}`,
 				whenBusy: mode,
-				entry: { kind: "syncpi.message", data: { author: member.name, memberId: member.id, text, at: Date.now(), requestId, where: destination, ...(others.length > 0 ? { with: others } : {}), ...(shown.length > 0 ? { attachments: shown } : {}), ...(checked.length > 0 ? { comments: checked } : {}) } },
+				entry: { kind: "syncpi.message", data: { author: member.name, memberId: member.id, text: shownText ?? text, at: Date.now(), requestId, where: destination, ...(others.length > 0 ? { with: others } : {}), ...(shown.length > 0 ? { attachments: shown } : {}), ...(checked.length > 0 ? { comments: checked } : {}) } },
 			},
 			context,
 		);
 	}
 
-	/** A line everyone sees in the thread; the model does not. */
-	async notice(text: string): Promise<void> {
-		await this.main.submit({ type: "write", entry: { kind: "syncpi.notice", data: { text } } }, context);
+	/** A line everyone sees in the thread; the model does not. `land`: it's about a land, and opens its thread. */
+	async notice(text: string, extra?: { land: LandInfo["status"] }): Promise<void> {
+		await this.main.submit({ type: "write", entry: { kind: "syncpi.notice", data: { text, ...extra } } }, context);
 	}
 
 	/** People were tagged in a draft: a line in the thread (not for the model), and an item in their inboxes. */
@@ -490,8 +582,10 @@ export class Session {
 	 * Stops the current run only. Queued messages, including other people's, stay queued; the next one starts a new run.
 	 * (Conversation.abort would withdraw every queued input.)
 	 */
-	async abort(): Promise<void> {
-		const live = await this.harness.snapshot(LiveDoc, this.main.id, context);
+	async abort(conv?: "land"): Promise<void> {
+		const id = conv === "land" ? this.land?.id : this.main.id;
+		if (id === undefined) return;
+		const live = await this.harness.snapshot(LiveDoc, id, context);
 		if (live?.run !== undefined) await this.harness.abortTask(live.run.taskId, context);
 	}
 
@@ -534,8 +628,8 @@ export class Session {
 		if ((await this.runner()) === memberId) await this.abort();
 	}
 
-	async #route(read: DocumentReader): Promise<Route> {
-		const live = await read.snapshot(LiveDoc, this.main.id, context);
+	async #route(read: DocumentReader, conversation: ConversationId = this.main.id): Promise<Route> {
+		const live = await read.snapshot(LiveDoc, conversation, context);
 		const input = live?.run?.inputs[0];
 		if (input === undefined) return { where: "vm" };
 		const cached = this.#routes.get(input as number);

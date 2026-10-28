@@ -77,6 +77,14 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .icon-button:hover { background: var(--sunken); color: var(--ink); }
 .icon-button.small { width: 26px; height: 26px; }
+/* The rocket says how the latest land went: busy while landing, green once landed, red when it didn't. */
+.land-button { position: relative; }
+.land-button[data-state="running"] { color: var(--accent); }
+.land-button[data-state="running"] svg { animation: land-lift 1.2s ease-in-out infinite; }
+.land-button[data-state="landed"]::after, .land-button[data-state="failed"]::after { content: ""; position: absolute; top: 5px; right: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--added); }
+.land-button[data-state="failed"]::after { background: var(--removed); }
+@keyframes land-lift { 50% { transform: translateY(-1.5px); } }
+.notice-link { font-size: inherit; font-style: normal; }
 .icon-button.small svg { width: 16px; height: 16px; }
 .text-button { display: inline-flex; align-items: center; gap: 6px; border: none; background: none; color: var(--ink-2); cursor: pointer; padding: 4px 8px; border-radius: 6px; font-size: 13px; }
 .text-button:hover { background: var(--sunken); color: var(--ink); }

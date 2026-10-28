@@ -3,7 +3,7 @@
 // Items are rendered once per revision and replaced in place when they change, so a long thread stays cheap.
 import { type Artifact, kindOfPath, patchStats, replyArtifacts, toolArtifacts } from "../shared/artifacts.ts";
 import { draftText, isCommand } from "../shared/drafts.ts";
-import type { LineComment } from "../shared/protocol.ts";
+import type { ConvName, LineComment } from "../shared/protocol.ts";
 import type { Item, ToolItem, UserItem } from "../shared/thread.ts";
 import { isQuietTool, toolGroupSummary, toolSummary } from "../shared/thread.ts";
 import { artifactCard, type CommentHandler, disposeWithin, type ImageLoader, renderCode } from "./artifacts.ts";
@@ -24,6 +24,8 @@ export type ThreadViewOptions = {
 	loadRecording: (name: string) => Promise<string | undefined>;
 	/** Sends a comment on lines of a file, from a diff or file in the thread. */
 	onComment: CommentHandler;
+	/** Shows the land subthread. */
+	onShowLand: () => void;
 	/** Whose draft the composer is writing (it isn't shown in the thread too). */
 	draftOwner: () => string | undefined;
 	/** Joins someone's draft, to write it with them. */
@@ -71,7 +73,7 @@ export class ThreadView {
 	readonly #session: SessionClient;
 	readonly #options: ThreadViewOptions;
 	#rendered: { key: string; sig: string; el: HTMLElement }[] = [];
-	#conv: "main" | "setup" = "main";
+	#conv: ConvName = "main";
 
 	constructor(box: HTMLElement, scroller: HTMLElement, session: SessionClient, options: ThreadViewOptions) {
 		this.#box = box;
@@ -85,7 +87,7 @@ export class ThreadView {
 		});
 	}
 
-	show(conv: "main" | "setup"): void {
+	show(conv: ConvName): void {
 		this.#conv = conv;
 		this.reset();
 	}
@@ -236,6 +238,7 @@ export class ThreadView {
 		for (const old of this.#box.querySelectorAll(":scope > .pending")) old.remove();
 		if (this.#conv !== "main") return;
 		for (const message of this.#session.outbox.values()) {
+			if (message.conv !== undefined) continue;
 			const node = this.#user(this.#session.me?.name ?? "you", message.text, (message.attachments ?? []).map((a) => ({ name: a.name, kind: a.mimeType.startsWith("image/") ? "image" : "text" })), "sending…");
 			node.classList.add("pending");
 			this.#box.append(node);
@@ -262,8 +265,17 @@ export class ThreadView {
 				return this.#agentRow(this.#assistant(item, this.#askedBefore(items, index)), item.model, item.streaming);
 			case "tool":
 				return this.#agentRow(this.#tool(item), this.#modelBefore(items, index), false);
-			case "notice":
-				return el("div", "notice", item.text);
+			case "notice": {
+				const node = el("div", "notice", item.text);
+				// A land's progress opens its thread.
+				if (item.land !== undefined && this.#conv === "main") {
+					const open = el("button", "link notice-link", "Open");
+					open.type = "button";
+					open.onclick = () => this.#options.onShowLand();
+					node.append(" · ", open);
+				}
+				return node;
+			}
 		}
 	}
 
