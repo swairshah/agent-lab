@@ -66,6 +66,8 @@ class PanZoom {
 	#zoom = 1;
 	#x = 0;
 	#y = 0;
+	/** Whether the person has panned or zoomed; until then the diagram stays fitted when the frame resizes. */
+	#moved = false;
 
 	constructor(stage: HTMLElement, canvas: HTMLElement, width: number, height: number) {
 		this.#stage = stage;
@@ -83,6 +85,7 @@ class PanZoom {
 			if (drag?.id !== event.pointerId) return;
 			this.#x = event.clientX - drag.x;
 			this.#y = event.clientY - drag.y;
+			this.#moved = true;
 			this.#apply();
 		});
 		const end = () => {
@@ -102,10 +105,18 @@ class PanZoom {
 			},
 			{ passive: false },
 		);
+		// A side panel opening narrows the thread: keep the diagram in view, not centered for the old width.
+		let frame = 0;
+		new ResizeObserver(() => {
+			if (stage.clientWidth === frame) return;
+			frame = stage.clientWidth;
+			if (!this.#moved) this.recenter();
+		}).observe(stage);
 	}
 
 	/** Fits the whole diagram in the frame, never larger than its natural size, centered. */
 	recenter(): void {
+		this.#moved = false;
 		const box = this.#stage.getBoundingClientRect();
 		this.#zoom = Math.min(1, (box.width - 32) / this.#width, (box.height - 32) / this.#height);
 		this.#x = (box.width - this.#width * this.#zoom) / 2;
@@ -119,6 +130,7 @@ class PanZoom {
 		const px = cx ?? box.width / 2;
 		const py = cy ?? box.height / 2;
 		const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, this.#zoom * factor));
+		this.#moved = true;
 		this.#x = px - ((px - this.#x) * zoom) / this.#zoom;
 		this.#y = py - ((py - this.#y) * zoom) / this.#zoom;
 		this.#zoom = zoom;

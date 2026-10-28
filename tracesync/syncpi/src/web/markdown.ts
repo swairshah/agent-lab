@@ -16,11 +16,13 @@ marked.use({
 			return `<div class="alert alert-${kind.toLowerCase()}"><div class="alert-title">${ALERTS[kind]}</div><p>${body.slice(alert[0].length)}</div>`;
 		},
 		html: (token) => escapeHtml(token.text),
-		link: ({ href, text }) => {
-			if (/^https?:|^mailto:/i.test(href)) return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(text)}</a>`;
+		link(this: { parser: { parseInline(tokens: Tokens.Generic[]): string } }, { href, tokens }: Tokens.Link) {
+			// The link's own Markdown, so [`cart.js`](cart.js) shows as code, not with backticks.
+			const text = this.parser.parseInline(tokens);
+			if (/^https?:|^mailto:/i.test(href)) return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${text}</a>`;
 			// A project file the agent cites, as Delta has it: `path`, `path#L10-L20` or `path#heading`. It opens in the panel.
 			const file = fileLink(href);
-			return file ? `<button type="button" class="file-link cite" data-path="${escapeHtml(file.path)}"${file.lines ? ` data-lines="${file.lines}"` : ""}>${escapeHtml(text)}</button>` : escapeHtml(text);
+			return file ? `<button type="button" class="file-link cite" data-path="${escapeHtml(file.path)}"${file.lines ? ` data-lines="${file.lines}"` : ""}>${text}</button>` : text;
 		},
 		image: ({ text }) => escapeHtml(text),
 		code: ({ text, lang }) => {

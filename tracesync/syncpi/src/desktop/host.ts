@@ -54,7 +54,8 @@ async function staticFile(res: ServerResponse, path: string, type = MIME[path.sl
   res.end(await readFile(path));
 }
 // The web app's files (dist/web): the page, its script and the chunks it loads, the stylesheet, fonts.
-const WEB_ASSET = /^(?:[A-Za-z0-9_-]+\.(?:js|css)|fonts\/[A-Za-z0-9_-]+\.(?:ttf|woff2))$/;
+// Chunk names can have dots (mermaid.core-XXXX.js); no slashes, so nothing outside the folder.
+const WEB_ASSET = /^(?:[A-Za-z0-9_-][A-Za-z0-9_.-]*\.(?:js|css)|fonts\/[A-Za-z0-9_-]+\.(?:ttf|woff2))$/;
 const webDir = join(appDir, 'web');
 async function handle(req: IncomingMessage, res: ServerResponse) {
   const url = new URL(req.url || '/', origin);
