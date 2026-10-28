@@ -26,61 +26,144 @@ const THEME = { light: "pierre-light", dark: "pierre-dark" } as const;
 /** Sends a comment on lines of a file to the thread. */
 export type CommentHandler = (comment: LineComment) => void;
 
+type Range = { start: number; end: number; side?: "additions" | "deletions" };
+
+/** The view whose lines were selected last, so ⌥⌘M can comment on them. */
+let active: (() => void) | undefined;
+
+/** Opens the comment box on the lines selected last. Returns whether there were any. */
+export function commentOnSelection(): boolean {
+	active?.();
+	return active !== undefined;
+}
+
 /**
- * Highlighted, read-only code. With `onComment` (a project file), lines can be selected and commented on, as in
- * Delta: a box opens under the selection, ⌘↩ sends the comment with those lines, Esc drops it.
+ * Line comments on a Pierre view, as in Delta and the desktop app: selecting lines (click or drag the line numbers,
+ * shift-click to extend) shows a small Comment button under the selection; it opens a box right under the lines,
+ * where ⌘↩ sends the comment and Esc drops it. `excerpt` gives the text of the selected lines.
  */
-export function renderCode(host: HTMLElement, name: string, contents: string, onComment?: CommentHandler, lines?: string): void {
-	host.classList.add("pierre-host");
-	void loadPierre().then(({ File }) => {
-		const file = { name, contents };
-		let selection: { start: number; end: number } | undefined;
-		const draw = () => {
-			view.render({ file, lineAnnotations: selection ? [{ lineNumber: selection.end, metadata: selection }] : [], containerWrapper: host });
-			// Sent or dropped: the lines are no longer selected.
-			if (selection === undefined) view.setSelectedLines(null);
-		};
-		const box = (range: { start: number; end: number }) => {
+function lineComments(path: string, onComment: CommentHandler, excerpt: (range: Range) => string, draw: (annotations: { lineNumber: number; side?: Range["side"]; metadata: { range: Range; box: boolean } }[]) => void, clear: () => void) {
+	let selection: Range | undefined;
+	let box = false;
+	const redraw = () => draw(selection ? [{ lineNumber: selection.end, side: selection.side, metadata: { range: selection, box } }] : []);
+	const open = () => {
+		if (selection === undefined) return;
+		box = true;
+		redraw();
+	};
+	const drop = () => {
+		selection = undefined;
+		box = false;
+		if (active === open) active = undefined;
+		redraw();
+		clear();
+	};
+	const label = (r: Range) => `${r.start === r.end ? `line ${r.start}` : `lines ${r.start}–${r.end}`}${r.side === "deletions" ? " (removed)" : ""}`;
+	return {
+		onLineSelectionEnd(range: (Range & { endSide?: Range["side"] }) | null) {
+			if (range === null) return drop();
+			selection = { start: Math.min(range.start, range.end), end: Math.max(range.start, range.end), side: range.endSide ?? range.side };
+			box = false;
+			active = open;
+			redraw();
+		},
+		renderAnnotation(annotation: { metadata?: { range: Range; box: boolean } }): HTMLElement | undefined {
+			const meta = annotation.metadata;
+			if (meta === undefined) return undefined;
+			if (!meta.box) {
+				const pill = el("button", "comment-pill");
+				pill.type = "button";
+				pill.title = "Comment on these lines (⌥⌘M)";
+				pill.innerHTML = `<svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Comment`;
+				pill.onclick = open;
+				const row = el("div", "comment-pill-row");
+				row.append(pill);
+				return row;
+			}
 			const form = el("div", "line-comment");
 			const input = el("textarea");
 			input.rows = 2;
-			input.placeholder = `Comment on ${range.start === range.end ? `line ${range.start}` : `lines ${range.start}–${range.end}`}. ⌘↩ to send, Esc to cancel`;
+			input.placeholder = `Comment on ${label(meta.range)}`;
+			const send = () => {
+				const text = input.value.trim();
+				if (!text) return;
+				const prefix = meta.range.side === "deletions" ? "(on removed lines) " : "";
+				onComment({ path, start: meta.range.start, end: meta.range.end, excerpt: excerpt(meta.range), text: prefix + text });
+				drop();
+			};
 			input.addEventListener("keydown", (event) => {
 				if (event.key === "Escape") {
 					event.preventDefault();
 					event.stopPropagation();
-					selection = undefined;
-					draw();
-				} else if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && input.value.trim()) {
+					drop();
+				} else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
 					event.preventDefault();
-					const excerpt = contents.split("\n").slice(range.start - 1, range.end).join("\n");
-					onComment!({ path: name, start: range.start, end: range.end, excerpt, text: input.value.trim() });
-					selection = undefined;
-					draw();
+					send();
 				}
 			});
-			form.append(input);
+			const actions = el("div", "line-comment-actions");
+			actions.append(el("span", "muted", "⌘↩ to send, Esc to cancel"));
+			const cancel = el("button", "text-button", "Cancel");
+			cancel.type = "button";
+			cancel.onclick = drop;
+			const ok = el("button", "button primary", "Comment");
+			ok.type = "button";
+			ok.onclick = send;
+			actions.append(cancel, ok);
+			form.append(input, actions);
 			requestAnimationFrame(() => input.focus());
 			return form;
-		};
-		const view = new File<{ start: number; end: number }>({
+		},
+	};
+}
+
+/** The text of each old and new line a patch shows, by line number. */
+function patchLines(patch: string): { additions: Map<number, string>; deletions: Map<number, string> } {
+	const additions = new Map<number, string>();
+	const deletions = new Map<number, string>();
+	let oldLine = 0;
+	let newLine = 0;
+	for (const line of patch.split("\n")) {
+		const hunk = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)/);
+		if (hunk) {
+			oldLine = Number(hunk[1]);
+			newLine = Number(hunk[2]);
+		} else if (line.startsWith("+") && !line.startsWith("+++")) additions.set(newLine++, line.slice(1));
+		else if (line.startsWith("-") && !line.startsWith("---")) deletions.set(oldLine++, line.slice(1));
+		else if (line.startsWith(" ")) {
+			additions.set(newLine++, line.slice(1));
+			deletions.set(oldLine++, line.slice(1));
+		}
+	}
+	return { additions, deletions };
+}
+
+/** Highlighted, read-only code. With `onComment`, lines can be commented on (see lineComments). */
+export function renderCode(host: HTMLElement, name: string, contents: string, onComment?: CommentHandler, lines?: string): void {
+	host.classList.add("pierre-host");
+	void loadPierre().then(({ File }) => {
+		const file = { name, contents };
+		let annotations: { lineNumber: number; metadata: { range: Range; box: boolean } }[] = [];
+		const comments = onComment
+			? lineComments(
+					name,
+					onComment,
+					(r) => contents.split("\n").slice(r.start - 1, r.end).join("\n"),
+					(next) => {
+						annotations = next;
+						view.render({ file, lineAnnotations: annotations, containerWrapper: host });
+					},
+					() => view.setSelectedLines(null),
+				)
+			: undefined;
+		const view = new File<{ range: Range; box: boolean }>({
 			theme: THEME,
 			themeType: themeType(),
 			overflow: "wrap",
 			disableFileHeader: true,
-			...(onComment
-				? {
-						enableLineSelection: true,
-						onLineSelectionEnd: (range: { start: number; end: number } | null) => {
-							if (range === null) return;
-							selection = { start: Math.min(range.start, range.end), end: Math.max(range.start, range.end) };
-							draw();
-						},
-						renderAnnotation: (annotation: { metadata?: { start: number; end: number } }) => (annotation.metadata ? box(annotation.metadata) : undefined),
-					}
-				: {}),
+			...(comments ? { enableLineSelection: true, onLineSelectionEnd: comments.onLineSelectionEnd, renderAnnotation: comments.renderAnnotation } : {}),
 		});
-		draw();
+		view.render({ file, lineAnnotations: annotations, containerWrapper: host });
 		// Opened from a citation: show those lines selected, in view.
 		const [start, end] = (lines ?? "").split("-").map(Number);
 		if (start) {
@@ -91,12 +174,40 @@ export function renderCode(host: HTMLElement, name: string, contents: string, on
 	});
 }
 
-/** A unified diff from a patch. */
-export function renderDiff(host: HTMLElement, patch: string): void {
+/** A unified diff from a patch. With `path` and `onComment`, its lines can be commented on too. */
+export function renderDiff(host: HTMLElement, patch: string, path?: string, onComment?: CommentHandler): void {
 	host.classList.add("pierre-host");
 	void loadPierre().then(({ FileDiff, getSingularPatch }) => {
-		const view = new FileDiff({ theme: THEME, themeType: themeType(), diffStyle: "unified", overflow: "wrap", disableFileHeader: true });
-		view.render({ fileDiff: getSingularPatch(patch), containerWrapper: host });
+		const fileDiff = getSingularPatch(patch);
+		const text = patchLines(patch);
+		let annotations: { side: Range["side"] & string; lineNumber: number; metadata: { range: Range; box: boolean } }[] = [];
+		const comments =
+			onComment && path
+				? lineComments(
+						path,
+						onComment,
+						(r) => {
+							const side = text[r.side ?? "additions"];
+							const out: string[] = [];
+							for (let n = r.start; n <= r.end; n++) if (side.has(n)) out.push(side.get(n)!);
+							return out.join("\n");
+						},
+						(next) => {
+							annotations = next.map((a) => ({ ...a, side: a.side ?? "additions" }));
+							view.render({ fileDiff, lineAnnotations: annotations, containerWrapper: host });
+						},
+						() => view.setSelectedLines(null),
+					)
+				: undefined;
+		const view = new FileDiff<{ range: Range; box: boolean }>({
+			theme: THEME,
+			themeType: themeType(),
+			diffStyle: "unified",
+			overflow: "wrap",
+			disableFileHeader: true,
+			...(comments ? { enableLineSelection: true, onLineSelectionEnd: comments.onLineSelectionEnd, renderAnnotation: comments.renderAnnotation } : {}),
+		});
+		view.render({ fileDiff, lineAnnotations: annotations, containerWrapper: host });
 		instances.set(host, view);
 	});
 }
@@ -150,9 +261,9 @@ function views(artifact: Artifact): ("preview" | "code" | "diff")[] {
 function renderView(host: HTMLElement, artifact: Artifact, view: "preview" | "code" | "diff", loadImage: ImageLoader, onComment?: CommentHandler): void {
 	disposeWithin(host);
 	host.replaceChildren();
-	if (view === "diff") return renderDiff(host, artifact.content);
-	// Comments are on project files as they are now, so not on what the agent wrote earlier.
-	const commentable = artifact.source === "file" && artifact.path !== undefined ? onComment : undefined;
+	// Any view of a project file can be commented on: the file, a file the agent wrote, or the lines of an edit.
+	const commentable = artifact.path !== undefined ? onComment : undefined;
+	if (view === "diff") return renderDiff(host, artifact.content, artifact.path, commentable);
 	if (view === "code") return renderCode(host, artifact.path ?? `snippet.${artifact.lang || artifact.kind}`, artifact.content, commentable, artifact.lines);
 	if (artifact.kind === "markdown") {
 		host.innerHTML = `<div class="markdown-preview prose">${renderMarkdown(artifact.content)}</div>`;
@@ -187,6 +298,10 @@ export function artifactCard(artifact: Artifact, options: CardOptions): HTMLElem
 	head.innerHTML = `<span class="artifact-kind">${KIND_LABEL[artifact.kind]}</span><span class="artifact-title" title="${escapeHtml(artifact.title)}">${escapeHtml(artifact.title)}</span>${
 		stats ? `<span class="diff-stats"><span class="added">+${stats.added}</span> <span class="removed">−${stats.removed}</span></span>` : ""
 	}`;
+	// Where comments are possible, say how, as long as there's room for it.
+	if (options.onComment !== undefined && artifact.path !== undefined && artifact.kind !== "image") {
+		head.append(el("span", "artifact-hint", "Select line numbers to comment"));
+	}
 	const tabBar = el("div", "artifact-tabs");
 	tabBar.setAttribute("role", "tablist");
 	const body = el("div", "artifact-body");

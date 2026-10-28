@@ -5,7 +5,7 @@ import { type Artifact, kindOfPath, patchStats, replyArtifacts, toolArtifacts } 
 import type { LineComment } from "../shared/protocol.ts";
 import type { Item, ToolItem, UserItem } from "../shared/thread.ts";
 import { isQuietTool, toolGroupSummary, toolSummary } from "../shared/thread.ts";
-import { artifactCard, disposeWithin, type ImageLoader, renderCode } from "./artifacts.ts";
+import { artifactCard, type CommentHandler, disposeWithin, type ImageLoader, renderCode } from "./artifacts.ts";
 import { renderDiagram } from "./diagrams.ts";
 import { el, escapeHtml, initials, personColor } from "./dom.ts";
 import { modelAvatar } from "./icons.ts";
@@ -18,6 +18,8 @@ export type ThreadViewOptions = {
 	/** Opens a project file in the side panel, with lines selected when given ("12-16"). */
 	onOpenFile: (path: string, lines?: string) => void;
 	loadImage: ImageLoader;
+	/** Sends a comment on lines of a file, from a diff or file in the thread. */
+	onComment: CommentHandler;
 };
 
 const TOOL_VERB: Record<string, string> = { bash: "Ran", edit: "Edited", write: "Wrote", read: "Read" };
@@ -242,7 +244,7 @@ export class ThreadView {
 				slot.replaceWith(host);
 				renderDiagram(host, code);
 			} else if (artifact !== undefined) {
-				slot.replaceWith(artifactCard(artifact, { size: "inline", onOpen: this.#options.onOpenArtifact, loadImage: this.#options.loadImage }));
+				slot.replaceWith(artifactCard(artifact, { size: "inline", onOpen: this.#options.onOpenArtifact, loadImage: this.#options.loadImage, onComment: this.#options.onComment }));
 			} else if (lang !== "" && code.split("\n").length > 1) {
 				const host = el("div", "code-block");
 				slot.replaceWith(host);
@@ -294,7 +296,7 @@ export class ThreadView {
 		}</summary>`;
 		const body = el("div", "tool-body");
 		if (artifacts.length > 0) {
-			for (const artifact of artifacts) body.append(artifactCard(artifact, { size: "inline", onOpen: this.#options.onOpenArtifact, loadImage: this.#options.loadImage }));
+			for (const artifact of artifacts) body.append(artifactCard(artifact, { size: "inline", onOpen: this.#options.onOpenArtifact, loadImage: this.#options.loadImage, onComment: this.#options.onComment }));
 			// Changes are what people come to see: shown open.
 			node.open = true;
 		} else if (item.name === "read" && item.status === "done") {

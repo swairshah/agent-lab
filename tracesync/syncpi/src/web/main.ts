@@ -12,7 +12,8 @@
 //   dialogs.ts      share link, keyboard shortcuts and confirmations
 //   bridge.ts       talking to an app that embeds this view
 import { kindOfPath } from "../shared/artifacts.ts";
-import type { Where } from "../shared/protocol.ts";
+import type { LineComment, Where } from "../shared/protocol.ts";
+import { commentOnSelection } from "./artifacts.ts";
 import { signIn, TOKEN_KEY } from "./auth.ts";
 import { embedded, onHostAction, toHost } from "./bridge.ts";
 import { Composer } from "./composer.ts";
@@ -56,15 +57,18 @@ async function main(): Promise<void> {
 		return res?.ok ? URL.createObjectURL(await res.blob()) : undefined;
 	};
 	// A comment on file lines goes to the thread as its own message, as in Delta.
-	const panel = new ArtifactPanel(session, loadImage, (comment) => {
+	// A comment on file lines goes to the thread as its own message, as in Delta.
+	let where: Where = embedded ? ((storage.get("syncpi-where") as Where | undefined) ?? "device") : "vm";
+	const sendComment = (comment: LineComment) => {
+		if (session.role === "viewer") return toast("Viewers can't comment; ask an admin to make you an editor.", "error");
 		session.submit("", "followUp", where, [], [comment]);
 		toast(`Comment on ${comment.path}:${comment.start === comment.end ? comment.start : `${comment.start}-${comment.end}`} sent`);
-	});
+	};
+	const panel = new ArtifactPanel(session, loadImage, sendComment);
 	const dialogs = new Dialogs(session);
 
 	let showing: "main" | "setup" = "main";
-	let where: Where = embedded ? ((storage.get("syncpi-where") as Where | undefined) ?? "device") : "vm";
-	const setWhere = (next: Where) => {
+		const setWhere = (next: Where) => {
 		where = embedded ? next : "vm";
 		storage.set("syncpi-where", where);
 		$<HTMLSelectElement>("where").value = where;
@@ -88,7 +92,7 @@ async function main(): Promise<void> {
 		const content = kind === "image" ? "" : await res.text();
 		panel.openFile({ key: `file:${path}`, kind, title: path, path, content, lang: path.split(".").pop(), source: "file", lines });
 	};
-	const threadView = new ThreadView($("thread"), $("scroller"), session, { onOpenArtifact: (a) => panel.open(a), onFork: fork, onOpenFile: (path, lines) => void openFile(path, lines), loadImage });
+	const threadView = new ThreadView($("thread"), $("scroller"), session, { onOpenArtifact: (a) => panel.open(a), onFork: fork, onOpenFile: (path, lines) => void openFile(path, lines), loadImage, onComment: sendComment });
 	const settings = new Settings(session, {
 		onTheme: (theme) => {
 			applyTheme(theme as Theme);
@@ -257,6 +261,7 @@ async function main(): Promise<void> {
 			"agent.setup": () => show(showing === "setup" ? "main" : "setup"),
 			"view.changes": () => panel.toggle(),
 			"view.people": () => settings.open("people"),
+			"file.comment": () => commentOnSelection() || toast("Select lines in a file or diff (click or drag their numbers) to comment on them."),
 		},
 	});
 	document.addEventListener("keydown", (event) => {
