@@ -99,6 +99,8 @@ struct Desktop {
     collapsed: HashSet<String>,
     /// Projects folded in the sidebar.
     folded: HashSet<String>,
+    /// The new-thread dialog's extra options are showing.
+    advanced: bool,
     thinking: HashSet<String>,
     scroll: ScrollHandle,
     files: Vec<String>,
@@ -213,6 +215,7 @@ impl Desktop {
             steer: false,
             collapsed: HashSet::new(),
             folded: HashSet::new(),
+            advanced: false,
             thinking: HashSet::new(),
             scroll: ScrollHandle::new(),
             files: vec![],
@@ -551,6 +554,44 @@ impl Desktop {
         }
         cx.notify();
     }
+    /// Starts a thread in `dir` straight away, as ⌘N does in Delta: same place to run as the open thread when it's
+    /// in the same project, the default model, a title from the first message. A new folder goes through the dialog.
+    fn new_thread(&mut self, dir: String, window: &mut Window, cx: &mut Context<Self>) {
+        if dir.is_empty() {
+            return self.choose_project(window, cx);
+        }
+        let current = self.selected();
+        let same = text(&current, "dir") == dir;
+        let compute = if same && !text(&current, "compute").is_empty() {
+            text(&current, "compute")
+        } else {
+            "local".into()
+        };
+        self.busy = true;
+        self.notice("Starting a thread…", cx);
+        self.backend.request(
+            "create",
+            "POST",
+            "/api/sessions",
+            Some(json!({
+                "dir": dir,
+                "title": "",
+                "compute": compute,
+                "model": text(&self.catalog["defaults"], "model"),
+                "thinkingLevel": text(&self.catalog["defaults"], "thinkingLevel"),
+                "vm": if same { text(&current, "vm") } else { String::new() },
+                "setupModel": "",
+            })),
+        );
+    }
+    /// The project new threads go to: the one picked in the sidebar, else the open thread's.
+    fn current_project(&self) -> String {
+        if self.project.is_empty() {
+            text(&self.selected(), "dir")
+        } else {
+            self.project.clone()
+        }
+    }
     fn choose_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let response = cx.prompt_for_paths(PathPromptOptions {
             files: false,
@@ -593,7 +634,7 @@ impl Desktop {
     }
     fn run_action(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
         match name {
-            "new" => self.open_modal("create", window, cx),
+            "new" => self.new_thread(self.current_project(), window, cx),
             "project" => self.choose_project(window, cx),
             "search" => self.open_modal("search", window, cx),
             "join" => self.open_modal("join", window, cx),
@@ -1411,11 +1452,38 @@ impl Desktop {
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.choose_project(window, cx)),
                             ),
-                    )
-                    .child(self.dialog_field("title", "Thread title"));
+                    );
                 let compute = self.value("compute", cx);
-                content=content.child(label("Run the agent on").text_xs().mb_2()).child(div().flex().gap_2().mb_3().children([("local","This Mac"),("host","exe.dev VM")].into_iter().map(|(value,title)|Button::new(value).small().label(title).when(compute==value,|b|b.primary()).on_click(cx.listener(move|this,_,window,cx|{if let Some(field)=this.fields.get("compute"){field.update(cx,|s,cx|s.set_value(value,window,cx));}cx.notify();}))))).child(self.dialog_field("model","Model (provider/model)"))
-.child(self.dialog_field("setupModel","Setup agent model (blank uses main model)")).child(self.dialog_field("thinking","Thinking (off, minimal, low, medium, high, xhigh)")).when(compute=="host",|d|d.child(self.dialog_field("vm","Host VM (blank uses syncpi)"))).child(label("Uses your Pi login locally and the exe.dev LLM integration on a VM. API keys stay on this Mac.").text_xs().text_color(muted));
+                let advanced = self.advanced;
+                content = content
+                    .child(label("Run the agent on").text_xs().mb_2())
+                    .child(div().flex().gap_2().mb_3().children([("local", "This Mac"), ("host", "exe.dev VM")].into_iter().map(|(value, title)| {
+                        Button::new(value).small().label(title).when(compute == value, |b| b.primary()).on_click(cx.listener(move |this, _, window, cx| {
+                            if let Some(field) = this.fields.get("compute") {
+                                field.update(cx, |s, cx| s.set_value(value, window, cx));
+                            }
+                            cx.notify();
+                        }))
+                    })))
+                    .child(
+                        Button::new("advanced")
+                            .ghost()
+                            .xsmall()
+                            .icon(if advanced { IconName::ChevronDown } else { IconName::ChevronRight })
+                            .label("More options")
+                            .mb_2()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.advanced = !this.advanced;
+                                cx.notify();
+                            })),
+                    )
+                    .when(advanced, |d| {
+                        d.child(self.dialog_field("model", "Model (provider/model)"))
+                            .child(self.dialog_field("setupModel", "Setup agent model (blank uses the main model)"))
+                            .child(self.dialog_field("thinking", "Thinking (off, minimal, low, medium, high, xhigh)"))
+                            .when(compute == "host", |d| d.child(self.dialog_field("vm", "Host VM (blank uses syncpi)")))
+                    })
+                    .child(label("Local threads use your pi login; VM threads use the exe.dev LLM integration. API keys stay on this Mac.").text_xs().text_color(muted));
             }
             "join" => {
                 content = content
@@ -1704,11 +1772,9 @@ impl Render for Desktop {
             .font_family(theme::SANS)
             .font_weight(FontWeight::NORMAL)
             .text_size(px(14.))
-            .on_action(
-                cx.listener(|this, _: &NewThread, window, cx| {
-                    this.open_modal("create", window, cx)
-                }),
-            )
+            .on_action(cx.listener(|this, _: &NewThread, window, cx| {
+                this.new_thread(this.current_project(), window, cx)
+            }))
             .on_action(
                 cx.listener(|this, _: &AddProject, window, cx| this.choose_project(window, cx)),
             )
@@ -1758,18 +1824,25 @@ impl Render for Desktop {
             .children(dialog)
             .when(!self.toast.is_empty(), |d| {
                 d.child(
-                    div().absolute().bottom(px(48.)).left_0().right_0().flex().justify_center().child(
-                        div()
-                            .max_w(px(520.))
-                            .rounded(px(8.))
-                            .px(px(14.))
-                            .py(px(9.))
-                            .shadow_lg()
-                            .bg(cx.theme().foreground)
-                            .text_color(cx.theme().background)
-                            .text_size(px(13.))
-                            .child(self.toast.clone()),
-                    ),
+                    div()
+                        .absolute()
+                        .bottom(px(48.))
+                        .left_0()
+                        .right_0()
+                        .flex()
+                        .justify_center()
+                        .child(
+                            div()
+                                .max_w(px(520.))
+                                .rounded(px(8.))
+                                .px(px(14.))
+                                .py(px(9.))
+                                .shadow_lg()
+                                .bg(cx.theme().foreground)
+                                .text_color(cx.theme().background)
+                                .text_size(px(13.))
+                                .child(self.toast.clone()),
+                        ),
                 )
             })
     }

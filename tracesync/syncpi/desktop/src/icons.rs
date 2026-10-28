@@ -59,9 +59,15 @@ pub fn model_vendor(model: &str) -> Option<(&'static str, String)> {
         ("MiniMax", "minimax", &["minimax"]),
     ];
     let reference = model.to_lowercase();
-    let id = reference.split_once('/').map_or(reference.as_str(), |(_, id)| id);
+    let id = reference
+        .split_once('/')
+        .map_or(reference.as_str(), |(_, id)| id);
     // OpenAI's reasoning models are named o1, o3, o4-mini and so on.
-    let reasoning = |s: &str| s.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w.len() > 1 && w.starts_with('o') && w[1..].chars().all(|c| c.is_ascii_digit()));
+    let reasoning = |s: &str| {
+        s.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| {
+            w.len() > 1 && w.starts_with('o') && w[1..].chars().all(|c| c.is_ascii_digit())
+        })
+    };
     let find = |s: &str| {
         VENDORS
             .iter()

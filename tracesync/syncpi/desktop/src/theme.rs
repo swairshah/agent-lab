@@ -83,7 +83,9 @@ pub const MONO: &str = "IBM Plex Mono";
 pub fn load_fonts(cx: &App) {
     let fonts: Vec<Cow<'static, [u8]>> = vec![
         Cow::Borrowed(include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf")),
-        Cow::Borrowed(include_bytes!("../assets/fonts/IBMPlexSans-RegularItalic.ttf")),
+        Cow::Borrowed(include_bytes!(
+            "../assets/fonts/IBMPlexSans-RegularItalic.ttf"
+        )),
         Cow::Borrowed(include_bytes!("../assets/fonts/IBMPlexSans-Medium.ttf")),
         Cow::Borrowed(include_bytes!("../assets/fonts/IBMPlexSans-SemiBold.ttf")),
         Cow::Borrowed(include_bytes!("../assets/fonts/IBMPlexMono-Regular.ttf")),
@@ -96,8 +98,20 @@ pub fn load_fonts(cx: &App) {
 
 /// Switches light or dark and paints gpui-component's theme with the syncpi palette.
 pub fn apply(dark: bool, window: Option<&mut Window>, cx: &mut App) {
-    Theme::change(if dark { ThemeMode::Dark } else { ThemeMode::Light }, window, cx);
-    let p = if dark { Palette::dark() } else { Palette::light() };
+    Theme::change(
+        if dark {
+            ThemeMode::Dark
+        } else {
+            ThemeMode::Light
+        },
+        window,
+        cx,
+    );
+    let p = if dark {
+        Palette::dark()
+    } else {
+        Palette::light()
+    };
     let hover = p.sunken;
     let theme = cx.global_mut::<Theme>();
     theme.font_family = SANS.into();
@@ -159,7 +173,11 @@ pub fn apply(dark: bool, window: Option<&mut Window>, cx: &mut App) {
     c.table_head_foreground = p.ink_2;
     c.table_row_border = p.rule;
     c.window_border = p.rule;
-    c.overlay = if dark { hsla(0., 0., 0., 0.45) } else { hsla(40. / 360., 0.08, 0.1, 0.3) };
+    c.overlay = if dark {
+        hsla(0., 0., 0., 0.45)
+    } else {
+        hsla(40. / 360., 0.08, 0.1, 0.3)
+    };
     c.scrollbar = transparent_black();
     c.scrollbar_thumb = p.rule_strong;
     c.scrollbar_thumb_hover = p.muted;
@@ -176,7 +194,9 @@ pub fn person_color(name: &str) -> Hsla {
     // JavaScript's charCodeAt(0) of each code point: its first UTF-16 unit.
     for ch in name.chars() {
         let mut units = [0u16; 2];
-        h = h.wrapping_mul(31).wrapping_add(ch.encode_utf16(&mut units)[0] as u32);
+        h = h
+            .wrapping_mul(31)
+            .wrapping_add(ch.encode_utf16(&mut units)[0] as u32);
     }
     hsla((h % 360) as f32 / 360., 0.42, 0.48, 1.)
 }
@@ -185,6 +205,10 @@ pub fn person_color(name: &str) -> Hsla {
 pub fn initials(name: &str) -> String {
     let parts: Vec<&str> = name.split_whitespace().collect();
     let first = parts.first().and_then(|p| p.chars().next()).unwrap_or('?');
-    let last = if parts.len() > 1 { parts.last().and_then(|p| p.chars().next()) } else { None };
+    let last = if parts.len() > 1 {
+        parts.last().and_then(|p| p.chars().next())
+    } else {
+        None
+    };
     format!("{first}{}", last.map(String::from).unwrap_or_default()).to_uppercase()
 }
