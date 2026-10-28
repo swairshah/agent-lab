@@ -47,11 +47,11 @@ Delta's own repository, pulls in a coworker, reviews and lands the change. Trans
 | Collaborator presence, web and desktop share one link | Yes |
 | Live drafts / typing | Yes: keystrokes and cursors live, tag someone into a draft and write it together |
 | Group chat with the agent, tools run on the sender's machine | Yes |
-| Follow a collaborator | No |
+| Follow a collaborator | Yes: click their face; files are edited together live |
 | Diff from the status bar; mark files seen; since main / last commit / last turn | Mostly: "+N −M" opens the changes, "Seen" in the Changes panel and git sheet; not yet since main / last commit |
 | Comment on diff lines into the thread | Yes |
 | Review subthread, approve, pull changes | No (branches exist) |
-| Land button running a `/land` skill | No (pi skills load already) |
+| Land button running a `/land` skill | Yes: the rocket or /land starts a land subthread (writes the skill first if missing) |
 | Subthreads under the thread | No (branches are in settings) |
 | Scrollbar map with turn summaries | Yes, with bookmarks |
 | Mentions and an inbox | Yes |
