@@ -150,6 +150,21 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .attached img { max-width: 220px; max-height: 160px; border-radius: 8px; border: 1px solid var(--rule); display: block; }
 .attached .file-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--rule); border-radius: 6px; font: 12px var(--mono); color: var(--ink-2); background: var(--surface); }
 
+/* Comments on file lines, as Delta shows them. */
+.comments summary { font-size: 15px; }
+.comment-card { margin-top: 6px; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); padding: 8px 10px 10px; display: grid; gap: 6px; }
+.comment-where { font-size: 12.5px; justify-self: start; }
+.comment-lines { font: 12.5px/1.6 var(--mono); background: var(--raised); border-radius: 6px; padding: 4px 0; overflow-x: auto; }
+.comment-line { display: flex; gap: 12px; white-space: pre; tab-size: 2; }
+.comment-number { width: 3.5em; text-align: right; color: var(--faint); flex: none; }
+.comment-code { background: color-mix(in srgb, var(--removed) 10%, transparent); }
+.comment-more { color: var(--muted); font-size: 12px; padding: 2px 0 0 4.5em; font-family: var(--sans); }
+.comment-note { display: flex; align-items: flex-start; gap: 8px; border-left: 2px solid var(--accent); background: var(--raised); border-radius: 0 6px 6px 0; padding: 6px 10px; }
+.comment-note .avatar { width: 22px; height: 22px; font-size: 9px; }
+.comment-text { font-size: 14.5px; white-space: pre-wrap; padding-top: 1px; }
+.line-comment { padding: 6px 12px 8px 4.5em; background: var(--surface); border-left: 2px solid var(--accent); font-family: var(--sans); }
+.line-comment textarea { width: 100%; resize: vertical; font-size: 13.5px; }
+
 .prose { font-size: 15px; line-height: 1.65; overflow-wrap: anywhere; }
 .prose > :first-child { margin-top: 0; }
 .prose > :last-child { margin-bottom: 0; }

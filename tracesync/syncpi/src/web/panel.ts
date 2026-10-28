@@ -1,22 +1,24 @@
 // The side panel: every artifact in the thread (changes to files, files written, HTML and SVG), and the selected one
 // shown large. Opening an artifact from the thread selects it here.
 import { type Artifact, patchStats, threadArtifacts } from "../shared/artifacts.ts";
-import { artifactCard, disposeWithin, type ImageLoader } from "./artifacts.ts";
+import { artifactCard, type CommentHandler, disposeWithin, type ImageLoader } from "./artifacts.ts";
 import { $, el, escapeHtml } from "./dom.ts";
 import type { SessionClient } from "./session.ts";
 
 export class ArtifactPanel {
 	readonly #session: SessionClient;
 	readonly #loadImage: ImageLoader;
+	readonly #onComment: CommentHandler;
 	#artifacts: Artifact[] = [];
 	/** Project files opened by hand (Go to file), listed with the thread's artifacts. */
 	#files: Artifact[] = [];
 	#selected: string | undefined;
 	#signature = "";
 
-	constructor(session: SessionClient, loadImage: ImageLoader) {
+	constructor(session: SessionClient, loadImage: ImageLoader, onComment: CommentHandler) {
 		this.#session = session;
 		this.#loadImage = loadImage;
+		this.#onComment = onComment;
 		$("panel-list").addEventListener("click", (event) => {
 			const key = (event.target as HTMLElement).closest<HTMLElement>("[data-artifact]")?.dataset.artifact;
 			if (key !== undefined) this.select(key);
@@ -49,7 +51,7 @@ export class ArtifactPanel {
 		for (const row of $("panel-list").querySelectorAll<HTMLElement>("[data-artifact]")) row.setAttribute("aria-current", String(row.dataset.artifact === key));
 		const view = $("panel-view");
 		disposeWithin(view);
-		view.replaceChildren(artifactCard(artifact, { size: "panel", loadImage: this.#loadImage }));
+		view.replaceChildren(artifactCard(artifact, { size: "panel", loadImage: this.#loadImage, onComment: this.#onComment }));
 	}
 
 	/** Renders the selected artifact again, e.g. after a theme change. */

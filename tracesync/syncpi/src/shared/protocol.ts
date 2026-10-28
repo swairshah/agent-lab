@@ -40,6 +40,15 @@ export const ATTACHMENT_LIMITS = { count: 8, imageBytes: 5 * 1024 * 1024, textBy
 
 export const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 
+/**
+ * A comment on lines of a project file, as in Delta: select lines in a file, write a note, and it goes to the thread
+ * with the lines it's about. `start` and `end` are 1-based and inclusive; `excerpt` is the text of those lines.
+ */
+export type LineComment = { path: string; start: number; end: number; excerpt: string; text: string };
+
+/** Limits the server enforces on comments. */
+export const COMMENT_LIMITS = { count: 20, excerptChars: 8000, textChars: 4000 };
+
 /** One branch of the shared thread: the original, or a fork made with /tree. */
 export type BranchInfo = { id: number; label: string; by?: string; at: number; parent?: number; before?: string };
 
@@ -76,7 +85,7 @@ export type SessionInfo = {
 export type FileHash = string | null;
 
 export type ClientMessage =
-	| { type: "submit"; requestId: string; text: string; mode?: "followUp" | "steer"; where?: Where; attachments?: Attachment[] }
+	| { type: "submit"; requestId: string; text: string; mode?: "followUp" | "steer"; where?: Where; attachments?: Attachment[]; comments?: LineComment[] }
 	/** This client runs its member's requests on its machine. */
 	| { type: "device"; device: DeviceInfo }
 	/** A fence finished: the local copy is in step with the session as of the fence. */

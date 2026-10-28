@@ -2,6 +2,7 @@
 // avatar column and its content, as in a conversation; thinking and tool calls are one quiet line until opened.
 // Items are rendered once per revision and replaced in place when they change, so a long thread stays cheap.
 import { type Artifact, kindOfPath, patchStats, replyArtifacts, toolArtifacts } from "../shared/artifacts.ts";
+import type { LineComment } from "../shared/protocol.ts";
 import type { Item, ToolItem, UserItem } from "../shared/thread.ts";
 import { isQuietTool, toolGroupSummary, toolSummary } from "../shared/thread.ts";
 import { artifactCard, disposeWithin, type ImageLoader, renderCode } from "./artifacts.ts";
@@ -103,7 +104,7 @@ export class ThreadView {
 		switch (item.kind) {
 			case "user": {
 				const name = this.#session.nameOf(item.memberId, item.author ?? "someone");
-				const node = this.#user(name, item.text, item.attachments ?? []);
+				const node = this.#user(name, item.text, item.attachments ?? [], undefined, item.comments);
 				if (this.#session.role === "admin" && this.#conv === "main" && /^\d+$/.test(item.key)) {
 					const fork = el("button", "msg-action", "Edit & fork");
 					fork.type = "button";
@@ -124,12 +125,40 @@ export class ThreadView {
 		}
 	}
 
-	#user(name: string, text: string, attachments: NonNullable<UserItem["attachments"]>, status?: string): HTMLElement {
+	/** A comment on file lines, as Delta shows it: the file and lines (opening the file), the lines, the note. */
+	#comment(c: LineComment, name: string): HTMLElement {
+		const card = el("div", "comment-card");
+		const where = el("button", "file-link comment-where", `${c.path}:${c.start === c.end ? c.start : `${c.start}-${c.end}`}`);
+		where.type = "button";
+		where.onclick = () => this.#options.onOpenFile(c.path);
+		const lines = el("div", "comment-lines");
+		const shown = c.excerpt.split("\n");
+		for (const [n, line] of shown.slice(0, 6).entries()) {
+			const row = el("div", "comment-line");
+			row.append(el("span", "comment-number", String(c.start + n)), el("span", "comment-code", line || " "));
+			lines.append(row);
+		}
+		if (shown.length > 6) lines.append(el("div", "comment-more", `${shown.length - 6} more lines`));
+		const note = el("div", "comment-note");
+		note.innerHTML = avatarHtml(name);
+		note.append(el("div", "comment-text", c.text));
+		card.append(where, lines, note);
+		return card;
+	}
+
+	#user(name: string, text: string, attachments: NonNullable<UserItem["attachments"]>, status?: string, comments: LineComment[] = []): HTMLElement {
 		const node = el("article", "msg msg-user");
 		node.style.setProperty("--person", personColor(name));
 		node.innerHTML = `${avatarHtml(name)}<div class="msg-content"><div class="msg-meta"><span class="author">${escapeHtml(name)}</span>${
 			status ? `<span>${escapeHtml(status)}</span>` : ""
 		}</div>${text ? `<div class="msg-body">${escapeHtml(text)}</div>` : ""}</div>`;
+		if (comments.length > 0) {
+			const box = el("details", "fold comments");
+			box.open = true;
+			box.innerHTML = `<summary>${comments.length === 1 ? "1 comment" : `${comments.length} comments`}</summary>`;
+			for (const c of comments) box.append(this.#comment(c, name));
+			node.querySelector(".msg-content")!.append(box);
+		}
 		if (attachments.length > 0) {
 			const box = el("div", "attached");
 			for (const a of attachments) {

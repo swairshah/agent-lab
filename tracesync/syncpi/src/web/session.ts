@@ -1,7 +1,7 @@
 // The web view's live session: one WebSocket (reconnecting, each time from a fresh snapshot), the state it carries,
 // and an outbox so a message typed while offline is sent once the connection is back. Views subscribe to the parts
 // they show; this module knows nothing about the DOM.
-import type { Attachment, BranchInfo, ClientMessage, ConvName, EnvStatus, InviteInfo, Member, Presence, ServerMessage, SessionInfo, Where } from "../shared/protocol.ts";
+import type { Attachment, BranchInfo, ClientMessage, LineComment, ConvName, EnvStatus, InviteInfo, Member, Presence, ServerMessage, SessionInfo, Where } from "../shared/protocol.ts";
 import { Thread } from "../shared/thread.ts";
 import { storage } from "./dom.ts";
 
@@ -106,8 +106,16 @@ export class SessionClient {
 	}
 
 	/** Sends a message to the agent; it stays in the outbox until the server acknowledges it. */
-	submit(text: string, mode: "followUp" | "steer", where: Where, attachments: Attachment[] = []): void {
-		const message: Submit = { type: "submit", requestId: crypto.randomUUID(), text, mode, where, ...(attachments.length > 0 ? { attachments } : {}) };
+	submit(text: string, mode: "followUp" | "steer", where: Where, attachments: Attachment[] = [], comments: LineComment[] = []): void {
+		const message: Submit = {
+			type: "submit",
+			requestId: crypto.randomUUID(),
+			text,
+			mode,
+			where,
+			...(attachments.length > 0 ? { attachments } : {}),
+			...(comments.length > 0 ? { comments } : {}),
+		};
 		this.outbox.set(message.requestId, message);
 		this.#saveOutbox();
 		this.send(message);

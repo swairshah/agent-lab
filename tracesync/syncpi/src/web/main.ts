@@ -55,7 +55,11 @@ async function main(): Promise<void> {
 		const res = await fetch(`api/file?path=${encodeURIComponent(path)}`, { headers: { authorization: `Bearer ${token}` } }).catch(() => undefined);
 		return res?.ok ? URL.createObjectURL(await res.blob()) : undefined;
 	};
-	const panel = new ArtifactPanel(session, loadImage);
+	// A comment on file lines goes to the thread as its own message, as in Delta.
+	const panel = new ArtifactPanel(session, loadImage, (comment) => {
+		session.submit("", "followUp", where, [], [comment]);
+		toast(`Comment on ${comment.path}:${comment.start === comment.end ? comment.start : `${comment.start}-${comment.end}`} sent`);
+	});
 	const dialogs = new Dialogs(session);
 
 	let showing: "main" | "setup" = "main";
