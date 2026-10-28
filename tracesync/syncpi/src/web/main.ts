@@ -77,7 +77,14 @@ async function main(): Promise<void> {
 		updateComposer();
 	};
 
-	const threadView = new ThreadView($("thread"), $("scroller"), session, { onOpenArtifact: (a) => panel.open(a), onFork: fork, loadImage });
+	const openFile = async (path: string) => {
+		const res = await fetch(`api/file?path=${encodeURIComponent(path)}`, { headers: { authorization: `Bearer ${token}` } }).catch(() => undefined);
+		if (!res?.ok) return toast(`Couldn't open ${path}`, "error");
+		const kind = kindOfPath(path);
+		const content = kind === "image" ? "" : await res.text();
+		panel.openFile({ key: `file:${path}`, kind, title: path, path, content, lang: path.split(".").pop(), source: "file" });
+	};
+	const threadView = new ThreadView($("thread"), $("scroller"), session, { onOpenArtifact: (a) => panel.open(a), onFork: fork, onOpenFile: (path) => void openFile(path), loadImage });
 	const settings = new Settings(session, {
 		onTheme: (theme) => {
 			applyTheme(theme as Theme);
@@ -205,13 +212,6 @@ async function main(): Promise<void> {
 	$("scroller").addEventListener("click", (event) => {
 		if (event.target === event.currentTarget && window.getSelection()?.isCollapsed) composer.focus();
 	});
-	const openFile = async (path: string) => {
-		const res = await fetch(`api/file?path=${encodeURIComponent(path)}`, { headers: { authorization: `Bearer ${token}` } }).catch(() => undefined);
-		if (!res?.ok) return toast(`Couldn't open ${path}`, "error");
-		const kind = kindOfPath(path);
-		const content = kind === "image" ? "" : await res.text();
-		panel.openFile({ key: `file:${path}`, kind, title: path, path, content, lang: path.split(".").pop(), source: "file" });
-	};
 	const admin = (run: () => void) => () => (session.role === "admin" ? run() : toast("Only admins can do that."));
 	let models: { id: string; name: string; reasoning?: boolean }[] | undefined;
 	const pickModel = async () => {

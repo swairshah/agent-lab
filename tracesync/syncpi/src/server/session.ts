@@ -110,7 +110,7 @@ function shellEnv(): NodeJS.ProcessEnv {
 
 /**
  * A scripted model for tests: `write <path> <text>` writes a file, `edit <path> <old> => <new>` edits one, `run <command>`
- * runs bash, anything else is echoed.
+ * runs bash, `look <path>...` lists the project and reads those files in one turn, anything else is echoed.
  */
 function installFaux(models: MutableModels): void {
 	const faux = fauxProvider({ tokensPerSecond: 400 });
@@ -132,6 +132,11 @@ function installFaux(models: MutableModels): void {
 			if (write) return fauxAssistantMessage([fauxToolCall("write", { path: write[1]!, content: write[2]! })], { stopReason: "toolUse" });
 			const edit = body.match(/^edit (\S+) ([\s\S]+?) => ([\s\S]+)$/);
 			if (edit) return fauxAssistantMessage([fauxToolCall("edit", { path: edit[1]!, edits: [{ oldText: edit[2]!, newText: edit[3]! }] })], { stopReason: "toolUse" });
+			const look = body.match(/^look (.+)$/);
+			if (look) {
+				const reads = look[1]!.split(/\s+/).map((path) => fauxToolCall("read", { path }));
+				return fauxAssistantMessage([fauxToolCall("bash", { command: "ls" }), ...reads], { stopReason: "toolUse" });
+			}
 			const run = body.match(/^run ([\s\S]+)$/);
 			if (run) return fauxAssistantMessage([fauxToolCall("bash", { command: run[1]! })], { stopReason: "toolUse" });
 			return fauxAssistantMessage(`(faux) ${body}`);

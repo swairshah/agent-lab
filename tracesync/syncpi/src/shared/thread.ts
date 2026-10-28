@@ -347,3 +347,29 @@ export function toolSummary(tool: Pick<ToolItem, "name" | "args">): string {
 	const detail = typeof pick === "string" ? pick : Object.keys(a).length > 0 ? JSON.stringify(a) : "";
 	return detail.replace(/\s+/g, " ").trim();
 }
+
+/** Tools that only look around (read, list, search, run a command); a run of them shows as one line, as in Delta. */
+export function isQuietTool(tool: Pick<ToolItem, "name" | "status">): boolean {
+	return ["read", "ls", "find", "grep", "bash"].includes(tool.name) && tool.status !== "error";
+}
+
+const GROUP_PHRASES: Record<string, [string, string]> = {
+	ls: ["listed {n} directory", "listed {n} directories"],
+	read: ["read {n} file", "read {n} files"],
+	find: ["looked for files {n} time", "looked for files {n} times"],
+	grep: ["searched {n} time", "searched {n} times"],
+	bash: ["ran {n} command", "ran {n} commands"],
+};
+
+/** "Listed 6 directories, read 5 files": what a run of quiet tool calls did, in the order they started. */
+export function toolGroupSummary(tools: Pick<ToolItem, "name">[]): string {
+	const counts = new Map<string, number>();
+	for (const t of tools) counts.set(t.name, (counts.get(t.name) ?? 0) + 1);
+	const text = [...counts]
+		.map(([name, n]) => {
+			const [one, many] = GROUP_PHRASES[name] ?? [`used ${name} {n} time`, `used ${name} {n} times`];
+			return (n === 1 ? one : many).replace("{n}", String(n));
+		})
+		.join(", ");
+	return text.charAt(0).toUpperCase() + text.slice(1);
+}
