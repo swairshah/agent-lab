@@ -16,6 +16,7 @@ impl AssetSource for Assets {
             }
             "syncpi/refresh-cw.svg" => Some(include_bytes!("../assets/icons/refresh-cw.svg")),
             "syncpi/users.svg" => Some(include_bytes!("../assets/icons/users.svg")),
+            "syncpi/crosshair.svg" => Some(include_bytes!("../assets/icons/crosshair.svg")),
             "models/anthropic.svg" => Some(include_bytes!("../assets/models/anthropic.svg")),
             "models/openai.svg" => Some(include_bytes!("../assets/models/openai.svg")),
             "models/gemini.svg" => Some(include_bytes!("../assets/models/gemini.svg")),

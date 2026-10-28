@@ -26,12 +26,18 @@ pub enum Block {
 fn alert(quoted: &str) -> Option<(String, String)> {
     let text: String = quoted
         .lines()
-        .map(|line| line.trim_start().strip_prefix('>').map_or(line, |l| l.strip_prefix(' ').unwrap_or(l)))
+        .map(|line| {
+            line.trim_start()
+                .strip_prefix('>')
+                .map_or(line, |l| l.strip_prefix(' ').unwrap_or(l))
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let rest = text.trim_start().strip_prefix("[!")?;
     let (kind, body) = rest.split_once(']')?;
-    ["NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"].contains(&kind).then(|| (kind.to_owned(), body.trim().to_owned()))
+    ["NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"]
+        .contains(&kind)
+        .then(|| (kind.to_owned(), body.trim().to_owned()))
 }
 pub fn blocks(source: &str) -> Vec<Block> {
     let Ok(Node::Root(root)) = markdown::to_mdast(source, &ParseOptions::gfm()) else {
@@ -98,7 +104,9 @@ pub fn blocks(source: &str) -> Vec<Block> {
             }),
             Node::Blockquote(_) => match alert(source.get(begin..end).unwrap_or("")) {
                 Some((kind, body)) => Some(Block::Alert { kind, body }),
-                None => Some(Block::Prose(source.get(begin..end).unwrap_or("").to_owned())),
+                None => Some(Block::Prose(
+                    source.get(begin..end).unwrap_or("").to_owned(),
+                )),
             },
             _ => Some(Block::Prose(
                 source.get(begin..end).unwrap_or("").to_owned(),
@@ -182,7 +190,7 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
                 container = container.child(list);
             }
             Block::Code { language, content } if language == "mermaid" => {
-                container = container.child(crate::diagram::view(&content, 760., cx));
+                container = container.child(crate::diagram::view(&block_id, &content, 716., cx));
             }
             Block::Alert { kind, body } => {
                 let p = crate::theme::palette(cx);
@@ -207,7 +215,13 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(div().text_size(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(kind.to_uppercase()))
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(color)
+                                .child(kind.to_uppercase()),
+                        )
                         .child(render(&format!("{block_id}-alert"), &body, window, cx)),
                 );
             }
