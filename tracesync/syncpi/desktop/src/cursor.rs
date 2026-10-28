@@ -8,6 +8,15 @@
 // its own part of the selection and the caret (prose::visual_lines).
 use gpui::{AnyElement, Hsla, Pixels, Point, ScrollHandle, TextLayout, point, px};
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+
+/// A comment made on a message's text: it shows there, inline (as in Delta).
+#[derive(Clone)]
+pub struct Mark {
+    pub excerpt: String,
+    pub note: String,
+    pub author: String,
+}
 
 /// A place in the thread's text: a text (by id) and a byte offset in it.
 #[derive(Clone, Debug, PartialEq)]
@@ -41,6 +50,10 @@ struct State {
     after: Option<(String, AnyElement)>,
     follow: bool,
     scroll: Option<ScrollHandle>,
+    /// Comments by the message they're on, the ones already placed this frame, and their color.
+    marks: HashMap<String, Vec<Mark>>,
+    placed: HashSet<(String, usize)>,
+    mark_color: Option<Hsla>,
 }
 
 thread_local! {
@@ -71,7 +84,71 @@ pub fn begin(
         s.focused = focused;
         s.after = after;
         s.scroll = Some(scroll.clone());
+        s.placed.clear();
     });
+}
+
+/// This frame's comments on messages, by message key, and the color they're marked in.
+pub fn set_marks(marks: HashMap<String, Vec<Mark>>, color: Hsla) {
+    STATE.with_borrow_mut(|s| {
+        s.marks = marks;
+        s.mark_color = Some(color);
+    });
+}
+
+fn squash(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The byte ranges of `full` (text `id`) that comments were made on, and their color.
+pub fn marked(id: &str, full: &str) -> (Vec<(usize, usize)>, Option<Hsla>) {
+    STATE.with_borrow(|s| {
+        let mut ranges = vec![];
+        for mark in s.marks.get(&message_of(id)).into_iter().flatten() {
+            for line in mark
+                .excerpt
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+            {
+                if let Some(at) = full.find(line) {
+                    ranges.push((at, at + line.len()));
+                }
+            }
+        }
+        (ranges, s.mark_color)
+    })
+}
+
+/// The comments to show under block `id` (whose text is `text`): those on its message whose text is in it, not
+/// already shown under an earlier block.
+pub fn notes_under(id: &str, text: &str) -> Vec<Mark> {
+    STATE.with_borrow_mut(|s| {
+        let message = message_of(id);
+        let block = squash(text);
+        let mut out = vec![];
+        for (n, mark) in s
+            .marks
+            .get(&message)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .enumerate()
+        {
+            let first = mark
+                .excerpt
+                .lines()
+                .map(squash)
+                .find(|l| !l.is_empty())
+                .unwrap_or_default();
+            let probe: String = first.chars().take(80).collect();
+            if !probe.is_empty() && block.contains(&probe) && s.placed.insert((message.clone(), n))
+            {
+                out.push(mark);
+            }
+        }
+        out
+    })
 }
 
 fn texts(s: &State) -> &Vec<Text> {

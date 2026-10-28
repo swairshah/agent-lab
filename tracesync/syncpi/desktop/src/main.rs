@@ -1008,10 +1008,14 @@ impl Desktop {
             if note.is_empty() {
                 return;
             }
+            // Sent at once, as in Delta, with whatever is written in the composer.
+            let written = self.composer.read(cx).value().trim().to_owned();
+            self.composer
+                .update(cx, |s, cx| s.set_value("", window, cx));
             self.send(json!({
                 "type": "submit",
                 "requestId": uuid::Uuid::new_v4().to_string(),
-                "text": "",
+                "text": written,
                 "mode": "followUp",
                 "where": if self.where_vm { "vm" } else { "device" },
                 "comments": [{ "path": "", "start": 0, "end": 0, "excerpt": excerpt, "text": note, "message": message }],

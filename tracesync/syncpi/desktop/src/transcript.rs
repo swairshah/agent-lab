@@ -275,6 +275,30 @@ impl Desktop {
         // The thread's text cursor (cursor.rs): the caret shows while the thread has focus; the comment box goes under
         // the block it's about.
         let focused = self.thread_focus.is_focused(window);
+        // Comments on messages, by the message they're on: they show there, inline (cursor.rs, prose.rs).
+        let mut marks: std::collections::HashMap<String, Vec<crate::cursor::Mark>> =
+            Default::default();
+        for item in items.iter().filter(|i| i["kind"] == "user") {
+            let id = text(item, "memberId");
+            let author = array(&self.native, "members")
+                .iter()
+                .find(|m| text(m, "id") == id)
+                .map(|m| text(m, "name"))
+                .unwrap_or_else(|| text(item, "author"));
+            for c in array(item, "comments") {
+                if let Some(message) = c["message"].as_str() {
+                    marks
+                        .entry(message.to_owned())
+                        .or_default()
+                        .push(crate::cursor::Mark {
+                            excerpt: text(&c, "excerpt"),
+                            note: text(&c, "text"),
+                            author: author.clone(),
+                        });
+                }
+            }
+        }
+        crate::cursor::set_marks(marks, p.removed);
         let after = self
             .thread_comment
             .as_ref()

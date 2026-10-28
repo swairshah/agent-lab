@@ -159,6 +159,36 @@ fn text(id: String, nodes: &[Node], p: &Palette) -> AnyElement {
     })
 }
 
+/// A comment shown under the text it's on: the commenter's initials and the note.
+fn inline_note(mark: crate::cursor::Mark) -> Div {
+    let color = theme::person_color(&mark.author);
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_2()
+        .py_1()
+        .rounded_r(px(8.))
+        .border_l_2()
+        .border_color(rgb(0xc6432c))
+        .bg(color.opacity(0.06))
+        .child(
+            div()
+                .size(px(22.))
+                .flex_shrink_0()
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(color.opacity(0.16))
+                .text_color(color)
+                .text_size(theme::sz(9.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(theme::initials(&mark.author)),
+        )
+        .child(div().text_size(theme::sz(14.5)).child(mark.note))
+}
+
 /// The byte offset in `layout` under a point; 0 when it isn't laid out yet.
 fn index_at(layout: &TextLayout, at: Point<Pixels>) -> usize {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -184,6 +214,7 @@ pub(crate) fn visual_lines(
     let len = full.len();
     let (measure, press, drag) = (layout.clone(), layout.clone(), layout.clone());
     let (paint_id, press_id, drag_id) = (id.to_owned(), id.to_owned(), id.to_owned());
+    let marked_text = full.to_owned();
     div()
         .relative()
         .w_full()
@@ -193,6 +224,8 @@ pub(crate) fn visual_lines(
             canvas(
                 |_, _, _| {},
                 move |_, _, window, _| {
+                    // Text that comments were made on: tinted and underlined.
+                    let (marks, mark_color) = crate::cursor::marked(&paint_id, &marked_text);
                     let Some(paint) = crate::cursor::paint_for(&paint_id, len) else {
                         return;
                     };
@@ -223,6 +256,39 @@ pub(crate) fn visual_lines(
                             .map(|p| point(p.x + height * 0.45, p.y))
                         })
                     };
+                    if let Some(color) = mark_color {
+                        for (from, to) in &marks {
+                            if let (Some(a), Some(b)) = (at(*from), at(*to)) {
+                                let mut y = a.y;
+                                while y <= b.y + px(0.5) {
+                                    let left = if (y - a.y).abs() < px(0.5) {
+                                        a.x
+                                    } else {
+                                        bounds.left()
+                                    };
+                                    let right = if (y - b.y).abs() < px(0.5) {
+                                        b.x
+                                    } else {
+                                        bounds.right()
+                                    };
+                                    if right > left {
+                                        window.paint_quad(fill(
+                                            Bounds::new(point(left, y), size(right - left, height)),
+                                            color.opacity(0.16),
+                                        ));
+                                        window.paint_quad(fill(
+                                            Bounds::new(
+                                                point(left, y + height - px(2.)),
+                                                size(right - left, px(2.)),
+                                            ),
+                                            color,
+                                        ));
+                                    }
+                                    y += height;
+                                }
+                            }
+                        }
+                    }
                     if let Some((from, to)) = paint.selected {
                         if let (Some(a), Some(b)) = (at(from), at(to)) {
                             let mut y = a.y;
@@ -351,9 +417,22 @@ fn block(id: String, node: &Node, p: &Palette) -> AnyElement {
 
 /// A block as a line of the thread's cursor (cursor.rs): tinted when selected, clickable, with the comment box
 /// right under it when it's open there.
-pub(crate) fn as_line(id: String, _text: &str, element: AnyElement) -> AnyElement {
+pub(crate) fn as_line(id: String, text: &str, element: AnyElement) -> AnyElement {
     let after = crate::cursor::after(&id);
-    let line = div().w_full().min_w_0().child(element);
+    // Comments made on this block's text, shown right under it, as in Delta.
+    let notes = crate::cursor::notes_under(&id, text);
+    let line = if notes.is_empty() {
+        div().w_full().min_w_0().child(element)
+    } else {
+        div()
+            .w_full()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(element)
+            .children(notes.into_iter().map(inline_note))
+    };
     match after {
         Some(after) => div()
             .w_full()
