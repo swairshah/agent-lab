@@ -66,7 +66,14 @@ async function main(): Promise<void> {
 		toast(comment.message !== undefined ? "Comment sent" : `Comment on ${comment.path}:${comment.start === comment.end ? comment.start : `${comment.start}-${comment.end}`} sent`);
 	};
 	const panel = new ArtifactPanel(session, loadImage, sendComment);
-	new QuoteComments($("thread"), sendComment);
+	const quotes = new QuoteComments($("thread"), sendComment, () => composer.focus());
+	// Up from the composer's first line moves the cursor into the thread, as in Delta.
+	$("input").addEventListener("keydown", (event) => {
+		const input = event.target as HTMLTextAreaElement;
+		if (event.key !== "ArrowUp" || event.shiftKey || event.metaKey || event.altKey || event.ctrlKey || !$("completions").hidden) return;
+		if (input.value.lastIndexOf("\n", input.selectionStart - 1) !== -1) return;
+		if (quotes.cursorToEnd()) event.preventDefault();
+	});
 	const dialogs = new Dialogs(session);
 	// Saving a file edited in the panel, refused if it changed since it was opened (compare-and-swap on its hash).
 	panel.onSave = async (path, text, base) => {
