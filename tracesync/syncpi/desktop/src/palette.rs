@@ -1,11 +1,13 @@
 // The command palette, as in Delta and the web view (src/web/palette.ts): ⌘K searches everything, ⌘⇧P opens on
-// commands, ⌘T on threads, ⌘P on files; ⌘1–⌘4 switch tabs. Arrows move, Enter runs, Esc closes.
+// commands, ⌘T on threads, ⌘P on files; ⌘1–⌘4 switch tabs. Arrows move, Enter runs, Esc closes. The same box picks
+// the agent's model (⌘⌥/): models under the provider serving them, with the thinking level.
 use crate::keymap::{self, Command};
 use crate::theme::{self, Palette};
-use crate::{Desktop, eid, text};
+use crate::{Desktop, eid, icons, text};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::input::Input;
+use serde_json::json;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Tab {
@@ -13,7 +15,10 @@ pub enum Tab {
     Threads,
     Commands,
     Files,
+    /// The model picker; not one of the tabs.
+    Models,
 }
+const THINKING: [&str; 6] = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const TABS: [(Tab, &str); 4] = [
     (Tab::All, "All"),
     (Tab::Threads, "Threads"),
@@ -24,6 +29,11 @@ const TABS: [(Tab, &str); 4] = [
 pub struct PaletteState {
     pub tab: Tab,
     pub selected: usize,
+    /// Select the model in use once the list has it (the models arrive after the picker opens).
+    select_current: bool,
+    /// Scroll the selected row into view on the next frame.
+    follow: bool,
+    thinking: String,
 }
 
 #[derive(Clone)]
@@ -31,6 +41,7 @@ pub enum Target {
     Command(String),
     Thread(String),
     File(String),
+    Model(String),
 }
 
 #[derive(Clone)]
@@ -38,7 +49,10 @@ pub struct Row {
     title: String,
     detail: String,
     keys: Option<String>,
-    section: &'static str,
+    section: String,
+    /// A vendor mark (asset path) shown before the title.
+    icon: Option<String>,
+    current: bool,
     pub target: Target,
 }
 
@@ -81,9 +95,16 @@ fn thread_title(session: &serde_json::Value) -> String {
 
 impl Desktop {
     pub(crate) fn open_palette(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
-        self.palette = Some(PaletteState { tab, selected: 0 });
+        self.palette = Some(PaletteState {
+            tab,
+            selected: 0,
+            select_current: false,
+            follow: true,
+            thinking: String::new(),
+        });
         self.palette_input.update(cx, |input, cx| {
             input.set_value("", window, cx);
+            input.set_placeholder("Search commands, threads and files…", window, cx);
             input.focus(window, cx);
         });
         // Files come from the project; ask for the current list.
@@ -101,7 +122,7 @@ impl Desktop {
         cx.notify();
     }
 
-    fn command_rows(&self, commands: &[Command], query: &str, section: &'static str) -> Vec<Row> {
+    fn command_rows(&self, commands: &[Command], query: &str, section: &str) -> Vec<Row> {
         let mut rows: Vec<(i32, Row)> = commands
             .iter()
             .filter_map(|c| {
@@ -112,7 +133,9 @@ impl Desktop {
                         title: c.title.clone(),
                         detail: c.group.clone(),
                         keys: c.keys.clone(),
-                        section,
+                        section: section.to_owned(),
+                        icon: None,
+                        current: false,
                         target: Target::Command(c.id.clone()),
                     },
                 ))
@@ -144,7 +167,9 @@ impl Desktop {
                         title,
                         detail: project,
                         keys: None,
-                        section: "Threads",
+                        section: "Threads".into(),
+                        icon: None,
+                        current: false,
                         target: Target::Thread(text(s, "id")),
                     },
                 ))
@@ -176,7 +201,9 @@ impl Desktop {
                         title: name.to_owned(),
                         detail: dir,
                         keys: None,
-                        section: "Files",
+                        section: "Files".into(),
+                        icon: None,
+                        current: false,
                         target: Target::File(path.clone()),
                     },
                 ))
@@ -184,6 +211,71 @@ impl Desktop {
             .collect();
         rows.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.detail.len().cmp(&b.1.detail.len())));
         rows.into_iter().take(limit).map(|(_, r)| r).collect()
+    }
+
+    /// Models under the provider that serves them, as in Delta's picker; the one in use is checked.
+    fn model_rows(&self, query: &str) -> Vec<Row> {
+        let current = text(&self.native["main"], "model");
+        let mut rows: Vec<(i32, Row)> = self
+            .models
+            .iter()
+            .filter_map(|m| {
+                let id = text(m, "id");
+                let name = text(m, "name");
+                let s = score(&name, query).max(score(&id, query).map(|s| s - 5))?;
+                let vendor = icons::model_vendor(&id);
+                let provider = id.split('/').next().unwrap_or("").to_owned();
+                Some((
+                    s,
+                    Row {
+                        title: match &vendor {
+                            Some((vendor, _)) => format!("{vendor}: {name}"),
+                            None => name,
+                        },
+                        detail: id.clone(),
+                        keys: None,
+                        section: icons::provider_name(&provider),
+                        icon: Some(vendor.map(|(_, path)| path).unwrap_or_default()),
+                        current: id == current,
+                        target: Target::Model(id),
+                    },
+                ))
+            })
+            .collect();
+        if !query.is_empty() {
+            rows.sort_by(|a, b| b.0.cmp(&a.0));
+        }
+        // Grouped by provider; the sort is stable, so the order within a group stays.
+        rows.sort_by(|a, b| a.1.section.cmp(&b.1.section));
+        rows.into_iter().map(|(_, r)| r).collect()
+    }
+
+    /// Opens the palette as the model picker.
+    pub(crate) fn pick_model(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.role() != "admin" {
+            return self.notice("Only admins can change the model.", cx);
+        }
+        if self.models.is_empty() {
+            self.request("models", "GET", "models", None);
+        }
+        let thinking = text(&self.native["main"], "thinkingLevel");
+        self.palette = Some(PaletteState {
+            tab: Tab::Models,
+            selected: 0,
+            select_current: true,
+            follow: true,
+            thinking: if thinking.is_empty() {
+                "medium".into()
+            } else {
+                thinking
+            },
+        });
+        self.palette_input.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.set_placeholder("Select a model…", window, cx);
+            input.focus(window, cx);
+        });
+        cx.notify();
     }
 
     pub(crate) fn palette_rows(&self, cx: &App) -> Vec<Row> {
@@ -196,11 +288,12 @@ impl Desktop {
             Tab::Commands => self.command_rows(&commands, &query, "Commands"),
             Tab::Threads => self.thread_rows(&query, 60),
             Tab::Files => self.file_rows(&query, 60),
+            Tab::Models => self.model_rows(&query),
             Tab::All if query.is_empty() => {
                 let quick: Vec<Command> = commands.iter().filter(|c| c.quick).cloned().collect();
                 let mut rows = self.command_rows(&quick, "", "Quick actions");
                 rows.extend(self.thread_rows("", 6).into_iter().map(|r| Row {
-                    section: "Recent threads",
+                    section: "Recent threads".into(),
                     ..r
                 }));
                 rows.extend(
@@ -235,11 +328,19 @@ impl Desktop {
         let Some(row) = self.palette_rows(cx).into_iter().nth(index) else {
             return;
         };
+        let thinking = self
+            .palette
+            .as_ref()
+            .map(|p| p.thinking.clone())
+            .unwrap_or_default();
         self.close_palette(window, cx);
         match row.target {
             Target::Command(id) => self.run_command(&id, window, cx),
             Target::Thread(id) => self.select(id, window, cx),
             Target::File(path) => self.open_file(path, cx),
+            Target::Model(model) => {
+                self.send(json!({"type": "configure", "model": model, "thinkingLevel": thinking}))
+            }
         }
     }
 
@@ -259,9 +360,11 @@ impl Desktop {
                 } else {
                     (state.selected + count - 1) % count
                 };
+                state.select_current = false;
+                state.follow = true;
                 cx.notify();
             }
-            "1" | "2" | "3" | "4" if cmd => {
+            "1" | "2" | "3" | "4" if cmd && state.tab != Tab::Models => {
                 state.tab = TABS[key.parse::<usize>().unwrap_or(1) - 1].0;
                 state.selected = 0;
                 if state.tab == Tab::Files {
@@ -279,25 +382,41 @@ impl Desktop {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let state = self.palette.as_ref()?;
-        let (tab, selected) = (state.tab, state.selected);
-        let p = theme::palette(cx);
         let rows = self.palette_rows(cx);
+        let state = self.palette.as_mut()?;
+        if state.select_current {
+            if let Some(at) = rows.iter().position(|r| r.current) {
+                state.selected = at;
+                state.select_current = false;
+                state.follow = true;
+            }
+        }
+        let (tab, selected, follow) =
+            (state.tab, state.selected, std::mem::take(&mut state.follow));
+        let thinking = state.thinking.clone();
+        let p = theme::palette(cx);
         let mut list = div()
             .id("palette-list")
+            .track_scroll(&self.palette_scroll)
             .flex()
             .flex_col()
             .px(px(6.))
             .pb_2()
             .max_h(px(420.))
             .overflow_y_scroll();
-        let mut section = "";
+        let mut section = String::new();
+        let mut child = 0;
         for (n, row) in rows.iter().enumerate() {
             if row.section != section {
-                section = row.section;
-                list = list.child(section_label(section, &p));
+                section = row.section.clone();
+                list = list.child(section_label_static(section.clone(), &p));
+                child += 1;
+            }
+            if follow && n == selected {
+                self.palette_scroll.scroll_to_item(child);
             }
             list = list.child(self.palette_row(n, row, n == selected, &p, cx));
+            child += 1;
         }
         if rows.is_empty() {
             list = list.child(
@@ -341,30 +460,61 @@ impl Desktop {
                     .py_2()
                     .border_b_1()
                     .border_color(p.rule)
-                    .children(TABS.iter().enumerate().map(|(n, (t, label))| {
-                        let t = *t;
-                        div()
-                            .id(eid(format!("palette-tab-{n}")))
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .px_2()
-                            .py(px(3.))
-                            .rounded(px(6.))
-                            .cursor_pointer()
-                            .text_size(px(12.5))
-                            .when(t == tab, |d| d.bg(p.sunken).text_color(p.ink))
-                            .when(t != tab, |d| d.text_color(p.muted))
-                            .child(label.to_string())
-                            .child(kbd(&keymap::format(&format!("cmd-{}", n + 1)), &p))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Some(state) = this.palette.as_mut() {
-                                    state.tab = t;
-                                    state.selected = 0;
-                                }
-                                cx.notify();
-                            }))
-                    })),
+                    .when(tab == Tab::Models, |d| {
+                        d.child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(p.muted)
+                                .mr_1()
+                                .child("Thinking"),
+                        )
+                        .children(THINKING.iter().map(|level| {
+                            let level = *level;
+                            div()
+                                .id(eid(format!("thinking-{level}")))
+                                .px_2()
+                                .py(px(3.))
+                                .rounded(px(6.))
+                                .cursor_pointer()
+                                .font_family(theme::MONO)
+                                .text_size(px(11.5))
+                                .when(level == thinking, |d| d.bg(p.sunken).text_color(p.ink))
+                                .when(level != thinking, |d| d.text_color(p.muted))
+                                .child(level)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if let Some(state) = this.palette.as_mut() {
+                                        state.thinking = level.into();
+                                    }
+                                    cx.notify();
+                                }))
+                        }))
+                    })
+                    .when(tab != Tab::Models, |d| {
+                        d.children(TABS.iter().enumerate().map(|(n, (t, label))| {
+                            let t = *t;
+                            div()
+                                .id(eid(format!("palette-tab-{n}")))
+                                .flex()
+                                .items_center()
+                                .gap(px(6.))
+                                .px_2()
+                                .py(px(3.))
+                                .rounded(px(6.))
+                                .cursor_pointer()
+                                .text_size(px(12.5))
+                                .when(t == tab, |d| d.bg(p.sunken).text_color(p.ink))
+                                .when(t != tab, |d| d.text_color(p.muted))
+                                .child(label.to_string())
+                                .child(kbd(&keymap::format(&format!("cmd-{}", n + 1)), &p))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if let Some(state) = this.palette.as_mut() {
+                                        state.tab = t;
+                                        state.selected = 0;
+                                    }
+                                    cx.notify();
+                                }))
+                        }))
+                    }),
             )
             .child(list);
         Some(
@@ -407,6 +557,17 @@ impl Desktop {
             .rounded(px(7.))
             .cursor_pointer()
             .when(selected, |d| d.bg(p.sunken))
+            .children(row.icon.as_ref().map(|path| {
+                div()
+                    .size(px(18.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(!path.is_empty(), |d| {
+                        d.child(svg().path(path.clone()).size(px(15.)).text_color(p.ink))
+                    })
+            }))
             .child(
                 div()
                     .flex_shrink_0()
@@ -424,6 +585,9 @@ impl Desktop {
                     .child(row.detail.clone()),
             )
             .children(row.keys.as_deref().map(|k| kbd(&keymap::format(k), p)))
+            .when(row.current, |d| {
+                d.child(div().text_color(p.accent).child("✓"))
+            })
             .on_mouse_move(cx.listener(move |this, _, _, cx| {
                 if let Some(state) = this.palette.as_mut() {
                     if state.selected != n {
@@ -493,10 +657,6 @@ fn kbd(text: &str, p: &Palette) -> Div {
         .text_size(px(11.))
         .text_color(p.muted)
         .child(text.to_owned())
-}
-
-fn section_label(text: &'static str, p: &Palette) -> Div {
-    section_label_static(text.to_owned(), p)
 }
 
 fn section_label_static(text: String, p: &Palette) -> Div {
