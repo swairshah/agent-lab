@@ -17,10 +17,11 @@ import { readFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dirname, extname, join } from "node:path";
 import { type AgentEvent, type AgentEventStream, LiveDoc } from "@earendil-works/pi-durable";
+import { diffLines } from "diff";
 import { WebSocket } from "ws";
 import { hashBytes, listFiles, MAX_FILE_BYTES, safePath } from "../shared/files.ts";
-import { type ClientMessage, type ConvName, type InviteInfo, type PiContext, type Presence, parseChannelFrame, ROLES, type Role, type ServerMessage } from "../shared/protocol.ts";
-import { DRAFT_LIMITS, draftText, fromBase64, toBase64, Y } from "../shared/drafts.ts";
+import { type ClientMessage, type ConvName, type InviteInfo, type PiContext, type Presence, parseChannelFrame, ROLES, type Role, type ServerMessage, type View } from "../shared/protocol.ts";
+import { DRAFT_LIMITS, draftText, fileKey, fromBase64, patchText, toBase64, Y } from "../shared/drafts.ts";
 import { type DeviceClient, Devices } from "./devices.ts";
 import { RECORDINGS } from "./remote-tools.ts";
 import { context, Session } from "./session.ts";
@@ -32,9 +33,38 @@ type Client = {
 	ws: WebSocket;
 	watches: Partial<Record<ConvName, AgentEventStream>>;
 	device?: DeviceClient & { label: string };
-	/** Where their cursor is, in whose draft, shown live to the others. */
+	/** Where their cursor is, in whose draft (or "file:<path>"), shown live to the others. */
 	caret?: { owner: string; anchor?: unknown; head?: unknown };
+	/** Where they are in the app, for anyone following them. */
+	view?: View;
+	/** The files whose live documents they follow. */
+	files: Set<string>;
 };
+
+/**
+ * A project file being written together (drafts.ts): its document, who follows it, what was last written to disk,
+ * and the document as it was at each of the last writes (`bases`). A change on disk from somewhere else (the agent,
+ * someone's editor) was made to one of those versions, the one it differs least from; it's made to that copy and
+ * merged into the document from there, so it lands alongside what was typed since, not over it.
+ */
+type FileDoc = { doc: Y.Doc; bases: { text: string; doc: Y.Doc }[]; followers: Set<Client>; written: string; timer?: NodeJS.Timeout };
+
+/** How many earlier versions of a file being edited are kept to merge changes on disk against. */
+const BASES = 20;
+
+/** How much differs between two texts: the lines added and removed. */
+function distance(a: string, b: string): number {
+	return diffLines(a, b).reduce((n, part) => n + (part.added || part.removed ? part.value.length : 0), 0);
+}
+
+function copyDoc(doc: Y.Doc): Y.Doc {
+	const copy = new Y.Doc();
+	Y.applyUpdate(copy, Y.encodeStateAsUpdate(doc));
+	return copy;
+}
+
+/** Files written together are text, at most this big. */
+const LIVE_FILE_BYTES = 1024 * 1024;
 
 /**
  * A member's unsent draft, merged here as people write it (shared/drafts.ts), in memory only. `writers`: who changed
@@ -143,6 +173,7 @@ export class Room {
 	readonly #clients = new Set<Client>();
 	readonly #cliLogins = new Map<string, CliLogin>();
 	readonly #drafts = new Map<string, Draft>();
+	readonly #files = new Map<string, FileDoc>();
 	#lastActive = Date.now();
 
 	constructor(stateDir: string, base: string, webDir: string, faux: boolean) {
@@ -156,7 +187,10 @@ export class Room {
 		this.session = new Session(this.state, stateDir, faux, this.devices, {
 			target: (label) => this.#broadcast({ type: "target", label }),
 			env: (env) => this.#broadcast({ type: "env", env }),
-			files: (version, changed) => this.#broadcast({ type: "files", version, changed }),
+			files: (version, changed) => {
+				this.#broadcast({ type: "files", version, changed });
+				for (const path of Object.keys(changed)) if (this.#files.has(path)) void this.#fileChanged(path);
+			},
 			branch: () => void this.#rewatchMain(),
 			land: (land, started) => {
 				// A new land subthread: everyone attaches to it.
@@ -227,6 +261,104 @@ export class Room {
 		} else if (text.toString() !== before) draft.writers.add(client.member.id);
 		const message: ServerMessage = { type: "draft", owner, name: writer.name, update };
 		for (const other of this.#clients) if (other !== client) this.#send(other, message);
+	}
+
+	// ---------- files written together ----------
+
+	/** Starts following a file's live document (made from the file on disk if nobody had it open): all of it. */
+	async #openFile(client: Client, path: string): Promise<void> {
+		let file = this.#files.get(path);
+		if (file === undefined) {
+			const bytes = await readFile(join(this.session.workdir, path)).catch(() => undefined);
+			if (bytes === undefined || bytes.length > LIVE_FILE_BYTES || bytes.includes(0)) return this.#error(client, `${path} can't be edited here (missing, binary or over 1 MB)`);
+			if (this.#files.has(path)) file = this.#files.get(path)!;
+			else {
+				const doc = new Y.Doc();
+				const text = bytes.toString("utf8");
+				draftText(doc).insert(0, text);
+				file = { doc, bases: [{ text, doc: copyDoc(doc) }], followers: new Set(), written: text };
+				this.#files.set(path, file);
+			}
+		}
+		file.followers.add(client);
+		client.files.add(path);
+		this.#send(client, { type: "fileDoc", path, update: toBase64(Y.encodeStateAsUpdate(file.doc)) });
+	}
+
+	#closeFile(client: Client, path: string): void {
+		const file = this.#files.get(path);
+		client.files.delete(path);
+		if (file === undefined) return;
+		file.followers.delete(client);
+		if (client.caret?.owner === fileKey(path)) this.#caret(client, undefined);
+		// Nobody has it open: written out, then let go.
+		if (file.followers.size === 0) {
+			this.#writeFile(path, file);
+			this.#files.delete(path);
+			file.doc.destroy();
+			for (const b of file.bases) b.doc.destroy();
+		}
+	}
+
+	/** A change from an editor: merged, passed on to the others with it open, and written to the file soon. */
+	#fileUpdate(client: Client, path: string, update: string): void {
+		const file = this.#files.get(path);
+		if (file === undefined || !file.followers.has(client) || update.length > (DRAFT_LIMITS.updateBytes * 4) / 3) return;
+		try {
+			Y.applyUpdate(file.doc, fromBase64(update));
+		} catch {
+			return;
+		}
+		for (const other of file.followers) if (other !== client) this.#send(other, { type: "fileDoc", path, update });
+		clearTimeout(file.timer);
+		file.timer = setTimeout(() => this.#writeFile(path, file), 250);
+	}
+
+	#writeFile(path: string, file: FileDoc): void {
+		clearTimeout(file.timer);
+		const text = draftText(file.doc).toString();
+		if (text === file.written) return;
+		const full = join(this.session.workdir, path);
+		mkdirSync(dirname(full), { recursive: true });
+		writeFileSync(`${full}.syncpi-tmp`, text);
+		renameSync(`${full}.syncpi-tmp`, full);
+		file.written = text;
+		file.bases.push({ text, doc: copyDoc(file.doc) });
+		for (const old of file.bases.splice(0, Math.max(0, file.bases.length - BASES))) old.doc.destroy();
+		this.session.scanSoon();
+	}
+
+	/** The file changed on disk, not from its document (the agent, someone's editor): the change goes into it. */
+	async #fileChanged(path: string): Promise<void> {
+		const file = this.#files.get(path);
+		if (file === undefined) return;
+		const text = await readFile(join(this.session.workdir, path), "utf8").catch(() => undefined);
+		if (text === undefined || text === file.written) return;
+		file.written = text;
+		const base = file.bases.reduce((best, b) => (distance(b.text, text) < distance(best.text, text) ? b : best));
+		const before = Y.encodeStateVector(file.doc);
+		const baseBefore = Y.encodeStateVector(base.doc);
+		patchText(draftText(base.doc), text, "disk");
+		Y.applyUpdate(file.doc, Y.encodeStateAsUpdate(base.doc, baseBefore), "disk");
+		// That copy is now the file on disk: the newest version to merge against.
+		base.text = text;
+		file.bases.splice(file.bases.indexOf(base), 1);
+		file.bases.push(base);
+		const update = toBase64(Y.encodeStateAsUpdate(file.doc, before));
+		for (const client of file.followers) this.#send(client, { type: "fileDoc", path, update });
+		// What was typed since the file was last written goes back into it.
+		if (draftText(file.doc).toString() !== text) {
+			clearTimeout(file.timer);
+			file.timer = setTimeout(() => this.#writeFile(path, file), 250);
+		}
+	}
+
+	/** Tells the others where `client` is in the app, for anyone following them. */
+	#view(client: Client, view: View | undefined): void {
+		if (view === undefined && client.view === undefined) return;
+		client.view = view;
+		const message: ServerMessage = { type: "view", memberId: client.member.id, name: client.member.name, view: view ?? null };
+		for (const other of this.#clients) if (other !== client && other.member.id !== client.member.id) this.#send(other, message);
 	}
 
 	/** Tells the others where `client`'s cursor is now (in no draft when it's undefined). */
@@ -407,9 +539,25 @@ export class Room {
 				if (!atLeast(member, "editor") || typeof message.owner !== "string" || typeof message.update !== "string") return;
 				this.#draftUpdate(client, message.owner, message.update);
 				return;
+			case "fileDoc": {
+				const path = safePath(typeof message.path === "string" ? message.path : "");
+				if (path === undefined) return;
+				if (message.open === true) await this.#openFile(client, path);
+				else if (message.open === false) this.#closeFile(client, path);
+				if (typeof message.update === "string" && atLeast(member, "editor")) this.#fileUpdate(client, path, message.update);
+				return;
+			}
+			case "view": {
+				const v = message.view;
+				const ok = v !== null && typeof v === "object" && JSON.stringify(v).length < 2000;
+				this.#view(client, ok ? v : undefined);
+				return;
+			}
 			case "caret": {
 				if (!atLeast(member, "editor")) return;
-				const owner = typeof message.owner === "string" && this.state.value.members[message.owner] !== undefined ? message.owner : undefined;
+				const key = typeof message.owner === "string" ? message.owner : "";
+				const live = key.startsWith("file:") ? client.files.has(key.slice(5)) : this.state.value.members[key] !== undefined;
+				const owner = live ? key : undefined;
 				const fits = JSON.stringify([message.anchor ?? null, message.head ?? null]).length < 1000;
 				this.#caret(client, owner === undefined || !fits ? undefined : { owner, anchor: message.anchor, head: message.head });
 				return;
@@ -497,7 +645,7 @@ export class Room {
 	}
 
 	async connect(ws: WebSocket, member: StoredMember, kind: "cli" | "web"): Promise<void> {
-		const client: Client = { member, kind, ws, watches: {} };
+		const client: Client = { member, kind, ws, watches: {}, files: new Set() };
 		this.#clients.add(client);
 		// What the client sends while its thread is still being loaded (a message resent from its outbox the moment it
 		// connects) is held until then, not dropped.
@@ -520,7 +668,11 @@ export class Room {
 			const name = this.state.value.members[owner]?.name ?? "someone";
 			this.#send(client, { type: "draft", owner, name, update: toBase64(Y.encodeStateAsUpdate(draft.doc)) });
 		}
-		for (const other of this.#clients) if (other.caret && other !== client) this.#send(client, { type: "caret", memberId: other.member.id, name: other.member.name, ...other.caret });
+		for (const other of this.#clients) {
+			if (other === client) continue;
+			if (other.caret && !other.caret.owner.startsWith("file:")) this.#send(client, { type: "caret", memberId: other.member.id, name: other.member.name, ...other.caret });
+			if (other.view && other.member.id !== client.member.id) this.#send(client, { type: "view", memberId: other.member.id, name: other.member.name, view: other.view });
+		}
 		receive = (data, isBinary) => {
 			if (isBinary) {
 				if (client.device === undefined) return;
@@ -539,6 +691,8 @@ export class Room {
 		for (const [data, isBinary] of early.splice(0)) receive(data, isBinary);
 		ws.on("close", () => {
 			this.#caret(client, undefined);
+			this.#view(client, undefined);
+			for (const path of [...client.files]) this.#closeFile(client, path);
 			this.#clients.delete(client);
 			this.#lastActive = Date.now();
 			if (client.device !== undefined) this.devices.unregister(client.device);

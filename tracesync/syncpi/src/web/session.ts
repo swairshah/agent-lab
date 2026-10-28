@@ -1,12 +1,12 @@
 // The web view's live session: one WebSocket (reconnecting, each time from a fresh snapshot), the state it carries,
 // and an outbox so a message typed while offline is sent once the connection is back. Views subscribe to the parts
 // they show; this module knows nothing about the DOM.
-import type { Attachment, BranchInfo, ClientMessage, LineComment, ConvName, EnvStatus, InviteInfo, LandInfo, Member, Presence, ServerMessage, SessionInfo, Where } from "../shared/protocol.ts";
-import { draftText, fromBase64, toBase64, Y } from "../shared/drafts.ts";
+import type { Attachment, BranchInfo, ClientMessage, LineComment, ConvName, EnvStatus, InviteInfo, LandInfo, Member, Presence, ServerMessage, SessionInfo, View, Where } from "../shared/protocol.ts";
+import { draftText, fromBase64, replaceText, toBase64, Y } from "../shared/drafts.ts";
 import { Thread } from "../shared/thread.ts";
 import { storage } from "./dom.ts";
 
-export type Change = "session" | "thread" | "people" | "env" | "invites" | "branches" | "files" | "connection" | "target" | "drafts" | "land";
+export type Change = "session" | "thread" | "people" | "env" | "invites" | "branches" | "files" | "connection" | "target" | "drafts" | "land" | "views" | "docs";
 
 type Submit = Extract<ClientMessage, { type: "submit" }>;
 
@@ -42,8 +42,12 @@ export class SessionClient {
 	readonly outbox = new Map<string, Submit>();
 	/** Unsent drafts, everyone's, by their writer's member id (shared/drafts.ts). */
 	readonly drafts = new Map<string, { name: string; doc: Y.Doc }>();
-	/** Where other people's cursors are, by member id: in whose draft. */
+	/** Where other people's cursors are, by member id: in whose draft, or which file ("file:<path>"). */
 	readonly carets = new Map<string, Caret>();
+	/** Project files being written together that this page has open, by path (drafts.ts), and how many uses each. */
+	readonly fileDocs = new Map<string, { doc: Y.Doc; uses: number; pending?: string }>();
+	/** Where other people are in the app, by member id, for following them. */
+	readonly views = new Map<string, { name: string; view: View }>();
 	/** Current names by member id, so a renamed person shows under their new name everywhere. */
 	names = new Map<string, string>();
 
@@ -71,6 +75,10 @@ export class SessionClient {
 		let set = this.#listeners.get(change);
 		if (set === undefined) this.#listeners.set(change, (set = new Set()));
 		set.add(fn);
+	}
+
+	off(change: Change, fn: () => void): void {
+		this.#listeners.get(change)?.delete(fn);
 	}
 
 	#emit(...changes: Change[]): void {
@@ -101,6 +109,15 @@ export class SessionClient {
 			for (const m of this.outbox.values()) this.send(m);
 			// The server may have restarted, or missed changes made offline: it merges each draft whole.
 			for (const [owner, { doc }] of this.drafts) if (draftText(doc).length > 0 || owner === this.me?.id) this.send({ type: "draft", owner, update: toBase64(Y.encodeStateAsUpdate(doc)) });
+			// Files open to edit start again from the server's document (it may have made a new one from the file), and
+			// what was typed here meanwhile goes in as a change to it.
+			for (const [path, entry] of this.fileDocs) {
+				entry.pending = draftText(entry.doc).toString();
+				entry.doc.destroy();
+				entry.doc = this.#fileDoc(path);
+				this.send({ type: "fileDoc", path, open: true });
+			}
+			if (this.fileDocs.size > 0) this.#emit("docs");
 		};
 		ws.onmessage = (event) => this.#receive(JSON.parse(String(event.data)) as ServerMessage);
 		ws.onclose = (event) => {
@@ -122,6 +139,41 @@ export class SessionClient {
 
 	send(message: ClientMessage): void {
 		if (this.#ws?.readyState === WebSocket.OPEN) this.#ws.send(JSON.stringify(message));
+	}
+
+	/** The shared text named `key`: a member's draft (by member id), or a file being edited ("file:<path>"). */
+	doc(key: string): Y.Doc {
+		return key.startsWith("file:") ? this.openFile(key.slice(5), false) : this.draft(key);
+	}
+
+	/**
+	 * A project file's live document, to edit with everyone who has it open: it fills in from the server, and changes
+	 * made here go to the file. `use`: one more use of it here; closeFile() ends it.
+	 */
+	openFile(path: string, use = true): Y.Doc {
+		let entry = this.fileDocs.get(path);
+		if (entry === undefined) {
+			this.fileDocs.set(path, (entry = { doc: this.#fileDoc(path), uses: 0 }));
+			this.send({ type: "fileDoc", path, open: true });
+		}
+		if (use) entry.uses++;
+		return entry.doc;
+	}
+
+	#fileDoc(path: string): Y.Doc {
+		const doc = new Y.Doc();
+		doc.on("update", (update: Uint8Array, origin: unknown) => {
+			if (origin !== REMOTE) this.send({ type: "fileDoc", path, update: toBase64(update) });
+		});
+		return doc;
+	}
+
+	closeFile(path: string): void {
+		const entry = this.fileDocs.get(path);
+		if (entry === undefined || --entry.uses > 0) return;
+		this.fileDocs.delete(path);
+		entry.doc.destroy();
+		this.send({ type: "fileDoc", path, open: false });
 	}
 
 	/** A member's draft, to read and to write in: changes made here go to everyone. */
@@ -191,8 +243,9 @@ export class SessionClient {
 	#receive(message: ServerMessage): void {
 		switch (message.type) {
 			case "welcome":
-				// The server sends the cursors again after this; drafts are merged, so they stay.
+				// The server sends the cursors and views again after this; drafts are merged, so they stay.
 				this.carets.clear();
+				this.views.clear();
 				this.info = message.session;
 				this.me = message.me;
 				this.#setMembers(message.members);
@@ -212,6 +265,22 @@ export class SessionClient {
 				if (message.sent !== undefined) this.onDraftSent(message.owner, message.sent);
 				return this.#emit("drafts");
 			}
+			case "fileDoc": {
+				const entry = this.fileDocs.get(message.path);
+				if (entry === undefined) return;
+				Y.applyUpdate(entry.doc, fromBase64(message.update), REMOTE);
+				// Back after a reconnect: what was typed here meanwhile.
+				if (entry.pending !== undefined) {
+					const typed = entry.pending;
+					entry.pending = undefined;
+					replaceText(draftText(entry.doc), typed, "offline");
+				}
+				return this.#emit("drafts");
+			}
+			case "view":
+				if (message.view === null) this.views.delete(message.memberId);
+				else this.views.set(message.memberId, { name: message.name, view: message.view });
+				return this.#emit("views");
 			case "caret":
 				if (message.memberId === this.me?.id) return;
 				if (message.owner === undefined) this.carets.delete(message.memberId);

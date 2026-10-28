@@ -18,14 +18,14 @@ function index(doc: Y.Doc, json: unknown): number | undefined {
 
 /** The people whose cursors are in `owner`'s draft (not you), with their selections in its current text. */
 export function peersIn(session: SessionClient, owner: string): Peer[] {
-	const entry = session.drafts.get(owner);
-	if (entry === undefined) return [];
-	const length = draftText(entry.doc).length;
+	const doc = owner.startsWith("file:") ? session.fileDocs.get(owner.slice(5))?.doc : session.drafts.get(owner)?.doc;
+	if (doc === undefined) return [];
+	const length = draftText(doc).length;
 	const out: Peer[] = [];
 	for (const [id, caret] of session.carets) {
 		if (caret.owner !== owner || id === session.me?.id) continue;
-		const anchor = index(entry.doc, caret.anchor);
-		const head = index(entry.doc, caret.head) ?? anchor;
+		const anchor = index(doc, caret.anchor);
+		const head = index(doc, caret.head) ?? anchor;
 		if (anchor === undefined || head === undefined) continue;
 		const clamp = (n: number) => Math.max(0, Math.min(length, n));
 		out.push({ id, name: session.nameOf(id, caret.name), start: clamp(Math.min(anchor, head)), end: clamp(Math.max(anchor, head)), at: caret.at });

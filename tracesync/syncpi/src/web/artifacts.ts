@@ -297,6 +297,11 @@ export type CardOptions = {
 	onComment?: CommentHandler;
 	/** Saves an edited project file; resolves to its new hash, or undefined when it couldn't be saved. */
 	onSave?: (path: string, text: string, base: string) => Promise<string | undefined>;
+	/**
+	 * Edits a project file live, with everyone who has it open, saved as it's typed (instead of onSave): binds the
+	 * textarea to the file's shared document, and returns how to stop.
+	 */
+	liveEdit?: (path: string, area: HTMLTextAreaElement) => () => void;
 	/** Goes in the header after the title, e.g. a file's version picker. */
 	extra?: HTMLElement;
 };
@@ -335,7 +340,9 @@ export function artifactCard(artifact: Artifact, options: CardOptions): HTMLElem
 		};
 		const editButton = el("button", "artifact-open", draft() !== undefined ? "Edit (unsaved changes)" : "Edit");
 		editButton.type = "button";
+		editButton.dataset.edit = "";
 		editButton.onclick = () => {
+			if (options.liveEdit !== undefined) return liveEdit(options.liveEdit);
 			const area = el("textarea", "file-editor");
 			area.value = draft() ?? artifact.content;
 			area.addEventListener("input", () => {
@@ -391,6 +398,39 @@ export function artifactCard(artifact: Artifact, options: CardOptions): HTMLElem
 			area.focus();
 		};
 		head.append(editButton);
+		// Live: what's typed is everyone's at once, and saved as it's typed; Done (or Esc) leaves the editor.
+		const liveEdit = (bind: NonNullable<CardOptions["liveEdit"]>) => {
+			const area = el("textarea", "file-editor");
+			area.spellcheck = false;
+			const finish = el("button", "button", "Done");
+			finish.type = "button";
+			const bar = el("div", "file-editor-bar");
+			bar.append(el("span", "file-editor-note", "Saved as you type, for everyone"), el("span", "spacer"), finish);
+			disposeWithin(body);
+			body.classList.add("editing");
+			body.replaceChildren(area, bar);
+			const stop = bind(artifact.path!, area);
+			editButton.hidden = true;
+			const done = () => {
+				stop();
+				body.classList.remove("editing");
+				editButton.hidden = false;
+				select(tabs.includes("code") ? "code" : tabs[0]!);
+			};
+			finish.onclick = done;
+			area.addEventListener("keydown", (event) => {
+				if ((event.metaKey || event.ctrlKey) && event.key === "s") event.preventDefault();
+				else if (event.key === "Escape") {
+					event.preventDefault();
+					done();
+				} else if (event.key === "Tab") {
+					event.preventDefault();
+					area.setRangeText("\t", area.selectionStart, area.selectionEnd, "end");
+					area.dispatchEvent(new Event("input"));
+				}
+			});
+			area.focus();
+		};
 	}
 	tabBar.setAttribute("role", "tablist");
 	const body = el("div", "artifact-body");
@@ -422,6 +462,8 @@ export function artifactCard(artifact: Artifact, options: CardOptions): HTMLElem
 		(entries) => {
 			if (!entries.some((e) => e.isIntersecting)) return;
 			observer.disconnect();
+			// Already being edited (opened to edit before it came into view): the editor stays.
+			if (body.classList.contains("editing")) return;
 			select(artifact.lines !== undefined && tabs.includes("code") ? "code" : tabs[0]!);
 		},
 		{ rootMargin: "400px" },

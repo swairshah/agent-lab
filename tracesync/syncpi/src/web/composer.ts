@@ -11,7 +11,7 @@ import { draftText, fromBase64, isCommand, toBase64, Y } from "../shared/drafts.
 import { mentioned } from "../shared/mentions.ts";
 import { ATTACHMENT_LIMITS, type Attachment, IMAGE_TYPES, type Role, type Where } from "../shared/protocol.ts";
 import { $, escapeHtml, storage } from "./dom.ts";
-import { peersHtml, peersIn } from "./peers.ts";
+import { TextBinding } from "./text-binding.ts";
 import type { SessionClient } from "./session.ts";
 import type { Section } from "./settings.ts";
 
@@ -117,9 +117,6 @@ async function toAttachment(file: File): Promise<Attachment | string> {
 	return { name: file.name, mimeType: file.type || "text/plain", data: base64(buffer) };
 }
 
-/** The textarea's styles a layer over it copies, so its text lines up with the textarea's (peers' cursors). */
-const MIRROR = ["boxSizing", "width", "height", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth", "fontFamily", "fontSize", "fontWeight", "fontStyle", "lineHeight", "letterSpacing", "wordSpacing", "tabSize", "textIndent", "textTransform"] as const;
-
 /** A touch screen without a fine pointer: a phone or tablet. */
 const TOUCH = matchMedia("(pointer: coarse)").matches && !matchMedia("(any-pointer: fine)").matches;
 
@@ -130,13 +127,11 @@ export class Composer {
 	#attachments: Attachment[] = [];
 	/** Whose draft this composer writes: yours, or one you joined. Unset until the session says who you are. */
 	#owner: string | undefined;
-	#text: Y.Text | undefined;
-	#unbind: (() => void) | undefined;
+	/** The textarea bound to that draft (text-binding.ts). */
+	#binding: TextBinding | undefined;
 	/** People already tagged in this draft, and the wait before tagging someone whose name was just typed. */
 	#tagged = new Set<string>();
 	#tagTimer: ReturnType<typeof setTimeout> | undefined;
-	#caretFrame = 0;
-	readonly #peers: HTMLElement;
 	/** Prompt template names offered by an embedding app; they expand there. */
 	prompts: string[] = [];
 
@@ -150,21 +145,14 @@ export class Composer {
 		this.#draftKey = `draft:${draftKey}`;
 		const input = this.#input;
 		input.value = storage.get(this.#draftKey) ?? "";
-		this.#peers = document.createElement("div");
-		this.#peers.className = "peer-layer";
-		this.#peers.setAttribute("aria-hidden", "true");
-		input.after(this.#peers);
 		this.#fit();
 		const session = context.session;
 		// Your own draft, once the session says who you are; as you left it, merged with what the server has.
 		session.on("session", () => {
 			if (this.#owner === undefined && session.me !== undefined) this.#bindOwn();
 		});
-		session.on("connection", () => this.#shareCaret());
-		session.on("drafts", () => {
-			this.#renderPeers();
-			this.#renderWith();
-		});
+		session.on("connection", () => this.#binding?.shareCaret());
+		session.on("drafts", () => this.#renderWith());
 		session.on("people", () => this.#renderWith());
 		session.onDraftSent = (owner, by) => {
 			if (by === session.me?.id) return;
@@ -178,11 +166,6 @@ export class Composer {
 			this.#changed();
 			this.#complete();
 		});
-		for (const type of ["keyup", "mouseup", "focus", "select"]) input.addEventListener(type, () => this.#shareCaret());
-		document.addEventListener("selectionchange", () => {
-			if (document.activeElement === input) this.#shareCaret();
-		});
-		input.addEventListener("scroll", () => this.#renderPeers());
 		$("draft-with").addEventListener("click", (event) => {
 			if ((event.target as HTMLElement).closest("[data-leave]")) this.leave();
 		});
@@ -245,14 +228,14 @@ export class Composer {
 		const input = this.#input;
 		input.focus();
 		input.setSelectionRange(input.value.length, input.value.length);
-		this.#shareCaret();
+		this.#binding?.shareCaret();
 	}
 
 	/** Back to your own draft. */
 	leave(): void {
 		if (this.#c.session.me === undefined) return;
 		this.#bindOwn();
-		this.#shareCaret();
+		this.#binding?.shareCaret();
 		this.#input.focus();
 	}
 
@@ -402,85 +385,26 @@ export class Composer {
 
 	/** Writes `owner`'s draft from here: the textarea shows it, and what's typed goes into it. */
 	#bind(owner: string): void {
-		this.#unbind?.();
-		const text = draftText(this.#c.session.draft(owner));
+		this.#binding?.dispose();
 		this.#owner = owner;
-		this.#text = text;
 		this.#tagged = new Set();
-		const observe = (event: Y.YTextEvent, transaction: Y.Transaction) => {
-			if (transaction.origin !== this) this.#remote(event);
-		};
-		text.observe(observe);
-		this.#unbind = () => text.unobserve(observe);
-		this.#input.value = text.toString();
+		this.#binding = new TextBinding(this.#input, this.#c.session, owner, () => {
+			if (this.#input.value.trim() === "") this.#tagged.clear();
+			this.#fit();
+		});
 		this.#fit();
-		this.#renderPeers();
 		this.#renderWith();
-	}
-
-	/** Someone else changed the draft: show it, keeping your cursor where it was in the text. */
-	#remote(event: Y.YTextEvent): void {
-		const input = this.#input;
-		let start = input.selectionStart;
-		let end = input.selectionEnd;
-		let at = 0;
-		for (const op of event.delta) {
-			if (op.retain !== undefined) at += op.retain;
-			else if (typeof op.insert === "string") {
-				const n = op.insert.length;
-				if (at < start) start += n;
-				if (at < end) end += n;
-				at += n;
-			} else if (op.delete !== undefined) {
-				start -= Math.max(0, Math.min(op.delete, start - at));
-				end -= Math.max(0, Math.min(op.delete, end - at));
-			}
-		}
-		const focused = document.activeElement === input;
-		input.value = this.#text!.toString();
-		if (focused) input.setSelectionRange(start, end);
-		if (input.value.trim() === "") this.#tagged.clear();
-		this.#fit();
-		this.#renderPeers();
 	}
 
 	/** The textarea changed here: the same change goes into the draft, for everyone. */
 	#changed(): void {
 		this.#fit();
-		const text = this.#text;
-		if (text === undefined) return storage.set(this.#draftKey, this.#input.value);
-		const before = text.toString();
-		const after = this.#input.value;
-		if (before === after) return;
-		// One replaced span: what's between the common start and the common end. The end can't reach left of the cursor,
-		// so typing a letter that repeats the next one inserts it where it was typed.
-		const most = Math.min(before.length, after.length);
-		let start = 0;
-		while (start < most && before[start] === after[start]) start++;
-		const tail = Math.min(most - start, Math.max(0, after.length - this.#input.selectionEnd));
-		let end = 0;
-		while (end < tail && before[before.length - 1 - end] === after[after.length - 1 - end]) end++;
-		text.doc!.transact(() => {
-			if (before.length - start - end > 0) text.delete(start, before.length - start - end);
-			if (after.length - start - end > 0) text.insert(start, after.slice(start, after.length - end));
-		}, this);
-		if (after.trim() === "") this.#tagged.clear();
+		const binding = this.#binding;
+		if (binding === undefined) return storage.set(this.#draftKey, this.#input.value);
+		binding.changed();
+		if (this.#input.value.trim() === "") this.#tagged.clear();
 		clearTimeout(this.#tagTimer);
 		this.#tagTimer = setTimeout(() => this.#tag(), 1500);
-		this.#renderPeers();
-		this.#shareCaret();
-	}
-
-	/** Your cursor, for the others: in this draft, at most once a frame. */
-	#shareCaret(): void {
-		if (this.#caretFrame !== 0) return;
-		this.#caretFrame = requestAnimationFrame(() => {
-			this.#caretFrame = 0;
-			const text = this.#text;
-			if (text === undefined || this.#owner === undefined) return;
-			const at = (index: number) => Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(text, index));
-			this.#c.session.send({ type: "caret", owner: this.#owner, anchor: at(this.#input.selectionStart), head: at(this.#input.selectionEnd) });
-		});
 	}
 
 	/**
@@ -490,7 +414,7 @@ export class Composer {
 	#tag(): void {
 		clearTimeout(this.#tagTimer);
 		const session = this.#c.session;
-		const text = this.#text?.toString() ?? "";
+		const text = this.#binding?.text.toString() ?? "";
 		if (this.#owner === undefined || text.trim() === "" || isCommand(text) || session.role === "viewer") return;
 		const others = session.members.filter((m) => m.id !== session.me?.id);
 		const named = new Set(mentioned(text, others.map((m) => m.name)));
@@ -498,21 +422,6 @@ export class Composer {
 		if (fresh.length === 0) return;
 		for (const id of fresh) this.#tagged.add(id);
 		session.send({ type: "tag", owner: this.#owner, memberIds: fresh });
-	}
-
-	/** The others' cursors and selections, drawn over the textarea in a layer that lines up with its text. */
-	#renderPeers(): void {
-		const layer = this.#peers;
-		const peers = this.#owner === undefined ? [] : peersIn(this.#c.session, this.#owner);
-		layer.hidden = peers.length === 0;
-		if (peers.length === 0) return;
-		const input = this.#input;
-		const style = getComputedStyle(input);
-		for (const prop of MIRROR) layer.style[prop] = style[prop];
-		layer.style.top = `${input.offsetTop}px`;
-		layer.style.left = `${input.offsetLeft}px`;
-		// Names above the first line show outside the textarea, so the layer doesn't clip; it scrolls with it instead.
-		layer.innerHTML = `<div style="transform: translateY(${-input.scrollTop}px)">${peersHtml(input.value, peers)}</div>`;
 	}
 
 	/** Who's writing this draft with you, above it; and whose draft it is when it isn't yours. */

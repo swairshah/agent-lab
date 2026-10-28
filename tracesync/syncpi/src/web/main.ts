@@ -31,6 +31,7 @@ import { applyZoom, dragWindow, SHELL_COMMANDS, shell } from "./shell-api.ts";
 import { Terminals } from "./terminal.ts";
 import { Inbox } from "./inbox.ts";
 import { ThreadMap } from "./thread-map.ts";
+import { Follow } from "./follow.ts";
 import { mentionsOf } from "../shared/mentions.ts";
 import { Git } from "./git.ts";
 
@@ -146,6 +147,7 @@ async function main(): Promise<void> {
 		updateLandBanner();
 		threadView.show(conv);
 		threadMap.enabled = conv === "main";
+		follow.share();
 		threadMap.update();
 		updateComposer();
 	};
@@ -176,6 +178,7 @@ async function main(): Promise<void> {
 	};
 	const threadView = new ThreadView($("thread"), $("scroller"), session, { onOpenArtifact: (a) => panel.open(a), onFork: fork, onOpenFile: (path, lines) => void openFile(path, lines), loadImage, loadRecording, onComment: sendComment, onShowLand: () => show("land"), draftOwner: () => composer.owner, onJoinDraft: (owner) => composer.join(owner) });
 	const threadMap = new ThreadMap(session, $("scroller"), $("thread"));
+	const follow = new Follow({ session, scroller: $("scroller"), box: $("thread"), panel, showing: () => showing, show: (conv) => show(conv), notify: toast });
 	const settings = new Settings(session, {
 		onTheme: (theme) => {
 			applyTheme(theme as Theme);
@@ -298,7 +301,14 @@ async function main(): Promise<void> {
 	let role = "";
 	session.on("people", () => {
 		settings.renderPeople();
-		$("presence").innerHTML = [...new Map(session.online.map((p) => [p.memberId, p])).values()].map((p) => avatarHtml(session.nameOf(p.memberId, p.name))).join("");
+		// Each face follows that person when clicked, as in Delta.
+		$("presence").innerHTML = [...new Map(session.online.map((p) => [p.memberId, p])).values()]
+			.map((p) => {
+				const name = session.nameOf(p.memberId, p.name);
+				return p.memberId === session.me?.id ? avatarHtml(name) : `<button type="button" class="presence-face" data-member="${escapeHtml(p.memberId)}" title="Follow ${escapeHtml(name)}">${avatarHtml(name)}</button>`;
+			})
+			.join("");
+		follow.refresh();
 		const nextNames = [...session.names].join("|");
 		// Renames and role changes change how existing messages render (author names, the fork action).
 		if (nextNames !== names || session.role !== role) {

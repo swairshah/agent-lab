@@ -118,6 +118,13 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .conn[data-state="removed"] { color: var(--removed); }
 .presence { display: flex; margin-right: 4px; }
 .presence .avatar { width: 22px; height: 22px; font-size: 9px; margin-left: -5px; border: 2px solid var(--paper); }
+.presence-face { display: flex; padding: 0; border: none; background: none; cursor: pointer; border-radius: 50%; }
+.presence-face:hover .avatar { border-color: var(--rule); }
+.presence-face.followed .avatar { box-shadow: 0 0 0 2px var(--person); }
+.follow-bar { background: color-mix(in srgb, var(--accent) 10%, var(--sunken)); }
+.artifact-body.editing { position: relative; }
+.file-editor + .peer-layer { clip-path: inset(-20px 0 0 0); }
+.file-editor-note { color: var(--faint); }
 
 /* One row the height of the window: the thread and the panel scroll inside it, never the page. */
 .layout { flex: 1; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr) 0; transition: grid-template-columns .18s ease; }

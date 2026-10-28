@@ -3,10 +3,12 @@
 // files, files written, HTML and SVG) and shows the selected one large; opening an artifact from the thread selects
 // it there. A file tab shows the file as it is now, rendered when it's Markdown, and follows changes to it.
 import { type Artifact, kindOfPath, patchStats, threadArtifacts } from "../shared/artifacts.ts";
+import { fileKey } from "../shared/drafts.ts";
 import { artifactCard, type CommentHandler, disposeWithin, type ImageLoader } from "./artifacts.ts";
 import { $, el, escapeHtml, storage } from "./dom.ts";
 import { FilesTree } from "./files-tree.ts";
 import type { SessionClient } from "./session.ts";
+import { TextBinding } from "./text-binding.ts";
 
 /** Reads a project file as an artifact, or says why it couldn't. */
 export type FileLoader = (path: string, lines?: string) => Promise<Artifact | undefined>;
@@ -38,6 +40,9 @@ export class ArtifactPanel {
 	readonly tree = new FilesTree();
 	/** Saves an edited project file (see CardOptions.onSave). */
 	onSave: ((path: string, text: string, base: string) => Promise<string | undefined>) | undefined;
+	/** The file being edited here, live, if any; onEditing says when that changes (for people following). */
+	editing: string | undefined;
+	onEditing: () => void = () => {};
 	#artifacts: Artifact[] = [];
 	#selected: string | undefined;
 	/** The list of changes is showing; it folds away while one is open, so the change gets the room. */
@@ -261,7 +266,7 @@ export class ArtifactPanel {
 		// An earlier version is for reading: no edits, and no comments on lines that may not exist any more.
 		const shown = tab.version === "before" ? tab.before : tab.artifact;
 		if (typeof shown === "object") {
-			view.replaceChildren(artifactCard(shown, tab.version === "before" ? { size: "panel", loadImage: this.#loadImage, extra: picker } : { size: "panel", loadImage: this.#loadImage, onComment: this.#onComment, onSave: this.onSave, extra: picker }));
+			view.replaceChildren(artifactCard(shown, tab.version === "before" ? { size: "panel", loadImage: this.#loadImage, extra: picker } : { size: "panel", loadImage: this.#loadImage, onComment: this.#onComment, onSave: this.onSave, liveEdit: this.#liveEdit, extra: picker }));
 			return;
 		}
 		const note =
@@ -269,6 +274,67 @@ export class ArtifactPanel {
 		const bar = el("div", "file-note");
 		bar.append(el("span", "artifact-title", tab.path), picker);
 		view.replaceChildren(bar, el("p", "panel-empty", note));
+	}
+
+	/** A file edited live with everyone who has it open (text-binding.ts); afterwards the tab shows it as it is now. */
+	#liveEdit = (path: string, area: HTMLTextAreaElement): (() => void) => {
+		this.#session.openFile(path);
+		const binding = new TextBinding(area, this.#session, fileKey(path));
+		area.readOnly = this.#session.role === "viewer";
+		this.editing = path;
+		this.onEditing();
+		return () => {
+			binding.dispose();
+			this.#session.closeFile(path);
+			if (this.editing === path) {
+				this.editing = undefined;
+				this.onEditing();
+			}
+			const tab = this.#tabs.find((t) => t.path === path);
+			if (tab !== undefined) {
+				tab.artifact = undefined;
+				if (this.#active === path) void this.#load(tab);
+			}
+		};
+	};
+
+	/** Opens a file in its editor, as someone being followed has it. */
+	async editPath(path: string): Promise<void> {
+		if (this.editing === path) return;
+		await this.openPath(path);
+		for (let i = 0; i < 40 && this.#active === path; i++) {
+			const button = $("panel-file").querySelector<HTMLButtonElement>("[data-edit]:not([hidden])");
+			if (button !== null) return button.click();
+			await new Promise((r) => setTimeout(r, 100));
+		}
+	}
+
+	/** Leaves the editor, if a file is being edited here. */
+	stopEditing(): void {
+		$("panel-file").querySelector<HTMLButtonElement>(".file-editor-bar .button")?.click();
+	}
+
+	/** The open tab: "changes", a file's path, or null when the panel is closed. */
+	get shown(): string | null {
+		return document.documentElement.classList.contains("panel-open") ? this.#active : null;
+	}
+
+	/** How far down the open tab is, 0 to 1. */
+	get scroll(): number {
+		const box = this.#scrollBox();
+		return box === null || box.scrollHeight <= box.clientHeight ? 0 : box.scrollTop / (box.scrollHeight - box.clientHeight);
+	}
+
+	set scroll(ratio: number) {
+		const box = this.#scrollBox();
+		if (box !== null) box.scrollTop = ratio * (box.scrollHeight - box.clientHeight);
+	}
+
+	/** What scrolls in the open tab: the file's editor or view, or the list of changes. */
+	#scrollBox(): HTMLElement | null {
+		if (this.#active === CHANGES) return $("panel-changes");
+		const view = $("panel-file");
+		return view.querySelector<HTMLElement>(".file-editor") ?? [view, ...view.querySelectorAll<HTMLElement>("*")].find((n) => n.scrollHeight > n.clientHeight + 4 && getComputedStyle(n).overflowY !== "visible") ?? null;
 	}
 
 	/** Delta's version picker: the file now, or as it was before the thread's last turn. */

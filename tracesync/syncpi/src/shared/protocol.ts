@@ -9,6 +9,13 @@ import type { AgentEvent } from "@earendil-works/pi-durable";
  */
 export type ConvName = "main" | "setup" | "land";
 
+/**
+ * Where someone is in the app, so others can follow them: which thread (`conv`) and where in it (`at`, the key of
+ * the item at the top, `offset` pixels into it); the side panel's tab (`panel`: "changes", a file path, or null when
+ * it's closed) and how far down it is (`scroll`, 0 to 1); and the file they're editing, if any.
+ */
+export type View = { conv: ConvName; at?: string; offset?: number; panel: string | null; scroll?: number; editing?: string };
+
 /** The latest land: who started it, and how it went (`detail`: the commit when landed, else why not). */
 export type LandInfo = { by: string; at: number; status: "running" | "landed" | "failed"; detail?: string };
 
@@ -133,6 +140,13 @@ export type ClientMessage =
 	| { type: "caret"; owner?: string; anchor?: unknown; head?: unknown }
 	/** Tags members in a draft: they find it in their inbox, and can join it. */
 	| { type: "tag"; owner: string; memberIds: string[] }
+	/**
+	 * A project file written together, live (drafts.ts): `open` starts following its document (the server answers
+	 * with all of it), `open: false` stops; `update` is a change to it (editors), which the server writes to the file.
+	 */
+	| { type: "fileDoc"; path: string; open?: boolean; update?: string }
+	/** Where this person is, for anyone following them (null: nowhere to follow, they left). */
+	| { type: "view"; view: View | null }
 	| { type: "ping" };
 
 export type ServerMessage =
@@ -151,7 +165,11 @@ export type ServerMessage =
 	 * it to the agent, and it's now empty.
 	 */
 	| { type: "draft"; owner: string; name: string; update?: string; sent?: string }
-	/** Someone's cursor, in a draft or none (they left). */
+	/** A change to a project file's live document; all of it after `open`. */
+	| { type: "fileDoc"; path: string; update: string }
+	/** Where someone is now, for following them; null when they left. */
+	| { type: "view"; memberId: string; name: string; view: View | null }
+	/** Someone's cursor, in a draft or a file ("file:<path>"), or none (they left). */
 	| { type: "caret"; memberId: string; name: string; owner?: string; anchor?: unknown; head?: unknown }
 	| { type: "env"; env: EnvStatus }
 	/** The latest land (null: none yet); sent on connect and whenever it changes. */
