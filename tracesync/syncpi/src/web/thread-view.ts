@@ -156,7 +156,9 @@ export class ThreadView {
 		node.style.setProperty("--person", personColor(name));
 		node.innerHTML = `${avatarHtml(name)}<div class="msg-content"><div class="msg-meta"><span class="author">${escapeHtml(name)}</span>${
 			status ? `<span>${escapeHtml(status)}</span>` : ""
-		}</div>${text ? `<div class="msg-body">${escapeHtml(text)}</div>` : ""}</div>`;
+		}</div>${text ? `<div class="msg-body prose">${renderMarkdown(text, { breaks: true })}</div>` : ""}</div>`;
+		const body = node.querySelector<HTMLElement>(".msg-body");
+		if (body !== null) this.#linkFileNames(body);
 		if (comments.length > 0) {
 			const box = el("details", "fold comments");
 			box.open = true;

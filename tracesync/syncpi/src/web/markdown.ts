@@ -39,6 +39,7 @@ export function fileLink(href: string): { path: string; lines?: string } | undef
 	return { path: decodeURI(path.replace(/^\.\//, "").replace(/^\//, "")), lines: lines ? `${lines[1]}-${lines[2] ?? lines[1]}` : undefined };
 }
 
-export function renderMarkdown(text: string): string {
-	return marked.parse(text, { async: false });
+/** `breaks` keeps single line breaks, as people write messages. */
+export function renderMarkdown(text: string, options: { breaks?: boolean } = {}): string {
+	return marked.parse(text, { async: false, breaks: options.breaks ?? false });
 }
