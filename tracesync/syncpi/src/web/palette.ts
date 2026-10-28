@@ -3,6 +3,7 @@
 // src/shared/keymap.json, so the desktop app offers the same ones; each app supplies what a command does.
 // The same box picks the agent's model (⌘⌥/): models grouped by the provider serving them, with the thinking level.
 import { type App, type Command, commandsFor, formatKeys, matchesKeys } from "../shared/keymap.ts";
+import { byRank, fileMatch, fuzzy, markPositions } from "../shared/search.ts";
 import { $, el, escapeHtml } from "./dom.ts";
 import { modelVendor, providerName } from "./icons.ts";
 
@@ -17,7 +18,12 @@ const ALL_TABS: { tab: Tab; label: string }[] = [
 /** A thread the palette can go to (in the app, which has more than one). */
 export type ThreadRow = { id: string; title: string; project: string; current: boolean };
 
-type Row = { key: string; title: string; detail?: string; keys?: string; section: string; icon?: string; current?: boolean; run(): void };
+/** A result. Where the query matched is marked in the title or the detail, whichever it matched. */
+type Row = { key: string; title: string; detail?: string; titleMarks?: number[]; detailMarks?: number[]; keys?: string; section: string; icon?: string; current?: boolean; run(): void };
+
+/** What the All tab shows of each kind before "Show all"; the Threads and Files tabs stop at their own caps. */
+const ALL_CAPS = { threads: 6, commands: 8, files: 12 };
+const TAB_CAPS = { threads: 80, files: 60 };
 
 export type ModelPick = {
 	models: { id: string; name: string; reasoning?: boolean }[];
@@ -27,49 +33,11 @@ export type ModelPick = {
 };
 const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
-/** Subsequence match, scored so that earlier, contiguous and word-start matches rank first. -1 when no match. */
-export function score(text: string, query: string): number {
-	if (query === "") return 0;
-	const t = text.toLowerCase();
-	const q = query.toLowerCase();
-	const at = t.indexOf(q);
-	if (at >= 0) return 1000 - at - (at > 0 && /\w/.test(t[at - 1]!) ? 50 : 0);
-	let i = 0;
-	let points = 0;
-	let last = -2;
-	for (const ch of q) {
-		const found = t.indexOf(ch, i);
-		if (found < 0) return -1;
-		points += found === last + 1 ? 5 : 1;
-		if (found === 0 || /[\s/._-]/.test(t[found - 1]!)) points += 3;
-		last = found;
-		i = found + 1;
-	}
-	// Letters scattered across the text match nearly anything; keep runs and word starts.
-	return points >= q.length * 3 ? points : -1;
-}
-
-/** The positions in `text` that `query` matched, as score() matches them, for highlighting. */
-export function matchPositions(text: string, query: string): number[] {
-	if (query === "") return [];
-	const t = text.toLowerCase();
-	const q = query.toLowerCase();
-	const at = t.indexOf(q);
-	if (at >= 0) return [...q].map((_, n) => at + n);
-	const out: number[] = [];
-	let i = 0;
-	for (const ch of q) {
-		const found = t.indexOf(ch, i);
-		if (found < 0) return [];
-		out.push(found);
-		i = found + 1;
-	}
-	return out;
-}
-
-function highlight(text: string, query: string): string {
-	const marks = new Set(matchPositions(text, query));
-	return [...text].map((ch, n) => (marks.has(n) ? `<mark>${escapeHtml(ch)}</mark>` : escapeHtml(ch))).join("");
+/** Text with the characters at `positions` marked, escaped. */
+function highlight(text: string, positions: readonly number[]): string {
+	return markPositions(text, positions)
+		.map((part) => (part.marked ? `<mark>${escapeHtml(part.text)}</mark>` : escapeHtml(part.text)))
+		.join("");
 }
 
 const FILE_ICON = '<svg viewBox="0 0 24 24"><path d="m8 7-5 5 5 5M16 7l5 5-5 5"/></svg>';
@@ -79,12 +47,14 @@ export class Palette {
 	readonly #dialog: HTMLDialogElement;
 	readonly #input: HTMLInputElement;
 	readonly #list: HTMLElement;
+	readonly #status: HTMLElement;
 	readonly #commands: Command[];
 	readonly #handlers: Record<string, () => void>;
 	readonly #files: () => string[];
 	readonly #openFile: (path: string) => void;
 	readonly #threads: (() => ThreadRow[]) | undefined;
 	readonly #createFile: ((path: string) => void) | undefined;
+	readonly #canCreate: () => boolean;
 	readonly #openThread: (id: string) => void;
 	readonly #tabs: { tab: Tab; label: string }[];
 	#tab: Tab = "all";
@@ -94,6 +64,12 @@ export class Palette {
 	#rows: Row[] = [];
 	#selected = 0;
 	#quietUntil = 0;
+	/** Where focus and the selection were before the box opened, to put them back when it's dismissed. */
+	#before: { focus: HTMLElement | null; range?: Range; input?: [number, number] } | undefined;
+	#ran = false;
+	/** Option ids by row key, stable across redraws (aria-activedescendant names one). */
+	readonly #ids = new Map<string, string>();
+	#announce: ReturnType<typeof setTimeout> | undefined;
 
 	constructor(options: {
 		handlers: Record<string, () => void>;
@@ -103,19 +79,27 @@ export class Palette {
 		threads?: () => ThreadRow[];
 		openThread?: (id: string) => void;
 		createFile?: (path: string) => void;
+		/** Whether this member may make files now (not a viewer); asked each time the list is drawn. */
+		canCreate?: () => boolean;
 	}) {
 		this.#createFile = options.createFile;
+		this.#canCreate = options.canCreate ?? (() => true);
 		this.#handlers = options.handlers;
 		this.#files = options.files;
 		this.#openFile = options.openFile;
 		this.#threads = options.threads;
 		this.#openThread = options.openThread ?? (() => {});
+		// No Threads tab without threads to go to (a thread in a browser).
 		this.#tabs = ALL_TABS.filter((t) => t.tab !== "threads" || this.#threads !== undefined);
 		// Only commands this app can carry out.
-		this.#commands = commandsFor(options.app ?? "web").filter((c) => c.id in options.handlers);
+		this.#commands = commandsFor(options.app ?? "web")
+			.filter((c) => c.id in options.handlers)
+			.map((c) => (c.id === "palette.all" && this.#threads === undefined ? { ...c, title: "Search commands and files" } : c));
 		this.#dialog = $<HTMLDialogElement>("palette");
 		this.#input = $<HTMLInputElement>("palette-input");
 		this.#list = $("palette-list");
+		this.#status = $("palette-status");
+		$("palette-heading").textContent = this.#threads ? "Search commands, threads and files" : "Search commands and files";
 		this.#renderTabs();
 		$("palette-tabs").addEventListener("click", (event) => {
 			const target = event.target as HTMLElement;
@@ -145,6 +129,21 @@ export class Palette {
 		this.#dialog.addEventListener("click", (event) => {
 			if (event.target === this.#dialog) this.close();
 		});
+		// Dismissed (Esc, a click outside): focus and the selection go back where they were. After running a row, what
+		// it opened has focus instead.
+		this.#dialog.addEventListener("close", () => {
+			const before = this.#before;
+			this.#before = undefined;
+			this.#input.setAttribute("aria-expanded", "false");
+			if (this.#ran || before?.focus == null || !before.focus.isConnected) return;
+			before.focus.focus({ preventScroll: true });
+			if (before.input !== undefined && (before.focus instanceof HTMLInputElement || before.focus instanceof HTMLTextAreaElement)) before.focus.setSelectionRange(...before.input);
+			else if (before.range !== undefined && before.range.startContainer.isConnected) {
+				const selection = getSelection();
+				selection?.removeAllRanges();
+				selection?.addRange(before.range);
+			}
+		});
 	}
 
 	get isOpen(): boolean {
@@ -155,7 +154,7 @@ export class Palette {
 		this.#pick = undefined;
 		this.#renderTabs();
 		this.#input.value = "";
-		if (!this.#dialog.open) this.#dialog.showModal();
+		this.#showModal();
 		this.#show(tab);
 	}
 
@@ -166,9 +165,21 @@ export class Palette {
 		this.#renderThinking();
 		this.#input.value = "";
 		this.#input.placeholder = "Select a model…";
-		if (!this.#dialog.open) this.#dialog.showModal();
+		this.#input.setAttribute("aria-label", "Select a model");
+		this.#showModal();
 		this.#input.focus();
 		this.#render();
+	}
+
+	#showModal(): void {
+		this.#ran = false;
+		if (this.#dialog.open) return;
+		const focus = document.activeElement as HTMLElement | null;
+		const range = getSelection()?.rangeCount ? getSelection()!.getRangeAt(0).cloneRange() : undefined;
+		const input = focus instanceof HTMLInputElement || focus instanceof HTMLTextAreaElement ? ([focus.selectionStart ?? 0, focus.selectionEnd ?? 0] as [number, number]) : undefined;
+		this.#before = { focus, range, input };
+		this.#dialog.showModal();
+		this.#input.setAttribute("aria-expanded", "true");
 	}
 
 	#renderTabs(): void {
@@ -192,6 +203,7 @@ export class Palette {
 
 	/** Runs the command a key press is the shortcut for. Returns whether one ran. */
 	handleKey(event: KeyboardEvent): boolean {
+		if (event.isComposing) return false;
 		const command = this.#commands.find((c) => c.keys !== undefined && matchesKeys(event, c.keys));
 		if (command === undefined) return false;
 		event.preventDefault();
@@ -202,47 +214,77 @@ export class Palette {
 	#show(tab: Tab): void {
 		this.#tab = tab;
 		for (const button of $("palette-tabs").querySelectorAll<HTMLElement>("[data-tab]")) button.setAttribute("aria-selected", String(button.dataset.tab === tab));
-		this.#input.placeholder =
-			tab === "files" ? "Go to a file…" : tab === "commands" ? "Run a command…" : tab === "threads" ? "Go to a thread…" : this.#threads ? "Search threads, commands and files…" : "Search commands and files…";
+		const label =
+			tab === "files" ? "Go to a file" : tab === "commands" ? "Run a command" : tab === "threads" ? "Go to a thread" : this.#threads ? "Search commands, threads and files" : "Search commands and files";
+		this.#input.placeholder = `${label}…`;
+		this.#input.setAttribute("aria-label", label);
 		this.#input.focus();
 		this.#render();
 	}
 
+	/** Commands match on their title, or (less) their group. With no query, in the keymap's order. */
 	#commandRows(query: string, section: string): Row[] {
-		return this.#commands
-			.map((c) => ({ c, s: Math.max(score(c.title, query), score(c.group, query) - 10) }))
-			.filter(({ s }) => s >= 0)
-			.sort((a, b) => (query ? b.s - a.s : 0))
-			.map(({ c }) => ({ key: c.id, title: c.title, detail: c.group, keys: c.keys, section, run: () => this.#handlers[c.id]!() }));
+		const rows = this.#commands.flatMap((c) => {
+			const title = fuzzy(c.title, query);
+			const group = fuzzy(c.group, query);
+			const score = Math.max(title.score, group.score >= 0 ? group.score - 10 : -1);
+			if (score < 0) return [];
+			const row: Row = { key: c.id, title: c.title, detail: c.group, keys: c.keys, section, run: () => this.#handlers[c.id]!() };
+			if (title.score >= 0 && title.score >= group.score - 10) row.titleMarks = title.positions;
+			else row.detailMarks = group.positions;
+			return [{ row, score, label: c.title, id: c.id }];
+		});
+		if (query !== "") rows.sort(byRank);
+		return rows.map((r) => r.row);
 	}
 
-	#fileRows(query: string, limit: number): Row[] {
+	/** Files by the better of their path and their name; the detail is the folder, marked when that's what matched. */
+	#fileRows(query: string): Row[] {
 		return this.#files()
-			.map((path) => ({ path, s: score(path, query) + (score(path.split("/").pop()!, query) > 0 ? 200 : 0) }))
-			.filter(({ s }) => s >= 0)
-			.sort((a, b) => b.s - a.s || a.path.length - b.path.length)
-			.slice(0, limit)
-			.map(({ path }) => {
+			.flatMap((path) => {
+				const match = fileMatch(path, query);
+				return match === undefined ? [] : [{ path, match, score: match.score, label: path, id: path }];
+			})
+			.sort(byRank)
+			.map(({ path, match }) => {
 				const slash = path.lastIndexOf("/");
-				return { key: `file:${path}`, title: path.slice(slash + 1), detail: slash > 0 ? `${path.slice(0, slash)}/` : undefined, section: "Files", icon: FILE_ICON, run: () => this.#openFile(path) };
+				const row: Row = { key: `file:${path}`, title: path.slice(slash + 1), detail: slash > 0 ? `${path.slice(0, slash)}/` : undefined, section: "Files", icon: FILE_ICON, run: () => this.#openFile(path) };
+				if (match.field === "name") row.titleMarks = match.positions;
+				else {
+					// A match in the full path: the part in the folder marks the detail, the rest the name.
+					row.detailMarks = match.positions.filter((p) => p <= slash);
+					row.titleMarks = match.positions.filter((p) => p > slash).map((p) => p - slash - 1);
+				}
+				return row;
 			});
 	}
 
-	#threadRows(query: string, limit: number): Row[] {
-		return (this.#threads?.() ?? [])
-			.map((t) => ({ t, s: Math.max(score(t.title, query), score(t.project, query) - 20) }))
-			.filter(({ s }) => s >= 0)
-			.sort((a, b) => (query ? b.s - a.s : 0))
-			.slice(0, limit)
-			.map(({ t }) => ({ key: `thread:${t.id}`, title: t.title, detail: t.project, section: "Threads", icon: THREAD_ICON, current: t.current, run: () => this.#openThread(t.id) }));
+	/** Threads by title, or (less) by their project's name. With no query, in the sidebar's order. */
+	#threadRows(query: string): Row[] {
+		const rows = (this.#threads?.() ?? []).flatMap((t) => {
+			const title = fuzzy(t.title, query);
+			const project = fuzzy(t.project, query);
+			const score = Math.max(title.score, project.score >= 0 ? project.score - 20 : -1);
+			if (score < 0) return [];
+			const row: Row = { key: `thread:${t.id}`, title: t.title, detail: t.project, section: "Threads", icon: THREAD_ICON, current: t.current, run: () => this.#openThread(t.id) };
+			if (title.score >= 0 && title.score >= project.score - 20) row.titleMarks = title.positions;
+			else row.detailMarks = project.positions;
+			return [{ row, score, label: t.title, id: t.id }];
+		});
+		if (query !== "") rows.sort(byRank);
+		return rows.map((r) => r.row);
 	}
 
 	#modelRows(query: string): Row[] {
 		const pick = this.#pick!;
 		return pick.models
-			.map((m) => ({ m, s: Math.max(score(m.name, query), score(m.id, query) - 5) }))
-			.filter(({ s }) => s >= 0)
-			.sort((a, b) => (query ? b.s - a.s : 0))
+			.flatMap((m) => {
+				const name = fuzzy(m.name, query);
+				const id = fuzzy(m.id, query);
+				const score = Math.max(name.score, id.score >= 0 ? id.score - 5 : -1);
+				return score < 0 ? [] : [{ m, score, label: m.name, id: m.id }];
+			})
+			.sort((a, b) => (query ? byRank(a, b) : 0))
 			.map(({ m }) => {
 				const provider = m.id.split("/")[0]!;
 				const vendor = modelVendor(m.id);
@@ -259,28 +301,52 @@ export class Palette {
 			.sort((a, b) => a.section.localeCompare(b.section));
 	}
 
+	/** A row that opens a tab with the same query, after a capped section of the All tab. */
+	#more(tab: Tab, total: number, noun: string): Row {
+		return { key: `more:${tab}`, title: `Show all ${total} ${noun}`, section: "", run: () => this.#show(tab) };
+	}
+
 	#render(): void {
 		const query = this.#input.value.trim();
+		/** Below the list: how many there are past a tab's cap. */
+		let note: string | undefined;
+		const capped = (rows: Row[], cap: number, noun: string) => {
+			if (rows.length > cap) note = `Showing ${cap} of ${rows.length} ${noun}. Type more to narrow them down.`;
+			return rows.slice(0, cap);
+		};
 		if (this.#pick !== undefined) this.#rows = this.#modelRows(query);
 		else if (this.#tab === "commands") this.#rows = this.#commandRows(query, "Commands");
-		else if (this.#tab === "files") {
-			this.#rows = this.#fileRows(query, 60);
-			// A path that isn't a file yet can be made.
-			const path = query.replace(/^\/+/, "");
-			if (this.#createFile !== undefined && path && !path.endsWith("/") && !this.#files().includes(path))
-				this.#rows.push({ key: `new:${path}`, title: `Create ${path}`, section: "New file", icon: FILE_ICON, run: () => this.#createFile!(path) });
-		}
-		else if (this.#tab === "threads") this.#rows = this.#threadRows(query, 80);
+		else if (this.#tab === "files") this.#rows = capped(this.#fileRows(query), TAB_CAPS.files, "files");
+		else if (this.#tab === "threads") this.#rows = capped(this.#threadRows(query), TAB_CAPS.threads, "threads");
 		else if (query === "") {
 			const quick = this.#commands.filter((c) => c.quick);
 			this.#rows = [
 				...quick.map((c) => ({ key: c.id, title: c.title, keys: c.keys, section: "Quick actions", run: () => this.#handlers[c.id]!() })),
 				...this.#commandRows("", "Commands").filter((r) => !quick.some((c) => c.id === r.key)),
 			];
-		} else this.#rows = [...this.#threadRows(query, 6), ...this.#commandRows(query, "Commands").slice(0, 8), ...this.#fileRows(query, 12)];
+		} else {
+			// Threads, then commands, then files: each kind ranked on its own, never against each other.
+			this.#rows = [];
+			for (const [rows, cap, tab, noun] of [
+				[this.#threadRows(query), ALL_CAPS.threads, "threads", "threads"],
+				[this.#commandRows(query, "Commands"), ALL_CAPS.commands, "commands", "commands"],
+				[this.#fileRows(query), ALL_CAPS.files, "files", "files"],
+			] as const) {
+				this.#rows.push(...rows.slice(0, cap));
+				if (rows.length > cap) this.#rows.push({ ...this.#more(tab, rows.length, noun), section: rows[0]!.section });
+			}
+		}
+		// Making a file is its own section, apart from what matched, and only for members who can.
+		if (this.#tab === "files" && this.#pick === undefined && this.#createFile !== undefined && this.#canCreate()) {
+			const path = query.replace(/^\/+/, "");
+			if (path && !path.endsWith("/") && !this.#files().includes(path))
+				this.#rows.push({ key: `new:${path}`, title: `Create ${path}`, section: "New file", icon: FILE_ICON, run: () => this.#createFile!(path) });
+		}
 		// The model picker opens on the model in use.
 		this.#selected = this.#pick !== undefined && query === "" ? Math.max(0, this.#rows.findIndex((r) => r.current)) : 0;
 		this.#list.replaceChildren();
+		this.#input.removeAttribute("aria-activedescendant");
+		this.#say(this.#rows.length === 0 ? "No results" : `${this.#rows.length} result${this.#rows.length === 1 ? "" : "s"}`);
 		if (this.#rows.length === 0) {
 			this.#list.append(
 				el("div", "palette-empty", this.#tab === "files" && this.#files().length === 0 ? "No project files yet." : this.#tab === "threads" && !this.#threads?.().length ? "No threads yet." : "Nothing matches."),
@@ -291,25 +357,47 @@ export class Palette {
 		this.#rows.forEach((row, n) => {
 			if (row.section !== section) {
 				section = row.section;
-				this.#list.append(el("div", "palette-section", section));
+				const heading = el("div", "palette-section", section);
+				heading.setAttribute("role", "presentation");
+				this.#list.append(heading);
 			}
-			const item = el("div", "palette-row");
+			const item = el("div", `palette-row${row.key.startsWith("more:") ? " palette-more" : ""}`);
+			item.id = this.#idOf(row.key);
 			item.dataset.index = String(n);
 			item.setAttribute("role", "option");
 			item.setAttribute("aria-selected", String(n === this.#selected));
-			// row.icon is one of our bundled vendor marks, not user content.
-			item.innerHTML = `${row.icon !== undefined ? `<span class="palette-icon">${row.icon}</span>` : ""}<span class="palette-title">${highlight(row.title, query)}</span>${
-				row.detail ? `<span class="palette-detail">${escapeHtml(row.detail)}</span>` : ""
-			}${row.keys ? `<kbd>${escapeHtml(formatKeys(row.keys))}</kbd>` : ""}${row.current ? `<span class="palette-check">✓</span>` : ""}`;
+			// row.icon is one of our bundled marks, not user content; everything else is escaped.
+			item.innerHTML = `${row.icon !== undefined ? `<span class="palette-icon" aria-hidden="true">${row.icon}</span>` : ""}<span class="palette-title">${highlight(row.title, row.titleMarks ?? [])}</span>${
+				row.detail ? `<span class="palette-detail">${highlight(row.detail, row.detailMarks ?? [])}</span>` : ""
+			}${row.keys ? `<kbd>${escapeHtml(formatKeys(row.keys))}</kbd>` : ""}${row.current ? `<span class="palette-check" aria-label="current">✓</span>` : ""}`;
 			this.#list.append(item);
 		});
+		if (note !== undefined) this.#list.append(el("div", "palette-note", note));
 		this.#quietUntil = performance.now() + 250;
+		this.#input.setAttribute("aria-activedescendant", this.#idOf(this.#rows[this.#selected]!.key));
 		this.#list.querySelector<HTMLElement>(`[data-index="${this.#selected}"]`)?.scrollIntoView({ block: "center" });
+	}
+
+	#idOf(key: string): string {
+		let id = this.#ids.get(key);
+		if (id === undefined) {
+			id = `palette-option-${this.#ids.size + 1}`;
+			this.#ids.set(key, id);
+		}
+		return id;
+	}
+
+	/** Says how many results there are to a screen reader, once typing pauses rather than on every key. */
+	#say(text: string): void {
+		if (this.#announce !== undefined) clearTimeout(this.#announce);
+		this.#announce = setTimeout(() => (this.#status.textContent = text), 500);
 	}
 
 	#select(index: number): void {
 		this.#selected = index;
 		for (const row of this.#list.querySelectorAll<HTMLElement>("[data-index]")) row.setAttribute("aria-selected", String(Number(row.dataset.index) === index));
+		const row = this.#rows[index];
+		if (row !== undefined) this.#input.setAttribute("aria-activedescendant", this.#idOf(row.key));
 		this.#quietUntil = performance.now() + 250;
 		this.#list.querySelector<HTMLElement>(`[data-index="${index}"]`)?.scrollIntoView({ block: "nearest" });
 	}
@@ -317,11 +405,15 @@ export class Palette {
 	#run(index: number): void {
 		const row = this.#rows[index];
 		if (row === undefined) return;
+		// "Show all" keeps the box open on that tab.
+		if (row.key.startsWith("more:")) return row.run();
+		this.#ran = true;
 		this.close();
 		row.run();
 	}
 
 	#key(event: KeyboardEvent): void {
+		if (event.isComposing) return;
 		const tab = this.#pick === undefined ? this.#tabs.findIndex((_, n) => matchesKeys(event, `cmd-${n + 1}`)) : -1;
 		if (tab >= 0) {
 			event.preventDefault();

@@ -45,6 +45,7 @@
     "test:desktop": "node build.mjs && tsx test/desktop.ts",
     "package:mac": "npm run build && cargo build --manifest-path desktop/Cargo.toml --release --bin syncpi-desktop && node scripts/package-macos.mjs",
     "test:native": "node scripts/test-native.mjs",
+    "test:search": "tsx --test test/search-unit.ts",
     "desktop:host": "npm run build && node dist/desktop-host.mjs"
   }
 }

@@ -378,7 +378,9 @@ async function main(): Promise<void> {
 	$("scroller").addEventListener("click", (event) => {
 		if (event.target === event.currentTarget && window.getSelection()?.isCollapsed) composer.focus();
 	});
+	// Roles are checked when a command runs, not when it was listed: a role can change while the palette is open.
 	const admin = (run: () => void) => () => (session.role === "admin" ? run() : toast("Only admins can do that."));
+	const editor = (run: () => void) => () => (session.role === "viewer" ? toast("Viewers can't do that; an admin can make you an editor.", "error") : run());
 	let models: { id: string; name: string; reasoning?: boolean }[] | undefined;
 	const pickModel = async () => {
 		models ??= await fetch("api/models", { headers: { authorization: `Bearer ${token}` } })
@@ -438,6 +440,7 @@ async function main(): Promise<void> {
 		openFile: (path) => void openFile(path),
 		threads: app ? () => app.threads() : undefined,
 		createFile: (path) => void createFile(path),
+		canCreate: () => session.role !== "viewer",
 		openThread: (id) => app?.open(id),
 		handlers: {
 			...fromShell,
@@ -455,20 +458,20 @@ async function main(): Promise<void> {
 				panel.refresh();
 			},
 			"thread.share": admin(() => session.send({ type: "invite" })),
-			"agent.stop": () => session.send({ type: "abort" }),
+			"agent.stop": editor(() => session.send({ type: "abort" })),
 			"agent.model": admin(() => void pickModel()),
-			"agent.compact": () => dialogs.open("compact"),
+			"agent.compact": editor(() => dialogs.open("compact")),
 			"agent.newContext": admin(() => dialogs.open("reset")),
 			"agent.branches": () => settings.open("branches"),
 			"agent.setup": () => show(showing === "setup" ? "main" : "setup"),
-			"agent.land": () => land(),
+			"agent.land": editor(() => land()),
 			"agent.landThread": () => show(showing === "land" ? "main" : "land"),
 			"view.changes": () => panel.toggle(),
 			"view.files": () => panel.toggleTree(),
 			"view.people": () => settings.open("people"),
 			...(git ? { "view.git": () => git.toggle() } : {}),
 			...(terminals ? { "view.terminal": () => (session.role === "viewer" ? toast("Viewers can't run commands.", "error") : terminals.toggle()) } : {}),
-			"file.comment": () => commentOnSelection() || toast("Select lines in a file or diff (click or drag their numbers) to comment on them."),
+			"file.comment": editor(() => commentOnSelection() || toast("Select lines in a file or diff (click or drag their numbers) to comment on them.")),
 		},
 	});
 	document.addEventListener("keydown", (event) => {

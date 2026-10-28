@@ -1,9 +1,12 @@
 [
-	{ "id": "palette.all", "title": "Search everything", "group": "General", "keys": "cmd-k", "apps": ["web", "desktop"] },
+	{ "id": "palette.all", "title": "Search commands, threads and files", "group": "General", "keys": "cmd-k", "apps": ["web", "desktop"] },
 	{ "id": "palette.commands", "title": "Show all commands", "group": "General", "keys": "cmd-shift-p", "apps": ["web", "desktop"] },
 	{ "id": "palette.files", "title": "Go to file", "group": "General", "keys": "cmd-p", "apps": ["web", "desktop"] },
 	{ "id": "palette.threads", "title": "Go to thread", "group": "General", "keys": "cmd-t", "apps": ["desktop"] },
 	{ "id": "inbox.toggle", "title": "Toggle Inbox", "group": "General", "keys": "cmd-shift-j", "apps": ["web", "desktop"], "quick": true },
+	{ "id": "find.open", "title": "Find", "group": "Find", "keys": "cmd-f", "apps": ["web", "desktop"] },
+	{ "id": "find.next", "title": "Find next", "group": "Find", "keys": "cmd-g", "apps": ["web", "desktop"] },
+	{ "id": "find.previous", "title": "Find previous", "group": "Find", "keys": "cmd-shift-g", "apps": ["web", "desktop"] },
 	{ "id": "app.keymap", "title": "Keyboard shortcuts", "group": "General", "keys": "cmd-/", "apps": ["web", "desktop"] },
 	{ "id": "app.settings", "title": "Settings", "group": "General", "keys": "cmd-,", "apps": ["web", "desktop"] },
 	{ "id": "app.zoomIn", "title": "Bigger text", "group": "View", "keys": "cmd-=", "apps": ["desktop"] },

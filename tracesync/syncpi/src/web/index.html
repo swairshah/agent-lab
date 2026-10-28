@@ -250,10 +250,12 @@
     </button>
   </dialog>
 
-  <dialog id="palette" class="palette" aria-label="Command palette">
-    <input id="palette-input" autocomplete="off" spellcheck="false" aria-label="Search">
+  <dialog id="palette" class="palette" aria-labelledby="palette-heading">
+    <h2 id="palette-heading" class="sr-only">Search commands, threads and files</h2>
+    <input id="palette-input" autocomplete="off" spellcheck="false" aria-label="Search" role="combobox" aria-autocomplete="list" aria-controls="palette-list" aria-expanded="false">
     <div id="palette-tabs" class="palette-tabs" role="tablist"></div>
-    <div id="palette-list" class="palette-list" role="listbox"></div>
+    <div id="palette-list" class="palette-list" role="listbox" aria-label="Results"></div>
+    <div id="palette-status" class="sr-only" role="status" aria-live="polite"></div>
   </dialog>
 
   <dialog id="inbox" class="palette inbox" aria-label="Inbox">
