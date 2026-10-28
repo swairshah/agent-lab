@@ -120,10 +120,15 @@ function messageContent(text: string, attachments: Attachment[]): { content: str
 	return { content: images.length === 0 ? body : [{ type: "text", text: body }, ...images], shown };
 }
 
-/** Nothing secret is in this process's environment, but keep the shells' environment minimal anyway. */
-function shellEnv(): NodeJS.ProcessEnv {
+/**
+ * The shells' environment on this machine. Nothing secret is in this process's environment, but keep it minimal
+ * anyway. On an exe.dev VM, dev servers are opened at https://<vm>.exe.xyz:<port>, and Vite refuses hosts it
+ * doesn't know, so that host is allowed for every Vite started here without touching the project's config.
+ */
+function shellEnv(vm: string | undefined): NodeJS.ProcessEnv {
 	const env = { ...process.env };
 	for (const key of Object.keys(env)) if (/_API_KEY$|^SYNCPI_/.test(key)) delete env[key];
+	if (vm !== undefined) env.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS = `${vm}.exe.xyz`;
 	return env;
 }
 
@@ -244,7 +249,7 @@ export class Session {
 		registry.install(CodingTools);
 		registry.install(Syncpi);
 
-		const env = shellEnv();
+		const env = shellEnv(s.vm);
 		this.harness = await Harness.open(
 			await openNodeSqliteStorage(join(this.stateDir, "session.sqlite")),
 			{
@@ -644,7 +649,10 @@ export class Session {
 				: s.setup.status === "failed"
 					? `The setup agent failed: ${s.setup.error ?? "unknown error"}. Set up what you need yourself.`
 					: "A background setup agent is still installing toolchains and dependencies. If a command is missing, wait a little or install it yourself; notes will appear in .syncpi/ENVIRONMENT.md.";
-		const vm = s.vm === undefined ? "" : ` On the VM (${s.vm}), ports 3000-9999 other than 8000 are reachable by the owner at https://${s.vm}.exe.xyz:<port>/.`;
+		const vm =
+			s.vm === undefined
+				? ""
+				: ` On the VM (${s.vm}), a server listening on 0.0.0.0 at a port from 3000 to 9999 (not 8000) is reachable by the owner at https://${s.vm}.exe.xyz:<port>/. Start dev servers that way (for Vite: --host 0.0.0.0; Vite already allows that host) and give people that link. Other dev servers may need ${s.vm}.exe.xyz in their allowed hosts or origins.`;
 		return `People in this session: ${people.join(", ")}.\n\nYour tools now run on ${this.#targetLabel}.${vm}\n\nThe session VM's environment (set up by a background agent; other machines have whatever their owner installed):\n${env}${this.#piNotes()}`;
 	}
 
