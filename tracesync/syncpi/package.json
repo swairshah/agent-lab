@@ -40,7 +40,7 @@
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit",
     "smoke": "node build.mjs && tsx test/smoke.ts",
-    "desktop": "npm run build && cargo build --manifest-path desktop/Cargo.toml --bin syncpi-desktop && node scripts/desktop-dev.mjs",
+    "desktop": "npm run build && cargo run --manifest-path desktop/Cargo.toml --bin syncpi-desktop",
     "icon": "node scripts/build-icon.mjs",
     "test:desktop": "node build.mjs && tsx test/desktop.ts",
     "package:mac": "npm run build && cargo build --manifest-path desktop/Cargo.toml --release --bin syncpi-desktop && node scripts/package-macos.mjs",

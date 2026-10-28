@@ -214,7 +214,38 @@ fn quit(app: AppHandle) {
     app.exit(0);
 }
 
+/// macOS knows a program as an app (its name and icon in the Dock and the app switcher) only when it runs from inside
+/// an app bundle. A build run straight from target/ (`cargo run`, `npm run desktop`) puts itself in a SyncPi.app next
+/// to it, the same as the packaged one (scripts/mac-bundle.mjs), and runs from there instead.
+#[cfg(target_os = "macos")]
+fn in_bundle() {
+    use std::os::unix::process::CommandExt;
+    let Ok(exe) = std::env::current_exe() else { return };
+    if exe.to_string_lossy().contains(".app/Contents/MacOS/") || std::env::var_os("SYNCPI_NO_BUNDLE").is_some() {
+        return;
+    }
+    let Some(dir) = exe.parent() else { return };
+    let contents = dir.join("SyncPi.app/Contents");
+    let program = contents.join("MacOS/SyncPi");
+    let made = (|| -> std::io::Result<()> {
+        std::fs::create_dir_all(contents.join("MacOS"))?;
+        std::fs::create_dir_all(contents.join("Resources"))?;
+        let _ = std::fs::remove_file(&program);
+        std::fs::copy(&exe, &program)?;
+        std::fs::write(contents.join("Info.plist"), include_str!("../Info.plist"))?;
+        std::fs::write(contents.join("Resources/Assets.car"), include_bytes!("../icons/Assets.car"))?;
+        std::fs::write(contents.join("Resources/icon.icns"), include_bytes!("../icons/icon.icns"))?;
+        Ok(())
+    })();
+    if made.is_ok() {
+        // exec only returns if it failed; then carry on as a plain program.
+        let _ = std::process::Command::new(&program).args(std::env::args_os().skip(1)).env("SYNCPI_NO_BUNDLE", "1").exec();
+    }
+}
+
 fn main() {
+    #[cfg(target_os = "macos")]
+    in_bundle();
     let (child, url) = match start_host() {
         Ok(started) => started,
         Err(message) => {

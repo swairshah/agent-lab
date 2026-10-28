@@ -1,10 +1,11 @@
 // The parts of SyncPi.app that make macOS treat the program as an app: Info.plist, the icon, and the program itself
-// in Contents/MacOS. Used by the packaged app (package-macos.mjs) and by `npm run desktop` (desktop-dev.mjs), so the
-// app has its icon in the Dock and the app switcher either way.
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
+// in Contents/MacOS. Used by the packaged app (package-macos.mjs) and build-icon.mjs. (A build run outside a bundle
+// makes the same bundle for itself: see in_bundle() in desktop/src/main.rs.)
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, chmodSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-const icons = resolve(import.meta.dirname, '../desktop/icons');
+const desktop = resolve(import.meta.dirname, '../desktop');
+const icons = join(desktop, 'icons');
 
 export function writeBundle(target, binary) {
  if (existsSync(target)) {
@@ -20,21 +21,6 @@ export function writeBundle(target, binary) {
  // is the same icon for earlier versions.
  cpSync(join(icons,'Assets.car'), join(contents,'Resources/Assets.car'));
  cpSync(join(icons,'icon.icns'), join(contents,'Resources/icon.icns'));
- writeFileSync(join(contents,'Info.plist'),`<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>dev.syncpi.desktop</string>
-<key>CFBundleExecutable</key><string>SyncPi</string>
-<key>CFBundleName</key><string>SyncPi</string>
-<key>CFBundleIconFile</key><string>icon.icns</string>
-<key>CFBundleIconName</key><string>AppIcon</string>
-<key>CFBundleDisplayName</key><string>SyncPi</string>
-<key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.0</string>
-<key>CFBundleVersion</key><string>1</string>
-<key>LSMinimumSystemVersion</key><string>13.0</string>
-<key>NSHighResolutionCapable</key><true/>
-<key>NSSupportsAutomaticGraphicsSwitching</key><true/>
-</dict></plist>`);
+ cpSync(join(desktop,'Info.plist'), join(contents,'Info.plist'));
  return contents;
 }
