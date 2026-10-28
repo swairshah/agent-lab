@@ -45,7 +45,7 @@ Delta's own repository, pulls in a coworker, reviews and lands the change. Trans
 | Links to code, highlighted code | Yes |
 | Agent shows the running app | **New today:** `record_browser` (a video of a browser on the VM) |
 | Collaborator presence, web and desktop share one link | Yes |
-| Live drafts / typing | No |
+| Live drafts / typing | Yes: keystrokes and cursors live, tag someone into a draft and write it together |
 | Group chat with the agent, tools run on the sender's machine | Yes |
 | Follow a collaborator | No |
 | Diff from the status bar; mark files seen; since main / last commit / last turn | Partly: Changes panel, git sheet, "Before last turn" for a file |
@@ -60,8 +60,7 @@ Delta's own repository, pulls in a coworker, reviews and lands the change. Trans
 
 1. **The scrollbar map.** Marks beside the thread for each message (yours, others', the agent's), click to jump, hover
    for the first line and who wrote it. All the data is in the thread state.
-2. **Live typing.** Send drafts as presence (debounced, never stored): "Francisca is typing…" under the thread, or her
-   text as it's written, as Delta shows.
+2. ~~**Live typing.**~~ Done: drafts are shared Yjs documents, with cursors; tags, joining and sending together.
 3. **Mark files as seen** in the Changes panel and the git sheet, kept per person; the counts in the status bar.
 4. **A "+N −M" chip in the status bar** that opens the thread's changes, as in Delta.
 5. **Screenshots as well as video:** a `screenshot_browser` tool on the recorder that returns an image the model also
