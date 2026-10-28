@@ -1,9 +1,11 @@
 // The left rail, as in Delta: each project with its threads under it, newest first and pinned on top. A project
 // folds; "+" on a project starts a thread there. The archive shows archived threads instead.
+use crate::keymap::RunCommand;
 use crate::theme::{self, Palette};
 use crate::{Desktop, array, eid, flag, icons, label, text};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use gpui_component::menu::{ContextMenuExt, PopupMenu};
 use gpui_component::{
     Icon, IconName, Sizable,
     button::{Button, ButtonVariants},
@@ -313,9 +315,13 @@ impl Desktop {
         nested: bool,
         p: &Palette,
         cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
+    ) -> AnyElement {
         let id = text(s, "id");
         let selected = id == self.active;
+        let pinned = flag(s, "pinned");
+        let archived = flag(s, "archived");
+        let menu_id = eid(format!("menu-{id}"));
+        let focus = id.clone();
         let working = s["status"] == "provisioning";
         let failed = s["status"] == "failed";
         let tags = array(s, "tags")
@@ -323,7 +329,7 @@ impl Desktop {
             .filter_map(Value::as_str)
             .collect::<Vec<_>>()
             .join(" · ");
-        div()
+        let row = div()
             .id(eid(format!("thread-{id}")))
             .flex()
             .items_center()
@@ -369,5 +375,47 @@ impl Desktop {
                 d.child(Icon::new(IconName::CircleX).size_3().text_color(p.removed))
             })
             .on_click(cx.listener(move |this, _, window, cx| this.select(id.clone(), window, cx)))
+            // A right-click opens the thread too, so its menu acts on it.
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, _, window, cx| this.select(focus.clone(), window, cx)),
+            );
+        // As in Delta's sidebar. Each row's menu sits under its own id, so menus don't share their open state.
+        div()
+            .id(menu_id)
+            .child(row.context_menu(move |menu: PopupMenu, _, _| {
+                let item = |label: &str, id: &str| {
+                    (
+                        label.to_owned(),
+                        Box::new(RunCommand {
+                            id: id.to_owned().into(),
+                        }) as Box<dyn Action>,
+                    )
+                };
+                let items = [
+                    item("Share", "thread.share"),
+                    item(if pinned { "Unpin" } else { "Pin" }, "thread.pin"),
+                    item("Rename", "thread.rename"),
+                    item("Regenerate title", "thread.title"),
+                ];
+                let more = [
+                    item("Open in browser", "project.web"),
+                    item("Reveal in Finder", "project.reveal"),
+                ];
+                let mut menu = menu;
+                for (label, action) in items {
+                    menu = menu.menu(label, action);
+                }
+                menu = menu.separator();
+                for (label, action) in more {
+                    menu = menu.menu(label, action);
+                }
+                let (label, action) = item(
+                    if archived { "Restore" } else { "Archive" },
+                    "thread.archive",
+                );
+                menu.separator().menu(label, action)
+            }))
+            .into_any_element()
     }
 }
