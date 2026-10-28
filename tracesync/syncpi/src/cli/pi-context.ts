@@ -35,9 +35,9 @@ export async function printPiContext(dir: string): Promise<void> {
 }
 
 /** Loads your pi setup for `dir`, or an empty one if pi's resources can't be loaded. */
-export function loadPiContext(dir: string): Promise<LoadedPiContext> {
+export function loadPiContext(dir: string, helper?: string): Promise<LoadedPiContext> {
 	return new Promise((resolve) => {
-		execFile(process.execPath, [process.argv[1]!, "__pi-context", dir], { maxBuffer: 16 * 1024 * 1024, timeout: 60_000 }, (_error, stdout) => {
+		execFile(process.execPath, helper ? [helper, dir] : [process.argv[1]!, "__pi-context", dir], { maxBuffer: 16 * 1024 * 1024, timeout: 60_000 }, (_error, stdout) => {
 			const line = stdout.split("\n").find((l) => l.startsWith(MARK));
 			try {
 				if (line !== undefined) return resolve(JSON.parse(line.slice(MARK.length)) as LoadedPiContext);

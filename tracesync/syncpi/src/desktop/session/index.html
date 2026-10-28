@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>syncpi</title>
+<base href="__BASE__">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="join" class="screen" hidden>
+  <form id="join-form" class="card">
+    <h1>Join <span id="join-name">this session</span></h1>
+    <p class="muted">You are joining a shared coding session<span id="join-role"></span>. Everyone in it sees the same thread.</p>
+    <div id="join-link">
+      <label for="join-input">Your name</label>
+      <input id="join-input" autocomplete="name" maxlength="40">
+      <button type="submit">Join</button>
+    </div>
+    <div id="join-email" hidden>
+      <p>This invite is for <strong id="join-email-to"></strong>. Sign in with exe.dev as that address to join. If you don't have an exe.dev account, you can create one with the same email.</p>
+      <a id="join-login" class="button" href="#">Sign in with exe.dev</a>
+    </div>
+    <p id="join-error" class="error" role="alert"></p>
+    <button id="join-logout" type="button" hidden>Sign out of exe.dev</button>
+  </form>
+</div>
+<div id="nologin" class="screen" hidden>
+  <div class="card">
+    <h1>syncpi</h1>
+    <p class="muted">Open this session with an invite link from one of its admins. If you were invited by email, sign in with exe.dev.</p>
+    <a id="nologin-login" class="button" href="#">Sign in with exe.dev</a>
+    <p id="nologin-error" class="error" role="alert"></p>
+  </div>
+</div>
+<div id="app" hidden>
+  <header class="top">
+    <div class="title"><strong id="session-name">syncpi</strong> <span id="conn" class="pill">connecting</span></div>
+    <div id="people" class="people" aria-label="People online"></div>
+    <div class="actions">
+      <button id="share" type="button">Share</button>
+    </div>
+  </header>
+  <main class="layout">
+    <section class="thread-col">
+      <div class="tabs" role="tablist">
+        <button role="tab" id="tab-main" aria-selected="true">Thread</button>
+        <button role="tab" id="tab-setup" aria-selected="false">Setup agent <span id="env-dot" class="dot"></span></button>
+      </div>
+      <div id="thread" class="thread" aria-live="off"></div>
+      <div id="branch-toolbar"><button id="branch-button" type="button">⑂ main</button><button id="compact-button" type="button" title="Summarize older messages">Summarize</button><button id="context-button" type="button" title="Start a new context">New context</button><span class="spacer"></span><input id="thread-search" placeholder="Find in thread…" aria-label="Find in thread"></div>
+      <div id="status" class="status" role="status"></div>
+      <form id="composer" class="composer">
+        <div id="completions" role="listbox" hidden></div>
+        <textarea id="input" rows="2" placeholder="Message the agent. Enter to send, Shift+Enter for a new line." aria-label="Message"></textarea>
+        <div class="composer-row">
+          <label class="steer"><input type="checkbox" id="steer"> steer the current run</label>
+          <span class="spacer"></span>
+          <select id="where" aria-label="Where tools run"><option value="vm">Session VM</option><option value="device">This machine</option></select>
+          <button type="button" id="model-button" title="Change model">Model</button>
+          <button type="button" id="stop" hidden>Stop</button>
+          <button type="submit" id="send">Send</button>
+        </div>
+      </form>
+    </section>
+    <aside class="side" id="session-side"><button id="close-side" type="button" aria-label="Close people panel">×</button>
+      <h2>Environment</h2>
+      <div id="env" class="env"></div>
+      <h2>People</h2>
+      <ul id="members" class="members"></ul>
+      <form id="rename" class="row-form">
+        <input id="rename-input" maxlength="40" aria-label="Your name">
+        <button type="submit">Rename me</button>
+      </form>
+      <section id="admin" hidden>
+        <h2>Invite</h2>
+        <form id="invite-form" class="stack-form">
+          <input id="invite-email" type="email" placeholder="email (or leave empty for a link)" aria-label="Email to invite">
+          <div class="row-form">
+            <select id="invite-role" aria-label="Role"><option value="editor">editor</option><option value="viewer">viewer</option><option value="admin">admin</option></select>
+            <select id="invite-days" aria-label="Expires"><option value="7">7 days</option><option value="1">1 day</option><option value="30">30 days</option><option value="0">never</option></select>
+            <button type="submit">Invite</button>
+          </div>
+        </form>
+        <h2>Active invites</h2>
+        <ul id="invites" class="members"></ul>
+      </section>
+      <h2>Session</h2>
+      <dl id="info" class="info"></dl>
+    </aside>
+  </main>
+  <dialog id="share-dialog">
+    <form method="dialog">
+      <h2>Share this session</h2>
+      <p id="share-who" class="muted"></p>
+      <p class="muted">It opens here in a browser, or in a terminal with:</p>
+      <input id="share-url" readonly aria-label="Share link">
+      <pre id="share-cli"></pre>
+      <div class="composer-row"><span class="spacer"></span><button type="button" id="copy">Copy link</button><button>Close</button></div>
+    </form>
+  </dialog>
+</div>
+<dialog id="branches-dialog"><form method="dialog"><div class="dialog-row"><h2>Thread branches</h2><button>Close</button></div></form><div id="branch-list"></div></dialog>
+<dialog id="model-dialog"><form id="model-form"><h2>Model and thinking</h2><label>Model (provider/model)<input id="model-ref" list="available-models" required aria-label="Model" placeholder="openai-codex/gpt-5.6-sol"></label><datalist id="available-models"></datalist><label>Thinking<select id="model-thinking"><option>medium</option><option>off</option><option>minimal</option><option>low</option><option>high</option><option>xhigh</option></select></label><div class="dialog-row"><button type="button" id="close-model">Cancel</button><button type="submit">Apply</button></div></form></dialog>
+<dialog id="compact-dialog"><form id="compact-form"><h2>Summarize older messages</h2><textarea id="compact-instructions" rows="4" placeholder="Optional instructions for the summary"></textarea><div class="dialog-row"><button type="button" id="close-compact">Cancel</button><button type="submit">Summarize</button></div></form></dialog>
+<dialog id="reset-dialog"><form id="reset-form"><h2>Start a new context?</h2><p>The agent starts fresh. Earlier messages remain visible to everyone in the shared thread.</p><div class="dialog-row"><button type="button" id="close-reset">Cancel</button><button type="submit">Start new context</button></div></form></dialog>
+<script type="module" src="app.js"></script>
+</body>
+</html>
