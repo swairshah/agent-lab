@@ -30,6 +30,18 @@ type Range = { start: number; end: number; side?: "additions" | "deletions" };
 
 /** The view whose lines were selected last, so ⌥⌘M can comment on them. */
 let active: (() => void) | undefined;
+/** Drops the selection and comment box that are open, so Esc works wherever focus is. */
+let dropOpen: (() => void) | undefined;
+addEventListener(
+	"keydown",
+	(event) => {
+		if (event.key !== "Escape" || dropOpen === undefined || document.querySelector("dialog[open]")) return;
+		event.preventDefault();
+		event.stopPropagation();
+		dropOpen();
+	},
+	true,
+);
 
 /** Opens the comment box on the lines selected last. Returns whether there were any. */
 export function commentOnSelection(): boolean {
@@ -55,6 +67,7 @@ function lineComments(path: string, onComment: CommentHandler, excerpt: (range: 
 		selection = undefined;
 		box = false;
 		if (active === open) active = undefined;
+		if (dropOpen === drop) dropOpen = undefined;
 		redraw();
 		clear();
 	};
@@ -65,6 +78,7 @@ function lineComments(path: string, onComment: CommentHandler, excerpt: (range: 
 			selection = { start: Math.min(range.start, range.end), end: Math.max(range.start, range.end), side: range.endSide ?? range.side };
 			box = false;
 			active = open;
+			dropOpen = drop;
 			redraw();
 		},
 		renderAnnotation(annotation: { metadata?: { range: Range; box: boolean } }): HTMLElement | undefined {
@@ -92,11 +106,7 @@ function lineComments(path: string, onComment: CommentHandler, excerpt: (range: 
 				drop();
 			};
 			input.addEventListener("keydown", (event) => {
-				if (event.key === "Escape") {
-					event.preventDefault();
-					event.stopPropagation();
-					drop();
-				} else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+				if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
 					event.preventDefault();
 					send();
 				}

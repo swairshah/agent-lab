@@ -72,6 +72,8 @@ export class ThreadView {
 			const have = this.#rendered[i];
 			if (have !== undefined && have.key === unit.key && have.sig === unit.sig) continue;
 			const node = unit.tools.length > 1 ? this.#agentRow(this.#group(unit.tools, unit.key), this.#modelBefore(items, unit.index), false) : this.#item(items[unit.index]!, items, unit.index);
+			// Messages can be commented on by selecting their text (quote-comments.ts).
+			if (unit.tools.length === 0) node.dataset.key = unit.key;
 			// A folded row keeps its open/closed state across updates once its tool has finished.
 			const before = have?.el.querySelector<HTMLDetailsElement>(":scope .tool");
 			const after = node.querySelector<HTMLDetailsElement>(":scope .tool");
@@ -135,6 +137,15 @@ export class ThreadView {
 	/** A comment on file lines, as Delta shows it: the file and lines (opening the file), the lines, the note. */
 	#comment(c: LineComment, name: string): HTMLElement {
 		const card = el("div", "comment-card");
+		// On part of a message: the quote and the note.
+		if (c.message !== undefined) {
+			card.append(el("div", "comment-on", "On a message"), el("blockquote", "quote-excerpt", c.excerpt));
+			const note = el("div", "comment-note");
+			note.innerHTML = avatarHtml(name);
+			note.append(el("div", "comment-text", c.text));
+			card.append(note);
+			return card;
+		}
 		const where = el("button", "file-link comment-where", `${c.path}:${c.start === c.end ? c.start : `${c.start}-${c.end}`}`);
 		where.type = "button";
 		where.onclick = () => this.#options.onOpenFile(c.path);

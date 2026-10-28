@@ -41,10 +41,11 @@ export const ATTACHMENT_LIMITS = { count: 8, imageBytes: 5 * 1024 * 1024, textBy
 export const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 
 /**
- * A comment on lines of a project file, as in Delta: select lines in a file, write a note, and it goes to the thread
- * with the lines it's about. `start` and `end` are 1-based and inclusive; `excerpt` is the text of those lines.
+ * A comment, as in Delta: on lines of a project file (`path`, 1-based inclusive `start` and `end`, `excerpt` the text
+ * of those lines), or on part of a message in the thread (`message` its key, `excerpt` the text selected, no path).
+ * It goes to the thread as its own message, with what it's about.
  */
-export type LineComment = { path: string; start: number; end: number; excerpt: string; text: string };
+export type LineComment = { path: string; start: number; end: number; excerpt: string; text: string; message?: string };
 
 /** Limits the server enforces on comments. */
 export const COMMENT_LIMITS = { count: 20, excerptChars: 8000, textChars: 4000 };

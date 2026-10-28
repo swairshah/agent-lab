@@ -79,10 +79,13 @@ async function createSessionModels(stateDir: string, auth: "pi" | "exe-gateway",
 function checkComments(comments: unknown[]): LineComment[] {
 	if (comments.length > COMMENT_LIMITS.count) throw new Error(`at most ${COMMENT_LIMITS.count} comments per message`);
 	return comments.map((c) => {
-		const { path, start, end, excerpt, text } = (c ?? {}) as Partial<LineComment>;
-		if (typeof path !== "string" || path === "" || !Number.isInteger(start) || !Number.isInteger(end) || start! < 1 || end! < start! || typeof excerpt !== "string" || typeof text !== "string")
+		const { path, start, end, excerpt, text, message } = (c ?? {}) as Partial<LineComment>;
+		if (typeof excerpt !== "string" || typeof text !== "string" || excerpt.length > COMMENT_LIMITS.excerptChars || text.length > COMMENT_LIMITS.textChars)
+			throw new Error("a comment needs what it's about and its text, within the limits");
+		// On a message: the text selected in it.
+		if (typeof message === "string" && message !== "") return { path: "", start: 0, end: 0, excerpt, text, message: message.slice(0, 64) };
+		if (typeof path !== "string" || path === "" || !Number.isInteger(start) || !Number.isInteger(end) || start! < 1 || end! < start!)
 			throw new Error("a comment needs a path, a line range, the lines and its text");
-		if (excerpt.length > COMMENT_LIMITS.excerptChars || text.length > COMMENT_LIMITS.textChars) throw new Error("that comment is too long");
 		return { path, start: start!, end: end!, excerpt, text };
 	});
 }
@@ -90,7 +93,11 @@ function checkComments(comments: unknown[]): LineComment[] {
 /** How the model sees comments: each with the file, the lines and the excerpt it's about. */
 function commentText(comments: LineComment[]): string {
 	return comments
-		.map((c) => `\n\n<comment file="${c.path}" lines="${c.start === c.end ? c.start : `${c.start}-${c.end}`}">\n<lines>\n${c.excerpt}\n</lines>\n${c.text}\n</comment>`)
+		.map((c) =>
+			c.message !== undefined
+				? `\n\n<comment on="an earlier message in this thread">\n<quote>\n${c.excerpt}\n</quote>\n${c.text}\n</comment>`
+				: `\n\n<comment file="${c.path}" lines="${c.start === c.end ? c.start : `${c.start}-${c.end}`}">\n<lines>\n${c.excerpt}\n</lines>\n${c.text}\n</comment>`,
+		)
 		.join("");
 }
 

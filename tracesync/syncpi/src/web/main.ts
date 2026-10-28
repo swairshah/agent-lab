@@ -21,6 +21,7 @@ import { Dialogs } from "./dialogs.ts";
 import { $, escapeHtml, initials, personColor, storage } from "./dom.ts";
 import { modelVendor } from "./icons.ts";
 import { Palette } from "./palette.ts";
+import { QuoteComments } from "./quote-comments.ts";
 import { ArtifactPanel } from "./panel.ts";
 import { SessionClient } from "./session.ts";
 import { Settings } from "./settings.ts";
@@ -62,9 +63,10 @@ async function main(): Promise<void> {
 	const sendComment = (comment: LineComment) => {
 		if (session.role === "viewer") return toast("Viewers can't comment; ask an admin to make you an editor.", "error");
 		session.submit("", "followUp", where, [], [comment]);
-		toast(`Comment on ${comment.path}:${comment.start === comment.end ? comment.start : `${comment.start}-${comment.end}`} sent`);
+		toast(comment.message !== undefined ? "Comment sent" : `Comment on ${comment.path}:${comment.start === comment.end ? comment.start : `${comment.start}-${comment.end}`} sent`);
 	};
 	const panel = new ArtifactPanel(session, loadImage, sendComment);
+	new QuoteComments($("thread"), sendComment);
 	const dialogs = new Dialogs(session);
 	// Saving a file edited in the panel, refused if it changed since it was opened (compare-and-swap on its hash).
 	panel.onSave = async (path, text, base) => {

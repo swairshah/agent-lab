@@ -811,6 +811,49 @@ impl Desktop {
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> Div {
+        let note = || {
+            div()
+                .flex()
+                .items_start()
+                .gap_2()
+                .px_2()
+                .py_1()
+                .rounded_r(px(6.))
+                .border_l_2()
+                .border_color(p.accent)
+                .bg(p.raised)
+                .child(avatar_person(name).size(px(22.)).text_size(theme::sz(9.)))
+                .child(div().text_size(theme::sz(14.5)).child(text(c, "text")))
+        };
+        // On part of a message: the quote and the note.
+        if c["message"].is_string() {
+            return div()
+                .mt_1()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .p_2()
+                .rounded(px(10.))
+                .border_1()
+                .border_color(p.rule)
+                .bg(p.surface)
+                .child(
+                    div()
+                        .text_size(theme::sz(12.))
+                        .text_color(p.muted)
+                        .child("On a message"),
+                )
+                .child(
+                    div()
+                        .pl_2()
+                        .border_l_2()
+                        .border_color(p.accent)
+                        .text_size(theme::sz(13.5))
+                        .text_color(p.ink_2)
+                        .child(text(c, "excerpt")),
+                )
+                .child(note());
+        }
         let path = text(c, "path");
         let (start, end) = (
             c["start"].as_u64().unwrap_or(1),
