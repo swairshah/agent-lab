@@ -11,6 +11,7 @@ export type InboxItem = Mention & { thread: string; threadTitle: string };
 
 const READ = "syncpi-inbox-read";
 const SEEN = "syncpi-inbox-seen";
+const OPENED = Date.now();
 
 export const itemId = (i: InboxItem) => `${i.thread}/${i.key}/${i.comment ?? "m"}`;
 
@@ -82,15 +83,14 @@ export class Inbox {
 		return items.filter((i) => !read.has(itemId(i)));
 	}
 
-	/** Mentions not announced yet (each is announced once, as it arrives); marks them announced. */
+	/** Mentions to announce: unread, not announced before, and sent since this page opened (older ones are news only
+	 *  for the inbox's count, not a notice); marks them announced. */
 	fresh(items: InboxItem[]): InboxItem[] {
 		const seen = idSet(SEEN);
-		const first = storage.get(SEEN) === undefined;
-		const out = this.unread(items).filter((i) => !seen.has(itemId(i)));
+		const out = this.unread(items).filter((i) => !seen.has(itemId(i)) && (i.at ?? 0) >= OPENED - 60_000);
 		for (const i of items) seen.add(itemId(i));
 		saveIds(SEEN, seen);
-		// The first time, what's already there isn't news.
-		return first ? [] : out;
+		return out;
 	}
 
 	read(item: InboxItem): void {
