@@ -86,6 +86,9 @@ async function toAttachment(file: File): Promise<Attachment | string> {
 	return { name: file.name, mimeType: file.type || "text/plain", data: base64(buffer) };
 }
 
+/** A touch screen without a fine pointer: a phone or tablet. */
+const TOUCH = matchMedia("(pointer: coarse)").matches && !matchMedia("(any-pointer: fine)").matches;
+
 export class Composer {
 	readonly #c: CommandContext;
 	readonly #input: HTMLTextAreaElement;
@@ -97,6 +100,10 @@ export class Composer {
 	constructor(context: CommandContext, draftKey: string) {
 		this.#c = context;
 		this.#input = $<HTMLTextAreaElement>("input");
+		if (TOUCH) {
+			this.#input.placeholder = "@ for files, / for commands";
+			this.#input.enterKeyHint = "send";
+		}
 		this.#draftKey = `draft:${draftKey}`;
 		const input = this.#input;
 		input.value = storage.get(this.#draftKey) ?? "";
@@ -195,7 +202,8 @@ export class Composer {
 
 	#key(event: KeyboardEvent): void {
 		const open = !$("completions").hidden;
-		const send = event.key === "Enter" && (event.metaKey || event.ctrlKey);
+		// Phone keyboards have no ⌘: there Enter sends and Shift+Enter starts a new line.
+		const send = event.key === "Enter" && !event.isComposing && (event.metaKey || event.ctrlKey || (TOUCH && !event.shiftKey && !open));
 		if (open && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
 			event.preventDefault();
 			this.#moveSelection(event.key === "ArrowDown" ? 1 : -1);
