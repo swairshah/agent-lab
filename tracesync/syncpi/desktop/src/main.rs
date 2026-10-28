@@ -35,6 +35,36 @@ fn array(value: &Value, key: &str) -> Vec<Value> {
 fn flag(value: &Value, key: &str) -> bool {
     value[key].as_bool().unwrap_or(false)
 }
+/// The highlighter language for a file, from its extension.
+fn language_of(path: &str) -> &'static str {
+    match path.rsplit('.').next().unwrap_or("").to_lowercase().as_str() {
+        "rs" => "rust",
+        "ts" | "mts" | "cts" => "typescript",
+        "tsx" => "tsx",
+        "js" | "mjs" | "cjs" | "jsx" => "javascript",
+        "py" => "python",
+        "go" => "go",
+        "rb" => "ruby",
+        "md" | "mdx" => "markdown",
+        "json" | "jsonc" => "json",
+        "toml" => "toml",
+        "yaml" | "yml" => "yaml",
+        "html" | "htm" => "html",
+        "css" | "scss" => "css",
+        "sh" | "bash" | "zsh" => "bash",
+        "c" | "h" => "c",
+        "cpp" | "cc" | "hpp" => "cpp",
+        "cs" => "csharp",
+        "java" => "java",
+        "swift" => "swift",
+        "sql" => "sql",
+        "zig" => "zig",
+        "ex" | "exs" => "elixir",
+        "scala" => "scala",
+        "proto" => "proto",
+        _ => "plain",
+    }
+}
 fn label(text: impl Into<SharedString>) -> Div {
     div().child(text.into())
 }
@@ -351,8 +381,11 @@ impl Desktop {
                                 } else {
                                     text(&value, "text")
                                 };
-                                self.editor
-                                    .update(cx, |editor, cx| editor.set_value(content, window, cx));
+                                let language = language_of(&self.file_path);
+                                self.editor.update(cx, |editor, cx| {
+                                    editor.set_highlighter(language, cx);
+                                    editor.set_value(content, window, cx);
+                                });
                             }
                             _ if tag.starts_with("saved:") => {
                                 self.file_hash = text(&value, "hash");
