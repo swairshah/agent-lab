@@ -27,7 +27,15 @@ syncpi's agent is not pi, but it uses your pi setup the way pi would. When you s
 - **Models in `--local` sessions:** exactly the models your pi has, including providers your extensions add and your subscription logins. Sessions on the host use the exe.dev LLM integration instead.
 - `--no-pi` turns all of this off.
 
-Not yet: tools from your pi extensions (planned to run on your machine for your requests), and pi's `/tree`, `/new` and `/compact`.
+Not yet: tools from your pi extensions (planned to run on your machine for your requests).
+
+## Context: /compact, /new, /tree
+
+- The agent summarizes older messages on its own before its context fills up (pi-durable's automatic compaction, in the background). The status line shows "summarizing older messages…" while it runs.
+- `/compact [instructions]` (editors) summarizes now.
+- `/new` (admins) starts a new context. Earlier messages stay in the thread, but the agent no longer sees them.
+- `/tree` lists the messages and the thread's branches. `/tree <n>` (admins) branches just before message *n* and puts that message back in your editor, to edit and resend, as in pi. `/tree b<k>` switches back to another branch. A branch switch moves everyone, since there is one shared thread; the header shows which branch you are on.
+- People always see the whole thread, including what came before a `/new` or a summary. A client that connects gets the current context plus up to 500 earlier entries.
 
 ## Where the agent's tools run
 
@@ -38,7 +46,7 @@ On the machine of whoever asked. A message you send from your terminal runs its 
 - If the sender's machine is offline, the run waits up to a minute for it, then its tool calls fail with a message saying so.
 - The agent loop, the transcript and the model calls stay on the VM. Only file operations and commands travel. They use pi-env's daemon on your machine, reached through your client's WebSocket (`src/server/devices.ts`, `src/server/relay.ts`, `src/cli/device.ts`).
 
-Inside the terminal UI: Enter sends a message (queued while the agent is busy). Esc stops the agent. The commands are `/session-share`, `/web`, `/env`, `/who`, `/steer <msg>`, `/stop`, `/sync`, `/where here|vm`, `/ssh`, and `/quit`. Leaving does not stop the session.
+Inside the terminal UI: Enter sends a message (queued while the agent is busy). Esc stops the agent. The commands are `/session-share`, `/invite`, `/members`, `/web`, `/env`, `/steer <msg>`, `/stop`, `/compact`, `/new`, `/tree`, `/sync`, `/where here|vm`, `/name`, `/open`, `/ssh`, and `/quit`. Leaving does not stop the session.
 
 ## Models
 
@@ -68,6 +76,39 @@ No API keys are copied anywhere.
 - `src/shared/files.ts` and `src/cli/sync.ts` do file sync. Both sides hash the synced files: what git sees (tracked files, plus untracked files that are not ignored), minus `.git`, `.syncpi/` and `node_modules`. The server sends changes over the WebSocket. Clients rescan their folder every 1.5 s, and upload with compare-and-swap on the content hash. If a file changed on both sides, your local version wins and is pushed. The other side's version is saved under `~/.syncpi/conflicts/<id>/`.
 - `src/server/main.ts` serves one session (`--state <dir>`, for `--local`) or a whole host (`--sessions <dir>`). On a host, each session is a `Room` (`src/server/room.ts`) under `/<id>/`, opened on first use. A room closes after 15 idle minutes, and is dropped when its directory is removed. On the host VM, session state is in `~/.syncpi-sessions/<id>/` and projects are in `~/projects/<id>/<name>/`. All sessions on one host share its Linux user, so they are not isolated from each other. That is fine for one person's sessions; use `--vm` for a session that needs its own machine.
 - `src/cli/provision.ts` sets up the host and the session, in a detached `syncpi __provision <id>` process that reports each step in the session record (log: `~/.syncpi/sessions/<id>.log`). It runs `ssh exe.dev new --tag=syncpi`, makes port 8000 public, installs Node 22 if it is missing, and copies the project (with `.git`) and the bundled server. It then writes `~/.syncpi/server.json` and starts the `syncpi` unit. The VM name is chosen up front, so the session's URL is known before the VM exists.
+
+## The web view
+
+`/web` in the terminal, or any share link in a browser, opens the session's web view. It shows the same thread as the
+terminal UI and keeps out of the way. The thread fills the page, the composer is its next row, and a status bar shows
+where your requests run, the branch, activity and the model. Everything else is in settings (the gear, or ⌘,): your
+name and theme, the model and context, people and invites, branches, the environment the setup agent prepared, and
+session details. It follows the system's light or dark theme by default and works on phones.
+
+- **Thread.** Each reply shows the mark of the model that wrote it (Anthropic, OpenAI, Kimi, …, from
+  `@lobehub/icons-static-svg`). Thinking and tool calls are one line each until opened; edits open with their diff.
+
+- **Artifacts.** Edits show as diffs, rendered by Pierre (`@pierre/diffs`, with Shiki highlighting) from the patch
+  pi-durable's `edit` tool records. Files the agent writes show as highlighted code. HTML and SVG, whether written to
+  a file or in a ```` ```html ```` / ```` ```svg ```` block in a reply, get a live preview with a Code tab. Markdown
+  files render, and images load through the file API. Previews run in an iframe sandboxed without
+  `allow-same-origin`, so the agent's HTML can't reach the page, its storage or your token.
+- **Changes panel.** Every artifact in the thread, grouped by file with the newest change first; "Open" on any
+  artifact shows it there, full size.
+- **Composer.** Enter starts a new line and ⌘↩ (Ctrl+Enter) sends. Drop, paste or attach files: images go to the
+  model as images (PNG, JPEG, GIF, WebP, up to 5 MB) and text files go in the message (up to 256 KB), at most 8 per
+  message. `/` completes commands (the same ones as the terminal), `@` completes project files, drafts survive
+  reloads, and messages typed while offline are sent once the connection is back.
+- **Terminal UI.** Edits show as colored diffs. HTML, SVG, markdown and image artifacts get a number:
+  `/open <n>` opens one in your browser, from your synced copy, or from `~/.syncpi/artifacts/` for a snippet in a
+  reply. `/open` lists them.
+- **Embedding.** An app can show the web view in a webview or an iframe by opening the session URL with
+  `?embedded=1`. See `src/web/bridge.ts` for the messages: activity, the thread's title, and actions such as opening
+  a terminal one way; theme, share, panel and dialogs the other.
+
+The web view's code is in `src/web/`, one module per concern (see `main.ts`). Artifact detection is shared with the
+terminal UI in `src/shared/artifacts.ts`. The bundle is split, so the artifact renderers load only when an artifact
+is shown; the main script is about 95 KB.
 
 ## People, roles and invites
 

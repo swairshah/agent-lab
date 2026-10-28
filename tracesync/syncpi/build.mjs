@@ -26,7 +26,21 @@ await Promise.all([
 		external: [...node.external, "@earendil-works/pi-env", "@earendil-works/pi-coding-agent"],
 		banner: { js: `#!/usr/bin/env node\n${node.banner.js}` },
 	}),
-	build({ entryPoints: ["src/web/app.ts"], outfile: "dist/web/app.js", bundle: true, format: "esm", target: "es2022", minify: true, logLevel: "warning" }),
+	// The web view. Split so the artifact renderers (Pierre, Shiki and its grammars) load only when an artifact is
+	// shown; chunk names stay flat so the server's static route serves them.
+	build({
+		entryPoints: ["src/web/main.ts"],
+		outdir: "dist/web",
+		entryNames: "[name]",
+		chunkNames: "[name]-[hash]",
+		splitting: true,
+		bundle: true,
+		format: "esm",
+		target: "es2022",
+		minify: true,
+		loader: { ".svg": "text" },
+		logLevel: "warning",
+	}),
 ]);
 copyFileSync("src/web/index.html", "dist/web/index.html");
 copyFileSync("src/web/style.css", "dist/web/style.css");

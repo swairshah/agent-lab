@@ -11,7 +11,7 @@
 //          machine's pi login.
 import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -202,11 +202,18 @@ export function hostPaths(id: string, name: string): { state: string; workdir: s
 	return { state: `${HOST_SESSIONS}/${id}`, workdir: `${HOST_PROJECTS}/${id}/${name.replace(/[^A-Za-z0-9._-]/g, "-")}` };
 }
 
-/** A hash of the built server, so a host is updated only when the build changed. */
+/**
+ * A hash of everything a host runs and serves (the server, the relay and every web file, whatever the build splits it
+ * into), so a host is updated exactly when the build changed.
+ */
 function bundleVersion(): string {
 	const hash = createHash("sha1");
 	const app = appDir();
-	for (const file of ["server.mjs", "relay.mjs", "web/index.html", "web/app.js", "web/style.css"]) hash.update(readFileSync(join(app, file)));
+	const web = readdirSync(join(app, "web"), { recursive: true, encoding: "utf8" })
+		.filter((f) => statSync(join(app, "web", f)).isFile())
+		.sort()
+		.map((f) => `web/${f}`);
+	for (const file of ["server.mjs", "relay.mjs", ...web]) hash.update(file).update(readFileSync(join(app, file)));
 	return hash.digest("hex").slice(0, 16);
 }
 

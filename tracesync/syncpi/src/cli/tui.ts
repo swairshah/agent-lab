@@ -1,6 +1,9 @@
+import { parseInvite } from "../shared/commands.ts";
 // The terminal view of a session: the shared thread, who is here, the setup agent's progress and sync activity, and
 // an editor to talk to the agent. It renders the same Thread state as the web view.
 import { execFile } from "node:child_process";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
 	CombinedAutocompleteProvider,
@@ -17,10 +20,11 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { type ConvName, type EnvStatus, type InviteInfo, type Member, type Presence, ROLES, type Role, type ServerMessage, type SessionInfo } from "../shared/protocol.ts";
+import { type BranchInfo, type ConvName, type EnvStatus, type InviteInfo, type Member, type Presence, ROLES, type Role, type ServerMessage, type SessionInfo } from "../shared/protocol.ts";
+import { type Artifact, patchStats, replyArtifacts, threadArtifacts, toolArtifacts } from "../shared/artifacts.ts";
 import { type Item, Thread, toolSummary } from "../shared/thread.ts";
 import type { Connection, ConnectionState } from "./client.ts";
-import type { SessionRecord } from "./store.ts";
+import { home, type SessionRecord } from "./store.ts";
 import type { LocalDevice } from "./device.ts";
 import { expandTemplate, type LoadedPiContext, type PromptTemplateInfo } from "./pi-context.ts";
 import type { Mirror } from "./sync.ts";
@@ -77,9 +81,25 @@ const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", 
 // ---------- the transcript ----------
 
 /** Renders a Thread's items, caching each one by its revision and the width. */
+/** Artifact kinds a terminal can't show; they get a number to open with /open. */
+const OPENABLE = new Set(["html", "svg", "markdown", "image"]);
+
+/** The first lines of a patch, colored like `git diff`. */
+function diffLines(patch: string, width: number, keep = 12): string[] {
+	const body = patch.split("\n").filter((l) => !l.startsWith("---") && !l.startsWith("+++") && !l.startsWith("Index:") && !l.startsWith("====") && l.length > 0);
+	const shown = body.slice(0, keep).map((l) => {
+		const text = truncateToWidth(l.replace(/\t/g, "  "), Math.max(10, width - 4));
+		return `  ${l.startsWith("+") ? c.green(text) : l.startsWith("-") ? c.red(text) : l.startsWith("@@") ? c.cyan(text) : c.gray(text)}`;
+	});
+	if (body.length > keep) shown.push(c.gray(`  … ${body.length - keep} more lines`));
+	return shown;
+}
+
 class ThreadView implements Component {
 	thread: Thread;
 	me = "";
+	/** Numbers of the artifacts /open can show, by artifact key. */
+	artifactNumbers = new Map<string, number>();
 	/** Current names by member id, so a renamed person shows under their new name everywhere. */
 	names = new Map<string, string>();
 	#cache = new Map<string, { rev: number; width: number; lines: string[] }>();
@@ -133,6 +153,7 @@ class ThreadView implements Component {
 					lines.push(...md.render(width));
 				}
 				if (item.error) lines.push(c.red(`✗ ${item.error}`));
+				if (!item.streaming) for (const artifact of replyArtifacts(item.key, item.text)) lines.push(this.#openable(artifact));
 				return lines;
 			}
 			case "tool": {
@@ -146,6 +167,14 @@ class ThreadView implements Component {
 								: c.gray("○");
 				const summary = toolSummary(item);
 				const head = `${icon} ${c.bold(item.name)} ${c.gray(truncateToWidth(summary, Math.max(10, width - visibleWidth(item.name) - 4)))}`;
+				const artifacts = toolArtifacts(item);
+				const diff = artifacts.find((a) => a.kind === "diff");
+				if (diff !== undefined) {
+					const { added, removed } = patchStats(diff.content);
+					return [`${head} ${c.green(`+${added}`)} ${c.red(`−${removed}`)}`, ...diffLines(diff.content, width)];
+				}
+				const openable = artifacts.filter((a) => OPENABLE.has(a.kind));
+				if (openable.length > 0) return [head, ...openable.map((a) => this.#openable(a))];
 				const showOutput = item.status === "running" || item.status === "error" || item.name === "bash";
 				const tail = showOutput ? item.output.trimEnd().split("\n").filter((l) => l.length > 0) : [];
 				const keep = item.status === "done" ? 3 : 8;
@@ -156,6 +185,11 @@ class ThreadView implements Component {
 			case "notice":
 				return ["", c.gray(c.italic(`  — ${item.text}`))];
 		}
+	}
+
+	#openable(artifact: Artifact): string {
+		const n = this.artifactNumbers.get(artifact.key);
+		return `  ${c.accent("◆")} ${artifact.title} ${c.gray(`${artifact.kind}${n !== undefined ? ` · /open ${n}` : ""}`)}`;
 	}
 }
 
@@ -178,6 +212,10 @@ const COMMANDS = [
 	{ name: "links", description: "Invites that still work (admins)" },
 	{ name: "revoke", description: "Revoke an invite (admins)", argumentHint: "<code>" },
 	{ name: "name", description: "Change your name", argumentHint: "<new name>" },
+	{ name: "open", description: "Open an artifact (HTML, SVG, markdown, image) in your browser; no number lists them", argumentHint: "[n]" },
+	{ name: "compact", description: "Summarize older messages now (it also happens on its own)", argumentHint: "[instructions]" },
+	{ name: "new", description: "Start a new context; the agent no longer sees the messages above (admins)" },
+	{ name: "tree", description: "Messages and branches; /tree <n> branches before message n, /tree b<k> switches (admins)", argumentHint: "[n | b<k>]" },
 	{ name: "web", description: "Open this session in your browser" },
 	{ name: "env", description: "Show or hide the setup agent's thread" },
 	{ name: "steer", description: "Send a message that joins the agent's current run", argumentHint: "<message>" },
@@ -220,6 +258,10 @@ export class App {
 	#spinner: NodeJS.Timeout | undefined;
 	#done: () => void = () => {};
 
+	#branches: BranchInfo[] = [];
+	/** Openable artifacts in thread order; /open <n> uses this numbering. */
+	#artifacts: Artifact[] = [];
+	#branch = 0;
 	/** Your pi prompt templates: `/name args` expands before sending, as in pi. */
 	#templates: PromptTemplateInfo[] = [];
 
@@ -332,6 +374,12 @@ export class App {
 				break;
 			case "events":
 				this.#threads[message.conv].apply(message.events);
+				if (message.conv === "main") this.#numberArtifacts();
+				break;
+			case "history":
+				this.#threads[message.conv].prepend(message.entries);
+				if (message.conv === "main") this.#numberArtifacts();
+				this.#view.invalidate();
 				break;
 			case "presence":
 				this.#online = message.online;
@@ -348,6 +396,10 @@ export class App {
 				break;
 			case "invites":
 				this.#showInvites(message.invites);
+				break;
+			case "branches":
+				this.#branches = message.branches;
+				this.#branch = message.current;
 				break;
 			case "removed":
 				this.#note(c.red("you were removed from this session; your local copy stays where it is"), 600_000);
@@ -400,6 +452,16 @@ export class App {
 				if (arg.length === 0) return this.#note(c.gray("usage: /revoke <code> (see /links)"), 4_000);
 				this.#conn.send({ type: "revoke", code: arg });
 				return;
+			case "open":
+				return this.#open(arg);
+			case "compact":
+				this.#conn.send({ type: "compact", instructions: arg || undefined });
+				return;
+			case "new":
+				this.#conn.send({ type: "new" });
+				return;
+			case "tree":
+				return this.#tree(arg);
 			case "name":
 				if (arg.length === 0) return this.#note(c.gray("usage: /name <new name>"), 4_000);
 				this.#conn.send({ type: "rename", name: arg });
@@ -475,6 +537,82 @@ export class App {
 		}
 	}
 
+	/** Numbers the thread's openable artifacts in order, for /open and the ◆ lines. */
+	#numberArtifacts(): void {
+		this.#artifacts = threadArtifacts(this.#threads.main.state.items).filter((a) => OPENABLE.has(a.kind));
+		const numbers = new Map(this.#artifacts.map((a, n) => [a.key, n + 1]));
+		if ([...numbers].some(([k, n]) => this.#view.artifactNumbers.get(k) !== n)) {
+			this.#view.artifactNumbers = numbers;
+			this.#view.invalidate();
+		}
+	}
+
+	/**
+	 * Opens an artifact in your browser (or default app): a project file from your synced copy, a snippet from a reply
+	 * from a file written for it under ~/.syncpi/artifacts.
+	 */
+	#open(arg: string): void {
+		if (!/^\d+$/.test(arg)) {
+			if (this.#artifacts.length === 0) return this.#note(c.gray("no HTML, SVG, markdown or image artifacts in this thread yet"), 6_000);
+			const lines = this.#artifacts.map((a, n) => `  ${c.bold(String(n + 1).padStart(3))}  ${a.title} ${c.gray(a.kind)}`);
+			return this.#note([c.bold("artifacts") + c.gray("  (/open <n> opens one)"), ...lines].join("\n"), 30_000);
+		}
+		const artifact = this.#artifacts[Number(arg) - 1];
+		if (artifact === undefined) return this.#note(c.gray(`no artifact ${arg}; /open lists them`), 5_000);
+		let file: string | undefined;
+		if (artifact.path !== undefined && this.#mirror !== undefined) {
+			const local = isAbsolute(artifact.path) ? artifact.path : join(this.#mirror.dir, artifact.path);
+			if (existsSync(local)) file = local;
+		}
+		if (file === undefined) {
+			const dir = join(home, "artifacts", this.#record.id);
+			mkdirSync(dir, { recursive: true });
+			const ext = artifact.kind === "markdown" ? "md" : artifact.kind === "image" ? "txt" : artifact.kind;
+			file = join(dir, `${artifact.key.replace(/[^\w.-]/g, "_")}.${ext}`);
+			writeFileSync(file, artifact.content);
+		}
+		openUrl(file);
+		this.#note(c.gray(`opened ${file}`), 5_000);
+	}
+
+	/** The messages you can branch before, numbered, from the newest context. */
+	#points(): { n: number; key: string; text: string; author: string }[] {
+		return this.#threads.main.state.items
+			.filter((i) => i.kind === "user" && /^\d+$/.test(i.key))
+			.map((i, n) => {
+				const item = i as Extract<typeof i, { kind: "user" }>;
+				return { n: n + 1, key: item.key, text: item.text, author: (item.memberId ? this.#view.names.get(item.memberId) : undefined) ?? item.author ?? "?" };
+			});
+	}
+
+	#tree(arg: string): void {
+		const points = this.#points();
+		const branch = arg.match(/^b(\d+)$/);
+		if (branch !== null) {
+			const target = this.#branches[Number(branch[1])];
+			if (target === undefined) return this.#note(c.gray(`no branch b${branch[1]}; /tree lists them`), 5_000);
+			this.#conn.send({ type: "switchBranch", id: target.id });
+			return;
+		}
+		if (/^\d+$/.test(arg)) {
+			const point = points.find((p) => p.n === Number(arg));
+			if (point === undefined) return this.#note(c.gray(`no message ${arg}; /tree lists them`), 5_000);
+			this.#conn.send({ type: "fork", before: point.key });
+			// As in pi: the message comes back into the editor, to edit and send on the new branch.
+			this.#editor.setText(point.text);
+			return;
+		}
+		const lines = [c.bold("messages") + c.gray("  (/tree <n> branches just before one and puts it back in your editor)")];
+		for (const p of points.slice(-15)) lines.push(`  ${c.bold(String(p.n).padStart(3))}  ${personColor(p.author)(p.author)} ${c.gray(truncateToWidth(p.text.replace(/\s+/g, " "), 70))}`);
+		if (points.length > 15) lines.splice(1, 0, c.gray(`  … ${points.length - 15} earlier`));
+		lines.push(c.bold("branches") + c.gray("  (/tree b<k> switches everyone to one)"));
+		this.#branches.forEach((b, k) => {
+			const by = b.by ? this.#view.names.get(b.by) : undefined;
+			lines.push(`  ${b.id === this.#branch ? c.green("●") : c.gray("○")} ${c.bold(`b${k}`)} ${b.label}${by ? c.gray(` · by ${by}`) : ""}${c.gray(` · ${new Date(b.at).toLocaleString()}`)}`);
+		});
+		this.#note(lines.join("\n"), 40_000);
+	}
+
 	#setMembers(members: Member[]): void {
 		this.#members = members;
 		const mine = members.find((m) => m.id === this.#me?.id);
@@ -546,7 +684,9 @@ export class App {
 		const waiting = this.#setup !== undefined ? c.gray("the session is being created; type away, messages are sent once it is up") : c.gray("connecting…");
 		const title = this.#showing === "setup" ? c.yellow(" · setup agent (Esc to go back)") : "";
 		const me = this.#me === undefined ? "" : c.gray(` · you: ${this.#me.name}, ${this.#me.role}`);
-		this.#header.lines = [`${c.bold(c.accent("syncpi"))} ${c.bold(name)} ${c.gray(this.#record.url)}${me}${title}`, people || waiting];
+		const branchInfo = this.#branches.find((b) => b.id === this.#branch);
+		const branchLabel = branchInfo !== undefined && this.#branches.length > 1 ? c.yellow(` · ${branchInfo.label}`) : "";
+		this.#header.lines = [`${c.bold(c.accent("syncpi"))} ${c.bold(name)} ${c.gray(this.#record.url)}${branchLabel}${me}${title}`, people || waiting];
 
 		const thread = this.#threads[this.#showing].state;
 		const parts: string[] = [];
@@ -557,6 +697,7 @@ export class App {
 		} else if (this.#connState !== "open") parts.push(c.yellow(`${this.#connState}${this.#connDetail ? ` (${this.#connDetail})` : ""}`));
 		if (thread.retry) parts.push(c.yellow(`retrying: ${thread.retry}`));
 		else if (thread.busy) parts.push(c.accent(`${SPINNER[this.#frame % SPINNER.length]} working${this.#showing === "main" ? " · Esc to stop" : ""}`));
+		if (thread.compacting) parts.push(c.accent("summarizing older messages…"));
 		if (thread.queued > 0) parts.push(`${thread.queued} queued`);
 		if (this.#setup === undefined) parts.push(envLabel(this.#env));
 		if (this.#mirror !== undefined) parts.push(c.gray(`sync ↓${this.#mirror.pulled} ↑${this.#mirror.pushed}${this.#mirror.conflicts.length ? c.yellow(` ⚠${this.#mirror.conflicts.length}`) : ""}`));
@@ -572,22 +713,7 @@ export class App {
 }
 
 /** `/invite [email] [role] [7d|12h|never] [--uses N] [--link]`: everything optional; no email makes a link. */
-export function parseInvite(arg: string): { email?: string; role?: Role; expiresInDays?: number; maxUses?: number } | string {
-	const out: { email?: string; role?: Role; expiresInDays?: number; maxUses?: number } = {};
-	const words = arg.split(/\s+/).filter((w) => w.length > 0);
-	for (let i = 0; i < words.length; i++) {
-		const w = words[i]!;
-		if (w === "--link" || w === "link") continue;
-		if (w.includes("@")) out.email = w;
-		else if (ROLES.includes(w as Role)) out.role = w as Role;
-		else if (/^\d+d$/.test(w)) out.expiresInDays = Number(w.slice(0, -1));
-		else if (/^\d+h$/.test(w)) out.expiresInDays = Number(w.slice(0, -1)) / 24;
-		else if (w === "never") out.expiresInDays = 0;
-		else if (w === "--uses" && /^\d+$/.test(words[i + 1] ?? "")) out.maxUses = Number(words[++i]);
-		else return `don't understand "${w}"; usage: /invite [email] [admin|editor|viewer] [7d|12h|never] [--uses N]`;
-	}
-	return out;
-}
+export { parseInvite } from "../shared/commands.ts";
 
 function envLabel(env: EnvStatus): string {
 	switch (env.status) {

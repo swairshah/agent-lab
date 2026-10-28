@@ -4,12 +4,22 @@ import type { AgentEvent } from "@earendil-works/pi-durable";
 
 type Json = unknown;
 type Block = { type: string; text?: string; thinking?: string; id?: string; name?: string; arguments?: Record<string, Json> };
-type Message = { role: string; content?: string | Block[]; stopReason?: string; errorMessage?: string; toolCallId?: string; isError?: boolean };
+type Message = { role: string; content?: string | Block[]; provider?: string; model?: string; stopReason?: string; errorMessage?: string; toolCallId?: string; isError?: boolean };
 type Entry = { id: number | string; kind: string; data?: Json; model?: readonly Message[] };
 
 /** `author` is the name at the time; renderers show the member's current name when they know `memberId`. */
-export type UserItem = { kind: "user"; key: string; author?: string; memberId?: string; text: string; rev: number };
-export type AssistantItem = { kind: "assistant"; key: string; text: string; thinking: string; error?: string; streaming: boolean; rev: number };
+export type UserItem = {
+	kind: "user";
+	key: string;
+	author?: string;
+	memberId?: string;
+	text: string;
+	/** Files added to the message; images also as data URLs, from what the model was sent. */
+	attachments?: { name: string; kind: "image" | "text"; url?: string }[];
+	rev: number;
+};
+/** `model` is the `provider/model` that wrote it, when known. */
+export type AssistantItem = { kind: "assistant"; key: string; model?: string; text: string; thinking: string; error?: string; streaming: boolean; rev: number };
 export type ToolItem = {
 	kind: "tool";
 	key: string;
@@ -17,6 +27,8 @@ export type ToolItem = {
 	args: Record<string, Json>;
 	output: string;
 	status: "pending" | "running" | "done" | "error";
+	/** The tool's structured result for UIs, e.g. `{ diff, patch }` from `edit`. */
+	details?: Json;
 	rev: number;
 };
 export type NoticeItem = { kind: "notice"; key: string; text: string; rev: number };
@@ -31,13 +43,16 @@ export type ThreadState = {
 	retry?: string;
 	/** Total spend of the conversation in dollars. */
 	cost: number;
+	/** Older messages are being summarized (on its own as the context fills, or after /compact). */
+	compacting: boolean;
 	model?: string;
+    thinkingLevel?: string;
 	/** Grows with every change, so renderers can skip work. */
 	rev: number;
 };
 
 export function emptyThread(): ThreadState {
-	return { items: [], busy: false, queued: 0, cost: 0, rev: 0 };
+	return { items: [], busy: false, queued: 0, cost: 0, compacting: false, rev: 0 };
 }
 
 function textOf(content: Message["content"]): string {
@@ -56,6 +71,16 @@ export class Thread {
 	#live: AssistantItem | undefined;
 	#liveContent: Block[] = [];
 	#tools = new Map<string, ToolItem>();
+
+	/** Puts earlier entries (from before the current context) in front of what is shown. */
+	prepend(entries: readonly unknown[]): void {
+		const earlier = new Thread();
+		for (const entry of entries) earlier.#entry(entry as Entry);
+		const shown = new Set(this.state.items.map((i) => i.key));
+		this.state.items = [...earlier.state.items.filter((i) => !shown.has(i.key)), ...this.state.items];
+		for (const [key, tool] of earlier.#tools) if (!this.#tools.has(key)) this.#tools.set(key, tool);
+		this.state.rev++;
+	}
 
 	apply(events: readonly AgentEvent[]): void {
 		for (const event of events) this.#event(event);
@@ -91,9 +116,11 @@ export class Thread {
 				for (const entry of event.entries) this.#entry(entry as Entry);
 				this.state.busy = event.run !== undefined;
 				this.state.queued = event.inbox.length;
+				this.state.thinkingLevel = event.agent.thinkingLevel;
 				const model = event.agent.model;
 				if (model !== undefined) this.state.model = `${model.provider}/${model.modelId}`;
 				this.state.cost = totalCost(event.usage);
+				this.state.compacting = event.compactions.length > 0;
 				if (event.generation?.message !== undefined) this.#startLive(event.generation.message as Message);
 				for (const slot of event.tools) {
 					const tool = this.#tools.get(slot.callId);
@@ -135,9 +162,12 @@ export class Thread {
 			case "tool_execution_update": {
 				if (event.parentToolCallId !== undefined) return;
 				const tool = this.#tools.get(event.toolCallId);
-				if (tool === undefined || event.output === undefined) return;
-				if ("set" in event.output) tool.output = event.output.set;
-				else tool.output = tool.output.slice(event.output.trimStart ?? 0) + (event.output.append ?? "");
+				if (tool === undefined) return;
+				if (event.details !== undefined) tool.details = event.details;
+				if (event.output !== undefined) {
+					if ("set" in event.output) tool.output = event.output.set;
+					else tool.output = tool.output.slice(event.output.trimStart ?? 0) + (event.output.append ?? "");
+				}
 				this.#touch(tool);
 				return;
 			}
@@ -158,13 +188,18 @@ export class Thread {
 			case "task_failed":
 				this.#push({ kind: "notice", key: `fail:${event.taskId}`, text: `${event.kind} failed: ${event.message}`, rev: 0 });
 				return;
+			case "compaction_start":
+				s.compacting = true;
+				return;
 			case "compaction_end":
+				s.compacting = false;
 				if (event.error !== undefined) this.#push({ kind: "notice", key: `compact:${event.taskId}`, text: `compaction failed: ${event.error}`, rev: 0 });
 				return;
 			case "usage_changed":
 				s.cost = totalCost(event.usage);
 				return;
 			case "agent_changed":
+                s.thinkingLevel = event.agent.thinkingLevel;
 				if (event.agent.model !== undefined) s.model = `${event.agent.model.provider}/${event.agent.model.modelId}`;
 				return;
 			default:
@@ -175,7 +210,7 @@ export class Thread {
 	#startLive(message: Message): void {
 		this.#liveContent = typeof message.content === "string" ? [{ type: "text", text: message.content }] : [...(message.content ?? [])].map((b) => ({ ...b }));
 		if (this.#live === undefined) {
-			this.#live = { kind: "assistant", key: `live:${this.state.items.length}`, text: "", thinking: "", streaming: true, rev: 0 };
+			this.#live = { kind: "assistant", key: `live:${this.state.items.length}`, model: modelOf(message) ?? this.state.model, text: "", thinking: "", streaming: true, rev: 0 };
 			this.#push(this.#live);
 		}
 		this.#syncLive();
@@ -231,6 +266,7 @@ export class Thread {
 				const item: AssistantItem = {
 					kind: "assistant",
 					key,
+					model: modelOf(message),
 					text: textOf(content),
 					thinking: thinkingOf(content),
 					streaming: false,
@@ -255,21 +291,29 @@ export class Thread {
 				const tool = this.#tool(message.toolCallId, (message as { toolName?: string }).toolName ?? "tool", {});
 				tool.output = textOf(message.content);
 				tool.status = message.isError === true ? "error" : "done";
+				const details = (message as { details?: Json }).details;
+				if (details !== undefined) tool.details = details;
 				this.#touch(tool);
 				return;
 			}
 			case "pi.reset":
-				this.#push({ kind: "notice", key, text: "context reset", rev: 0 });
+				this.#push({ kind: "notice", key, text: "new context: the agent no longer sees the messages above", rev: 0 });
 				return;
 			case "pi.compaction":
-				this.#push({ kind: "notice", key, text: "older messages were summarized (compaction)", rev: 0 });
+				this.#push({ kind: "notice", key, text: "older messages were summarized; the agent now sees the summary instead", rev: 0 });
 				return;
 			case "syncpi.notice":
 				this.#push({ kind: "notice", key, text: String((entry.data as { text?: string })?.text ?? ""), rev: 0 });
 				return;
 			case "syncpi.message": {
-				const data = entry.data as { author?: string; memberId?: string; text?: string };
-				this.#push({ kind: "user", key, author: data.author, memberId: data.memberId, text: data.text ?? textOf(message?.content), rev: 0 });
+				const data = entry.data as { author?: string; memberId?: string; text?: string; attachments?: { name: string; kind: "image" | "text" }[] };
+				const images = Array.isArray(message?.content) ? message.content.filter((b) => b.type === "image") : [];
+				let image = 0;
+				const attachments = data.attachments?.map((a) => {
+					const block = a.kind === "image" ? (images[image++] as { data?: string; mimeType?: string } | undefined) : undefined;
+					return block?.data ? { ...a, url: `data:${block.mimeType};base64,${block.data}` } : a;
+				});
+				this.#push({ kind: "user", key, author: data.author, memberId: data.memberId, text: data.text ?? textOf(message?.content), attachments, rev: 0 });
 				return;
 			}
 			default:
@@ -284,6 +328,10 @@ type Change =
 	| { type: "text_delta" | "thinking_delta"; contentIndex: number; delta: string }
 	| { type: "toolcall_delta"; contentIndex: number; path: readonly (string | number)[]; delta: string }
 	| { type: "message"; message: unknown };
+
+function modelOf(message: Message): string | undefined {
+	return message.model === undefined ? undefined : message.provider === undefined ? message.model : `${message.provider}/${message.model}`;
+}
 
 function totalCost(usage: { models: Record<string, { cost?: { total?: number } }>; tools: Record<string, { cost?: { total?: number } }> }): number {
 	let total = 0;

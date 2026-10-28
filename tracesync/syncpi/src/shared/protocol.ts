@@ -30,6 +30,20 @@ export type Presence = { memberId: string; name: string; client: "cli" | "web"; 
 export type Where = "device" | "vm";
 
 /**
+ * A file added to a message (dropped or pasted). Images go to the model as images; text files are included in the
+ * message under their name. `data` is base64.
+ */
+export type Attachment = { name: string; mimeType: string; data: string };
+
+/** Limits the server enforces on attachments; clients check them first to say no early. */
+export const ATTACHMENT_LIMITS = { count: 8, imageBytes: 5 * 1024 * 1024, textBytes: 256 * 1024 };
+
+export const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/** One branch of the shared thread: the original, or a fork made with /tree. */
+export type BranchInfo = { id: number; label: string; by?: string; at: number; parent?: number; before?: string };
+
+/**
  * A member's pi setup, as their pi would use it in this folder: the skills block pi puts in its system prompt (paths
  * are on their machine, where their requests run) and the AGENTS.md / CLAUDE.md files it would read.
  */
@@ -62,7 +76,7 @@ export type SessionInfo = {
 export type FileHash = string | null;
 
 export type ClientMessage =
-	| { type: "submit"; requestId: string; text: string; mode?: "followUp" | "steer"; where?: Where }
+	| { type: "submit"; requestId: string; text: string; mode?: "followUp" | "steer"; where?: Where; attachments?: Attachment[] }
 	/** This client runs its member's requests on its machine. */
 	| { type: "device"; device: DeviceInfo }
 	/** A fence finished: the local copy is in step with the session as of the fence. */
@@ -78,12 +92,29 @@ export type ClientMessage =
 	| { type: "remove"; memberId: string }
 	/** Anyone: change your own display name. */
 	| { type: "rename"; name: string }
+	/** Editors: summarize older messages now (the agent also does this on its own as its context fills). */
+	| { type: "compact"; instructions?: string }
+	/** Admins: start a new context; the agent no longer sees the messages above. */
+	| { type: "new" }
+	/** Anyone: list the thread's branches. */
+	| { type: "branches" }
+	/** Admins: branch the thread just before one of its messages (`before` is the item key) and switch everyone to it. */
+	| { type: "fork"; before: string }
+	/** Admins: switch the thread back to another branch. */
+	| { type: "switchBranch"; id: number }
+	| { type: "configure"; model: string; thinkingLevel?: string }
 	| { type: "ping" };
 
 export type ServerMessage =
+    | { type: "accepted"; requestId: string }
 	| { type: "welcome"; me: Member; session: SessionInfo; members: Member[] }
 	/** Agent events of one conversation. The first batch of each conversation starts with a snapshot. */
 	| { type: "events"; conv: ConvName; events: AgentEvent[] }
+	/**
+	 * Entries from before the snapshot's context (before a /new or a summary), oldest first. The model no longer sees
+	 * them, but people still do. Sent right after a snapshot.
+	 */
+	| { type: "history"; conv: ConvName; entries: unknown[] }
 	| { type: "presence"; online: Presence[]; members: Member[] }
 	| { type: "env"; env: EnvStatus }
 	/**
@@ -93,6 +124,8 @@ export type ServerMessage =
 	| { type: "files"; version: number; full?: boolean; changed: Record<string, FileHash> }
 	| { type: "invite"; url: string; invite: InviteInfo }
 	| { type: "invites"; invites: InviteInfo[] }
+	/** The thread's branches; the current one is what everyone sees and talks to. */
+	| { type: "branches"; branches: BranchInfo[]; current: number }
 	/** Sent to a member who was removed, right before their connection closes (code 4001). */
 	| { type: "removed" }
 	/** Where the shared thread's current run executes, e.g. "ada's machine" or "the session VM". */

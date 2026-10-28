@@ -12,7 +12,7 @@ import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { Readable } from "node:stream";
 import { parseArgs } from "node:util";
-import { type Member, parseShareUrl, type Role, type ServerMessage } from "../shared/protocol.ts";
+import { type BranchInfo, type Member, parseShareUrl, type Role, type ServerMessage } from "../shared/protocol.ts";
 import { Thread, toolSummary } from "../shared/thread.ts";
 import { Connection, join as joinSession } from "./client.ts";
 import {
@@ -156,6 +156,16 @@ async function start(dir: string): Promise<SessionRecord> {
 	return { ...record, provisioner: child.pid };
 }
 
+/** Runs the background setup again for a session whose setup failed. */
+function retryProvision(record: SessionRecord): SessionRecord {
+	const log = openSync(sessionLog(record.id), "a");
+	const child = spawn(process.execPath, [process.argv[1]!, "__provision", record.id], { detached: true, stdio: ["ignore", log, log] });
+	child.unref();
+	const next: SessionRecord = { ...record, status: "provisioning", step: "starting", error: undefined, provisioner: child.pid };
+	saveSession(next);
+	return next;
+}
+
 /** `syncpi __provision <id>`: the background half of `start`. Reports each step in the session record. */
 async function provision(id: string): Promise<void> {
 	const record = loadSession(id);
@@ -249,9 +259,15 @@ function uniqueDir(base: string): string {
 	for (let i = 2; ; i++) if (!existsSync(`${base}-${i}`)) return `${base}-${i}`;
 }
 
-async function attach(record: SessionRecord): Promise<void> {
+async function attach(initial: SessionRecord): Promise<void> {
+	let record = initial;
 	if (record.status === "failed") {
-		throw new Error(`this folder's session could not be set up: ${record.error}\n  details: ${sessionLog(record.id)}\n  start over with: syncpi rm && syncpi`);
+		// A session you started here: try its setup again (same session, same URL). One you joined can't be set up here.
+		if (record.role !== "owner" || record.setup === undefined) {
+			throw new Error(`this folder's session could not be set up: ${record.error}\n  details: ${sessionLog(record.id)}\n  start over with: syncpi rm && syncpi`);
+		}
+		say(`\x1b[2m· the last setup failed (${record.error}); trying again\x1b[0m`);
+		record = retryProvision(record);
 	}
 	const conn = new Connection(record.url, record.token);
 	const mirror = opts["no-sync"] ? undefined : new Mirror(record.id, record.dir, conn);
@@ -304,6 +320,7 @@ async function runHeadless(record: SessionRecord, conn: Connection, mirror: Mirr
 	const thread = new Thread();
 	const printed = new Set<string>();
 	let members: Member[] = [];
+	let branches: BranchInfo[] = [];
 	const out = (line: string) => process.stdout.write(`${line}\n`);
 	const flush = () => {
 		for (const item of thread.state.items) {
@@ -321,6 +338,10 @@ async function runHeadless(record: SessionRecord, conn: Connection, mirror: Mirr
 	conn.onMessage = (message: ServerMessage) => {
 		if (device?.handle(message)) return;
 		if (message.type === "target") out(`target ${message.label}`);
+		else if (message.type === "history" && message.conv === "main") {
+			thread.prepend(message.entries);
+			flush();
+		}
 		else if (message.type === "events" && message.conv === "main") {
 			thread.apply(message.events);
 			flush();
@@ -334,6 +355,10 @@ async function runHeadless(record: SessionRecord, conn: Connection, mirror: Mirr
 		} else if (message.type === "welcome") out(`welcome ${message.me.name} ${message.me.role}`);
 		else if (message.type === "invites") out(`invites ${message.invites.map((i) => `${i.code}:${i.email ?? "link"}:${i.role}`).join(" ")}`);
 		else if (message.type === "removed") out("removed");
+		else if (message.type === "branches") {
+			branches = message.branches;
+			out(`branches current=${message.branches.findIndex((b) => b.id === message.current)} ${message.branches.map((b) => b.label).join(",")}`);
+		}
 		else if (message.type === "error") out(`error ${message.message}`);
 	};
 	conn.onState = (state, detail) => {
@@ -355,6 +380,13 @@ async function runHeadless(record: SessionRecord, conn: Connection, mirror: Mirr
 		else if (command === "/role") conn.send({ type: "setRole", memberId: memberId(words[0] ?? ""), role: words[1] as Role });
 		else if (command === "/remove") conn.send({ type: "remove", memberId: memberId(words[0] ?? "") });
 		else if (command === "/links") conn.send({ type: "invites" });
+		else if (command === "/compact") conn.send({ type: "compact", instructions: words.join(" ") || undefined });
+		else if (command === "/new") conn.send({ type: "new" });
+		else if (command === "/tree" && /^b\d+$/.test(words[0] ?? "")) conn.send({ type: "switchBranch", id: branches[Number(words[0]!.slice(1))]?.id ?? -1 });
+		else if (command === "/tree" && /^\d+$/.test(words[0] ?? "")) {
+			const users = thread.state.items.filter((i) => i.kind === "user" && /^\d+$/.test(i.key));
+			conn.send({ type: "fork", before: users[Number(words[0]) - 1]?.key ?? "" });
+		}
 		else if (command === "/revoke") conn.send({ type: "revoke", code: words[0] ?? "" });
 		else if (text.startsWith("/vm ")) conn.send({ type: "submit", requestId: randomUUID(), text: text.slice(4), where: "vm" });
 		else if (text.length > 0) conn.send({ type: "submit", requestId: randomUUID(), text, where: device === undefined ? "vm" : "device" });

@@ -21,10 +21,13 @@ execFileSync("git", ["add", "."], { cwd: project });
 execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], { cwd: project });
 
 type Client = { proc: ChildProcessWithoutNullStreams; lines: string[]; name: string };
+/** Every client started, so the cleanup stops them all and the test can exit. */
+const clients: Client[] = [];
 
 function client(name: string, home: string, cwd: string, args: string[]): Client {
 	const proc = spawn(process.execPath, [cli, "--headless", "--name", name, ...args], { cwd, env: { ...process.env, SYNCPI_HOME: home } });
 	const c: Client = { proc, lines: [], name };
+	clients.push(c);
 	let buf = "";
 	proc.stdout.on("data", (d) => {
 		buf += d;
@@ -182,6 +185,21 @@ try {
 	if (oldToken.status !== 401) throw new Error("a removed member's token still works");
 	ok("email invites need the matching exe.dev sign-in, in a browser or a terminal (approved with a code)");
 
+	// Context: /compact summarizes, /tree branches and switches back, /new starts over; branch and new are for admins.
+	say(owner, "/compact");
+	await waitFor("summary", saw(owner, "-- older messages were summarized"), 30_000);
+	say(bob, "/new");
+	await waitFor("editor can't /new", saw(bob, "error only admins can start a new context"));
+	say(owner, "/tree 1");
+	await waitFor("branched", saw(bob, "branches current=1 main,branch 1"));
+	say(owner, "said on the branch");
+	await waitFor("branch answer", saw(bob, "agent: (faux) said on the branch"));
+	say(owner, "/tree b0");
+	await waitFor("back on main", () => bob.lines.filter((l) => l.startsWith("branches current=0")).length >= 2);
+	say(owner, "/new");
+	await waitFor("new context", saw(bob, "-- new context: the agent no longer sees the messages above"));
+	ok("/compact summarizes, /tree branches and switches back for everyone, /new starts a new context");
+
 	say(owner, "/quit");
 	await waitFor("owner left", saw(owner, "done demo"));
 	await waitFor("owner exited", () => owner.proc.exitCode !== null);
@@ -189,9 +207,9 @@ try {
 	await waitFor("owner back", saw(owner, "[bob] hello from bob"), 30_000);
 	ok("rerunning syncpi in the folder rejoins the same session and thread");
 } finally {
-	for (const c of [owner, bob]) c?.proc.stdin.end("/quit\n");
+	for (const c of clients) if (c.proc.exitCode === null) c.proc.stdin.end("/quit\n");
 	await new Promise((r) => setTimeout(r, 2_500));
-	for (const c of [owner, bob]) c?.proc.kill();
+	for (const c of clients) c.proc.kill();
 	try {
 		execFileSync(process.execPath, [cli, "rm"], { cwd: project, env: { ...process.env, SYNCPI_HOME: ownerHome }, stdio: "ignore" });
 	} catch {}
