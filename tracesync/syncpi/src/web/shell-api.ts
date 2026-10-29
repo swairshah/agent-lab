@@ -112,5 +112,4 @@ export function zoomBy(by: number): void {
 			if (frame.contentDocument) applyZoom(frame.contentDocument);
 		} catch {}
 	}
-	(top as Window & { syncpiShell?: Shell }).syncpiShell?.toast(`Text size ${Math.round(next * 100)}%`);
 }
