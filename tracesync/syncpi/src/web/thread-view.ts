@@ -7,6 +7,7 @@ import type { ConvName, LineComment } from "../shared/protocol.ts";
 import type { Item, ToolItem, UserItem } from "../shared/thread.ts";
 import { isQuietTool, type Milestone, milestoneOf, toolGroupSummary, toolSummary } from "../shared/thread.ts";
 import { artifactCard, type CommentHandler, disposeWithin, type ImageLoader, renderCode } from "./artifacts.ts";
+import { annotatable, captureImage } from "./annotate.ts";
 import { renderDiagram } from "./diagrams.ts";
 import type { FindBlock, FindTarget } from "./find.ts";
 import { rangeOf, readText, setFolded, setSource, type TextMap } from "./find-text.ts";
@@ -586,6 +587,7 @@ export class ThreadView {
 	#upgradeCode(body: HTMLElement, key: string, text: string): void {
 		const artifacts = replyArtifacts(key, text);
 		let next = 0;
+		let diagrams = 0;
 		for (const slot of body.querySelectorAll<HTMLElement>(".code-slot")) {
 			const lang = slot.dataset.lang ?? "";
 			const code = slot.textContent ?? "";
@@ -594,7 +596,7 @@ export class ThreadView {
 			if (lang === "mermaid") {
 				const host = el("div");
 				slot.replaceWith(host);
-				renderDiagram(host, code);
+				renderDiagram(host, code, `${key}:diagram${diagrams++}`);
 			} else if (artifact !== undefined) {
 				slot.replaceWith(artifactCard(artifact, { size: "inline", onOpen: this.#options.onOpenArtifact, loadImage: this.#options.loadImage, onComment: this.#options.onComment }));
 			} else if (lang !== "" && code.split("\n").length > 1) {
@@ -645,8 +647,11 @@ export class ThreadView {
 		const link = el("a");
 		link.target = "_blank";
 		const image = Object.assign(el("img"), { alt: title, title });
-		link.append(image);
+		const surface = el("span", "graphic-box graphic-image");
+		surface.append(image);
+		link.append(surface);
 		box.append(link);
+		annotatable({ key: `shot:${path}`, title: `the screenshot "${title}"`, surface, frame: box, capture: () => captureImage(image) });
 		void this.#options.loadRecording(path.split("/").pop()!).then((url) => {
 			if (url) {
 				image.src = url;

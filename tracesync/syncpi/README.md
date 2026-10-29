@@ -109,6 +109,21 @@ session details. It follows the system's light or dark theme by default and work
   a file or in a ```` ```html ```` / ```` ```svg ```` block in a reply, get a live preview with a Code tab. Markdown
   files render, and images load through the file API. Previews run in an iframe sandboxed without
   `allow-same-origin`, so the agent's HTML can't reach the page, its storage or your token.
+- **Comments on part of a graphic.** Images, HTML and SVG previews, Mermaid diagrams and the agent's screenshots
+  have a Comment button (top right, on hover).
+  - **Marking:** in comment mode, click to mark a point or drag to mark an area, then write the comment. Enter adds
+    it and Esc drops it.
+  - **Waiting together:** comments aren't sent one by one. They wait on the graphic, numbered, with a bar under it,
+    and everyone sees them as they're made and written. Anyone can add their own.
+  - **Sending:** Send (or ⌘↩ in a comment) puts them all in the thread as one message. The message lists who said
+    what and where, with a picture of the graphic marked with the numbers in each person's color. The comments then
+    leave the graphic for everyone.
+  - **Where marks sit:** they're fractions of the graphic's size, so they land on the same spot on every screen and
+    move with a diagram as it's panned and zoomed.
+  - **The picture:** an HTML preview is drawn inside its own sandboxed frame (`src/web/capture-frame.ts`, with
+    `modern-screenshot`), since the page can't read it.
+  - **Kept in memory:** the server keeps waiting comments the way it keeps drafts, until it restarts. On a graphic
+    in your side thread they're yours alone (`src/web/annotate.ts`).
 - **Changes panel.** Every artifact in the thread, grouped by file with the newest change first; "Open" on any
   artifact shows it there, full size.
 - **Composer.** Enter starts a new line and ⌘↩ (Ctrl+Enter) sends. Drop, paste or attach files: images go to the
@@ -171,10 +186,11 @@ npm run typecheck
 npm run smoke      # local server + scripted model: owner and collaborator, chat, sharing, two-way sync, rejoin
 npm run test:search  # Find and the palette: unit tests, then Chrome on a scripted session and the app's host
 npm run test:side    # side threads: two people, a terminal, two tabs and the app; nothing reaches the other person
+npm run test:annotate  # comments on part of a graphic: two people, an SVG, HTML, a diagram and an image file
 npm --prefix ../syncpi-extension test   # /sync: a real pi (RPC mode, scripted model) and a collaborator take turns
 ```
 
-`test:search` and `test:side` drive Google Chrome through Playwright (`channel: "chrome"`); set `PLAYWRIGHT_CHROMIUM` to a Chromium
+`test:search`, `test:side` and `test:annotate` drive Google Chrome through Playwright (`channel: "chrome"`); set `PLAYWRIGHT_CHROMIUM` to a Chromium
 binary to use that instead. It builds first, and needs nothing else running.
 
 Verified on 2026-10-27:

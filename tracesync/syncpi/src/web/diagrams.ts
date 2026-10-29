@@ -2,6 +2,7 @@
 // ⌘-scroll or pinch to zoom (plain scrolling still scrolls the thread), buttons to recenter, zoom and copy the
 // source. Mermaid is large, so it loads only when a diagram first appears. It runs with securityLevel "strict":
 // labels can't carry HTML or script, and its output is sanitized before it reaches the page.
+import { annotatable, captureSvg } from "./annotate.ts";
 import { renderCode } from "./artifacts.ts";
 import { el } from "./dom.ts";
 
@@ -151,8 +152,11 @@ function button(name: keyof typeof ICONS, title: string): HTMLButtonElement {
 	return b;
 }
 
-/** Draws `source` into `host` as a viewer; a diagram that doesn't parse opens on its source with the reason. */
-export function renderDiagram(host: HTMLElement, source: string): void {
+/**
+ * Draws `source` into `host` as a viewer; a diagram that doesn't parse opens on its source with the reason. `key`
+ * (the same on every screen) lets parts of it be commented on.
+ */
+export function renderDiagram(host: HTMLElement, source: string, key?: string): void {
 	host.className = "viewer";
 	const preview = el("button", "tab", "Preview");
 	const code = el("button", "tab", "Source");
@@ -213,6 +217,13 @@ export function renderDiagram(host: HTMLElement, source: string): void {
 			drawing?.style.setProperty("max-width", "none");
 			stage.style.height = `${Math.min(MAX_HEIGHT, height + 48)}px`;
 			panZoom = new PanZoom(stage, canvas, width, height);
+			// Marks sit on the drawing, so they move with it as it's panned and zoomed.
+			if (key !== undefined && drawing !== null) {
+				const surface = el("div", "diagram-surface");
+				Object.assign(surface.style, { width: `${width}px`, height: `${height}px` });
+				canvas.append(surface);
+				annotatable({ key, title: "the diagram in a reply", surface, frame: stage, capture: () => captureSvg(drawing, width, height) });
+			}
 			// Fit once the frame has its size.
 			requestAnimationFrame(() => panZoom?.recenter());
 		})

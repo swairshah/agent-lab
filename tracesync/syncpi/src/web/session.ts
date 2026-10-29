@@ -1,12 +1,12 @@
 // The web view's live session: one WebSocket (reconnecting, each time from a fresh snapshot), the state it carries,
 // and an outbox so a message typed while offline is sent once the connection is back. Views subscribe to the parts
 // they show; this module knows nothing about the DOM.
-import type { Attachment, BranchInfo, ClientMessage, LineComment, ConvName, EnvStatus, InviteInfo, LandInfo, Member, SideInfo, Presence, ServerMessage, SessionInfo, View, Where } from "../shared/protocol.ts";
+import type { Attachment, BranchInfo, ClientMessage, LineComment, ConvName, EnvStatus, InviteInfo, LandInfo, Member, SideInfo, Presence, ServerMessage, SessionInfo, SharedMark, View, Where } from "../shared/protocol.ts";
 import { draftText, fromBase64, replaceText, toBase64, Y } from "../shared/drafts.ts";
 import { Thread } from "../shared/thread.ts";
 import { storage } from "./dom.ts";
 
-export type Change = "session" | "thread" | "people" | "env" | "invites" | "branches" | "files" | "connection" | "target" | "drafts" | "land" | "side" | "views" | "docs";
+export type Change = "session" | "thread" | "people" | "env" | "invites" | "branches" | "files" | "connection" | "target" | "drafts" | "land" | "side" | "views" | "docs" | "marks";
 
 type Submit = Extract<ClientMessage, { type: "submit" }>;
 
@@ -52,6 +52,8 @@ export class SessionClient {
 	readonly outbox = new Map<string, Submit>();
 	/** Unsent drafts, everyone's, by their writer's member id (shared/drafts.ts). */
 	readonly drafts = new Map<string, { name: string; doc: Y.Doc }>();
+	/** Comments waiting on graphics, shared live, by graphic (annotate.ts). */
+	readonly marks = new Map<string, SharedMark[]>();
 	/** Where other people's cursors are, by member id: in whose draft, or which file ("file:<path>"). */
 	readonly carets = new Map<string, Caret>();
 	/** Project files being written together that this page has open, by path (drafts.ts), and how many uses each. */
@@ -266,6 +268,8 @@ export class SessionClient {
 				// The server sends the cursors and views again after this; drafts are merged, so they stay.
 				this.carets.clear();
 				this.views.clear();
+				// The server sends every graphic's marks again after this.
+				this.marks.clear();
 				this.info = message.session;
 				this.me = message.me;
 				this.#setMembers(message.members);
@@ -297,6 +301,10 @@ export class SessionClient {
 				}
 				return this.#emit("drafts");
 			}
+			case "marks":
+				if (message.marks.length === 0) this.marks.delete(message.key);
+				else this.marks.set(message.key, message.marks);
+				return this.#emit("marks");
 			case "view":
 				if (message.view === null) this.views.delete(message.memberId);
 				else this.views.set(message.memberId, { name: message.name, view: message.view });

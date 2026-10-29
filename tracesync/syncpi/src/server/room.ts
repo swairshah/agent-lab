@@ -21,7 +21,22 @@ import { type AgentEvent, type AgentEventStream, LiveDoc } from "@earendil-works
 import { diffLines } from "diff";
 import { WebSocket } from "ws";
 import { hashBytes, listFiles, MAX_FILE_BYTES, safePath } from "../shared/files.ts";
-import { type ClientMessage, type ConvName, type InviteInfo, type PiContext, type Presence, parseChannelFrame, ROLES, type Role, type ServerMessage, type View } from "../shared/protocol.ts";
+import {
+	type ClientMessage,
+	type ConvName,
+	type InviteInfo,
+	type Mark,
+	MARK_LIMITS,
+	type PiContext,
+	type Presence,
+	PRIVATE_MARKS,
+	parseChannelFrame,
+	ROLES,
+	type Role,
+	type ServerMessage,
+	type SharedMark,
+	type View,
+} from "../shared/protocol.ts";
 import { DRAFT_LIMITS, draftText, fileKey, fromBase64, patchText, toBase64, Y } from "../shared/drafts.ts";
 import { type DeviceClient, Devices } from "./devices.ts";
 import { PiTurns, type TurnClient } from "./pi-turns.ts";
@@ -163,6 +178,20 @@ function piContext(value: unknown): PiContext | undefined {
 	return { skills: typeof v.skills === "string" ? v.skills.slice(0, 48 * 1024) : "", skillCount: Number(v.skillCount) || 0, agents };
 }
 
+/** A mark as a client sent it, checked: fractions within the graphic, bounded text. */
+function checkMark(value: unknown): Mark | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	const m = value as Partial<Mark>;
+	const fraction = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : undefined);
+	const x = fraction(m.x);
+	const y = fraction(m.y);
+	if (typeof m.id !== "string" || m.id.length === 0 || m.id.length > 64 || x === undefined || y === undefined) return undefined;
+	const w = fraction(m.w);
+	const h = fraction(m.h);
+	const area = w !== undefined && h !== undefined && w > 0 && h > 0 ? { w: Math.min(w, 1 - x), h: Math.min(h, 1 - y) } : {};
+	return { id: m.id, x, y, ...area, text: String(m.text ?? "").slice(0, MARK_LIMITS.textChars) };
+}
+
 /** A terminal waiting for its owner to approve the sign-in in a browser. */
 type CliLogin = { invite?: string; name?: string; check: string; expires: number; token?: string; error?: string };
 
@@ -180,6 +209,8 @@ export class Room {
 	readonly #files = new Map<string, FileDoc>();
 	#lastActive = Date.now();
 	readonly #turns: PiTurns;
+	/** Comments waiting on graphics, by graphic, until they're sent (in memory, like drafts). */
+	readonly #marks = new Map<string, SharedMark[]>();
 	/** Synced pis' messages are recorded one batch after another, in the order they came. */
 	#recording: Promise<void> = Promise.resolve();
 
@@ -714,6 +745,32 @@ export class Room {
 			case "fenceDone":
 				this.devices.fenceDone(message.id);
 				return;
+			case "mark": {
+				if (!atLeast(member, "editor")) return this.#error(client, "viewers can't comment");
+				const key = String(message.key).slice(0, MARK_LIMITS.keyChars);
+				// A graphic in someone's side thread is theirs alone.
+				if (key.startsWith(PRIVATE_MARKS) && !key.startsWith(`${PRIVATE_MARKS}${member.id}:`)) return;
+				let marks = this.#marks.get(key) ?? [];
+				const mark = message.mark === undefined ? undefined : checkMark(message.mark);
+				if (mark !== undefined) {
+					const existing = marks.find((m) => m.id === mark.id);
+					// People change their own comments only.
+					if (existing !== undefined && existing.memberId !== member.id) return;
+					if (existing === undefined && (marks.length >= MARK_LIMITS.perGraphic || (marks.length === 0 && this.#marks.size >= MARK_LIMITS.graphics))) {
+						return this.#error(client, `at most ${MARK_LIMITS.perGraphic} comments wait on a graphic; send them first`);
+					}
+					const shared: SharedMark = { ...mark, memberId: member.id, name: member.name, at: existing?.at ?? Date.now() };
+					marks = existing === undefined ? [...marks, shared] : marks.map((m) => (m.id === mark.id ? shared : m));
+				}
+				if (typeof message.remove === "string") marks = marks.filter((m) => !(m.id === message.remove && m.memberId === member.id));
+				if (Array.isArray(message.sent)) {
+					const sent = new Set(message.sent.map(String));
+					marks = marks.filter((m) => !sent.has(m.id));
+				}
+				if (marks.length === 0) this.#marks.delete(key);
+				else this.#marks.set(key, marks);
+				return this.#sendMarks(key, marks);
+			}
 			case "record": {
 				if (!atLeast(member, "editor")) return this.#send(client, { type: "error", requestId: message.requestId, message: "viewers can't add to the thread" });
 				const pi = this.#pi(client);
@@ -742,6 +799,16 @@ export class Room {
 				if (client.device !== undefined) this.devices.clientClosedChannel(client.device, message.channel);
 				return;
 		}
+	}
+
+	/** Whether `client` may see the marks on graphic `key` (one in someone's side thread is theirs alone). */
+	#seesMarks(client: Client, key: string): boolean {
+		return !key.startsWith(PRIVATE_MARKS) || key.startsWith(`${PRIVATE_MARKS}${client.member.id}:`);
+	}
+
+	#sendMarks(key: string, marks: SharedMark[]): void {
+		this.#lastActive = Date.now();
+		for (const client of this.#clients) if (this.#seesMarks(client, key)) this.#send(client, { type: "marks", key, marks });
 	}
 
 	/** The member a WebSocket upgrade's token belongs to. */
@@ -776,6 +843,7 @@ export class Room {
 			const name = this.state.value.members[owner]?.name ?? "someone";
 			this.#send(client, { type: "draft", owner, name, update: toBase64(Y.encodeStateAsUpdate(draft.doc)) });
 		}
+		for (const [key, marks] of this.#marks) if (this.#seesMarks(client, key)) this.#send(client, { type: "marks", key, marks });
 		for (const other of this.#clients) {
 			if (other === client) continue;
 			if (other.caret && !other.caret.owner.startsWith("file:")) this.#send(client, { type: "caret", memberId: other.member.id, name: other.member.name, ...other.caret });

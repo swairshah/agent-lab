@@ -50,6 +50,9 @@ await Promise.all([
 		logLevel: "warning",
 	}),
 ]);
+// Drawn into HTML previews' frames, so comments on a preview go out with a picture of it (annotate.ts): a classic
+// script, since a sandboxed frame loads it from another origin.
+await build({ entryPoints: ["src/web/capture-frame.ts"], outfile: "dist/web/capture-frame.js", bundle: true, format: "iife", target: "es2020", minify: true, logLevel: "warning" });
 copyFileSync("src/web/index.html", "dist/web/index.html");
 copyFileSync("src/web/shell.html", "dist/web/shell.html");
 copyFileSync("src/web/style.css", "dist/web/style.css");

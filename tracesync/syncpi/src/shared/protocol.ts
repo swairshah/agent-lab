@@ -65,6 +65,25 @@ export const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"
  */
 export type LineComment = { path: string; start: number; end: number; excerpt: string; text: string; message?: string };
 
+/**
+ * A comment on part of a graphic (an image, an HTML or SVG preview, a diagram, a screenshot), not sent yet: a point
+ * (`w` and `h` absent) or an area, as fractions (0 to 1) of the graphic's width and height, so it lands on the same
+ * spot on everyone's screen. Comments wait on their graphic, shared live with everyone, until someone sends them
+ * together, with a picture of the graphic marked with them.
+ */
+export type Mark = { id: string; x: number; y: number; w?: number; h?: number; text: string };
+/** A mark as the server keeps it: whose it is. */
+export type SharedMark = Mark & { memberId: string; name: string; at: number };
+
+/** Limits the server enforces on marks. */
+export const MARK_LIMITS = { perGraphic: 40, graphics: 200, textChars: 2000, keyChars: 300 };
+
+/**
+ * Marks on a graphic in someone's side thread are only theirs: its key starts with this and their member id
+ * ("side:<id>:"), and the server tells only their clients.
+ */
+export const PRIVATE_MARKS = "side:";
+
 /** Limits the server enforces on comments. */
 export const COMMENT_LIMITS = { count: 20, excerptChars: 8000, textChars: 4000 };
 
@@ -157,6 +176,11 @@ export type ClientMessage =
 	| { type: "fileDoc"; path: string; open?: boolean; update?: string }
 	/** Where this person is, for anyone following them (null: nowhere to follow, they left). */
 	| { type: "view"; view: View | null }
+	/**
+	 * Editors: comments waiting on a graphic (`key`): add or change one of your own (`mark`), take one of yours back
+	 * (`remove`), or, once they've been sent, clear the ones that went (`sent`, anyone's).
+	 */
+	| { type: "mark"; key: string; mark?: Mark; remove?: string; sent?: string[] }
 	| { type: "ping" }
 	/**
 	 * Editors, from a pi session synced with the thread (the syncpi pi extension; `origin` is that pi session's id):
@@ -188,6 +212,8 @@ export type LiveEvent =
 
 export type ServerMessage =
     | { type: "accepted"; requestId: string }
+	/** The comments waiting on a graphic now (none: they were sent or taken back). On connect, every graphic's. */
+	| { type: "marks"; key: string; marks: SharedMark[] }
 	/**
 	 * Answers a pi asking for the turn: at once without `upTo` (it's asked, and may have to wait), then with `upTo`
 	 * once the turn is this pi's. `upTo` is the thread's last entry then: what other people's turns added up to

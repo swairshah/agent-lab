@@ -19,6 +19,7 @@
     "diff": "^8.0.4",
     "marked": "^15.0.12",
     "mermaid": "^12.2.0",
+    "modern-screenshot": "^4.7.0",
     "node-pty": "^1.1.0",
     "ws": "^8.22.0",
     "yjs": "^13.6.33"
@@ -53,6 +54,7 @@
     "test:native": "node scripts/test-native.mjs",
     "test:search": "tsx --test test/search-unit.ts && node build.mjs && tsx test/search.ts",
     "test:side": "node build.mjs && tsx test/side.ts",
+    "test:annotate": "node build.mjs && tsx test/annotate.ts",
     "bench:search": "tsx test/bench/search.ts",
     "desktop:host": "npm run build && node dist/desktop-host.mjs"
   }

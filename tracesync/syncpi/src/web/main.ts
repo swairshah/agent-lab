@@ -13,7 +13,8 @@
 //   dialogs.ts      share link, keyboard shortcuts and confirmations
 //   bridge.ts       talking to an app that embeds this view
 import { kindOfPath } from "../shared/artifacts.ts";
-import type { ConvName, LineComment, Where } from "../shared/protocol.ts";
+import { type ConvName, type LineComment, PRIVATE_MARKS, type Where } from "../shared/protocol.ts";
+import { Annotations, privateScope } from "./annotate.ts";
 import { commentOnSelection } from "./artifacts.ts";
 import { BASE, signIn, TOKEN_KEY } from "./auth.ts";
 import { embedded, onHostAction, toHost } from "./bridge.ts";
@@ -83,6 +84,13 @@ async function main(): Promise<void> {
 		if (session.role === "viewer") return toast("Viewers can't comment; ask an admin to make you an editor.", "error");
 		session.submit(composer.takeText(), "interrupt", where, [], [comment], undefined, showing === "side" ? "side" : undefined);
 	};
+	// Comments on parts of graphics wait on them, shared live, until someone sends them together (annotate.ts). On a
+	// graphic in your side thread they're yours alone, and go to the side thread.
+	new Annotations(session, {
+		send: (text, image, key) => session.submit(text, "interrupt", where, image ? [image] : [], [], undefined, key.startsWith(PRIVATE_MARKS) ? "side" : undefined),
+		scope: (surface) => (showing === "side" && $("thread").contains(surface) && session.me ? privateScope(session.me.id) : ""),
+		toast,
+	});
 	// A project file as an artifact, for a tab in the panel.
 	const loadFile = async (path: string, lines?: string) => {
 		const res = await fetch(`api/file?path=${encodeURIComponent(path)}`, { headers: { authorization: `Bearer ${token}` } }).catch(() => undefined);

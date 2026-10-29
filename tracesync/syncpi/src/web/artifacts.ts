@@ -6,6 +6,7 @@
 // in an opaque origin with no access to this page, its storage, or the session's token.
 import { type Artifact, patchStats } from "../shared/artifacts.ts";
 import type { LineComment } from "../shared/protocol.ts";
+import { annotatable, captureFrame, captureImage } from "./annotate.ts";
 import { el, escapeHtml, storage } from "./dom.ts";
 import { renderMarkdown } from "./markdown.ts";
 
@@ -230,21 +231,38 @@ export function disposeWithin(root: Element): void {
 }
 
 function previewDocument(artifact: Artifact): string {
+	// What draws the preview as a picture when comments on it are sent (capture-frame.ts); it runs in the frame.
+	const capture = `<script src="${escapeHtml(new URL("capture-frame.js", document.baseURI).href)}"></script>`;
 	if (artifact.kind === "svg") {
 		// An SVG with only a viewBox would fill the frame; keep it at a readable size, centered.
-		return `<!doctype html><html><head><style>html,body{margin:0;height:100%}body{display:grid;place-items:center;padding:16px;box-sizing:border-box}svg{max-width:min(100%,520px);max-height:calc(100vh - 32px);height:auto}</style></head><body>${artifact.content}</body></html>`;
+		return `<!doctype html><html><head><style>html,body{margin:0;height:100%}body{display:grid;place-items:center;padding:16px;box-sizing:border-box}svg{max-width:min(100%,520px);max-height:calc(100vh - 32px);height:auto}</style></head><body>${artifact.content}${capture}</body></html>`;
 	}
-	return artifact.content;
+	return artifact.content + capture;
 }
 
-/** A sandboxed live preview of HTML or SVG. */
+/** The same graphic everywhere it shows (a file in the thread and in the panel), for comments on part of it. */
+function graphicKey(artifact: Artifact): string {
+	return artifact.path !== undefined ? `file:${artifact.path}` : artifact.key;
+}
+
+/** What a graphic is called in the message its comments go out in: "the image logo.png", "the HTML in a reply". */
+function graphicTitle(artifact: Artifact): string {
+	const kind = artifact.kind === "html" ? "HTML" : artifact.kind === "svg" ? "SVG image" : "image";
+	if (artifact.source === "reply") return `the ${kind} in a reply`;
+	return artifact.kind === "html" ? `the HTML page ${artifact.title} (its preview)` : `the ${kind} ${artifact.title}`;
+}
+
+/** A sandboxed live preview of HTML or SVG, which can be commented on by area. */
 export function renderPreview(host: HTMLElement, artifact: Artifact): void {
 	const frame = el("iframe", "preview-frame");
 	frame.setAttribute("sandbox", "allow-scripts allow-popups allow-forms");
 	frame.setAttribute("referrerpolicy", "no-referrer");
 	frame.title = `Preview of ${artifact.title}`;
 	frame.srcdoc = previewDocument(artifact);
-	host.replaceChildren(frame);
+	const box = el("div", "graphic-box");
+	box.append(frame);
+	host.replaceChildren(box);
+	annotatable({ key: graphicKey(artifact), title: graphicTitle(artifact), surface: box, capture: () => captureFrame(frame) });
 }
 
 export type ImageLoader = (path: string) => Promise<string | undefined>;
@@ -282,7 +300,13 @@ function renderView(host: HTMLElement, artifact: Artifact, view: "preview" | "co
 		if (artifact.path === undefined) return;
 		void loadImage(artifact.path).then((src) => {
 			if (src === undefined) host.textContent = "This image isn't available.";
-			else host.replaceChildren(Object.assign(el("img", "artifact-image"), { src, alt: artifact.title }));
+			else {
+				const image = Object.assign(el("img", "artifact-image"), { src, alt: artifact.title });
+				const box = el("div", "graphic-box graphic-image");
+				box.append(image);
+				host.replaceChildren(box);
+				annotatable({ key: graphicKey(artifact), title: graphicTitle(artifact), surface: box, capture: () => captureImage(image) });
+			}
 		});
 		return;
 	}
