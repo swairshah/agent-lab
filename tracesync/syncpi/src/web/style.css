@@ -6,6 +6,8 @@
   --surface: #fbfaf6;
   --raised: #ffffff;
   --sunken: #f1eee7;
+  /* Code blocks and command output in the thread. */
+  --code: #f1eee7;
   --ink: #26241f;
   --ink-2: #4d4940;
   --muted: #8b8579;
@@ -33,20 +35,21 @@
   --measure: 1100px;
   color-scheme: light;
 }
+/* Dark mode follows Delta's "Delta One Dark": cool grey-blue surfaces, One Dark text and syntax colors, a blue accent. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --paper: #1c1b18; --surface: #211f1c; --raised: #282622; --sunken: #181715; --ink: #ece7dd; --ink-2: #c7c0b2;
-    --muted: #8f887b; --faint: #5f594f; --rule: #33302a; --rule-strong: #45413a; --accent: #e3654c; --accent-ink: #1b1a17;
-    --accent-soft: #3a2621; --added: #79c08a; --removed: #ec8a76; --warn: #dda15a; --ok: #79c08a; --focus: #e3654c55;
-    --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 10px 30px rgb(0 0 0 / 0.3);
+    --paper: #191c1f; --surface: #1d2023; --raised: #22252a; --sunken: #202327; --code: #16191b; --ink: #dce0e5; --ink-2: #c3c8d0;
+    --muted: #a9afbb; --faint: #5d636e; --rule: #292c32; --rule-strong: #32363d; --accent: #76ade4; --accent-ink: #191c1f;
+    --accent-soft: #2b3946; --added: #a2c186; --removed: #d07277; --warn: #dec184; --ok: #a2c186; --focus: #76ade466;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.35), 0 10px 30px rgb(0 0 0 / 0.4);
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --paper: #1c1b18; --surface: #211f1c; --raised: #282622; --sunken: #181715; --ink: #ece7dd; --ink-2: #c7c0b2;
-  --muted: #8f887b; --faint: #5f594f; --rule: #33302a; --rule-strong: #45413a; --accent: #e3654c; --accent-ink: #1b1a17;
-  --accent-soft: #3a2621; --added: #79c08a; --removed: #ec8a76; --warn: #dda15a; --ok: #79c08a; --focus: #e3654c55;
-  --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 10px 30px rgb(0 0 0 / 0.3);
+  --paper: #191c1f; --surface: #1d2023; --raised: #22252a; --sunken: #202327; --code: #16191b; --ink: #dce0e5; --ink-2: #c3c8d0;
+  --muted: #a9afbb; --faint: #5d636e; --rule: #292c32; --rule-strong: #32363d; --accent: #76ade4; --accent-ink: #191c1f;
+  --accent-soft: #2b3946; --added: #a2c186; --removed: #d07277; --warn: #dec184; --ok: #a2c186; --focus: #76ade466;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.35), 0 10px 30px rgb(0 0 0 / 0.4);
   color-scheme: dark;
 }
 
@@ -233,7 +236,7 @@ mark.commented { background: color-mix(in srgb, var(--removed) 16%, transparent)
 .prose p { margin: .55em 0; }
 .prose a { color: var(--accent); }
 .prose code { background: var(--sunken); border-radius: 4px; padding: 1px 4px; font-size: .86em; }
-.prose pre { background: var(--sunken); border-radius: 8px; padding: 10px 12px; overflow-x: auto; font-size: 12.5px; }
+.prose pre { background: var(--code); border-radius: 8px; padding: 10px 12px; overflow-x: auto; font-size: 12.5px; }
 .prose pre code { background: none; padding: 0; }
 .prose blockquote { margin: .8em 0; padding-left: 12px; border-left: 2px solid var(--rule-strong); color: var(--ink-2); }
 .prose table { border-collapse: collapse; font-size: 13px; margin: .8em 0; }
@@ -289,7 +292,7 @@ mark.commented { background: color-mix(in srgb, var(--removed) 16%, transparent)
 .prose code.cite { cursor: pointer; text-decoration: underline; text-decoration-color: var(--rule-strong); text-underline-offset: 3px; }
 .prose code.cite:hover { color: var(--accent); }
 .tool-spinner { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--warn); border-top-color: transparent; animation: spin .8s linear infinite; }
-.tool-output { margin: 0; max-height: 300px; overflow: auto; background: var(--sunken); border-radius: 8px; padding: 9px 12px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tool-output { margin: 0; max-height: 300px; overflow: auto; background: var(--code); border-radius: 8px; padding: 9px 12px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .tool-note { color: var(--muted); font-size: 12px; }
 .diff-stats { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
 .diff-stats .added { color: var(--added); }
@@ -327,6 +330,9 @@ mark.commented { background: color-mix(in srgb, var(--removed) 16%, transparent)
 .markdown-preview { padding: 14px 18px; }
 .artifact-image { display: block; max-width: 100%; margin: 0 auto; }
 .pierre-host { font-size: 12.5px; }
+/* Pierre's dark theme draws on its own background (set on its host); use the thread's code color, or the panel's. */
+.pierre-host diffs-container { --diffs-dark-bg: var(--code); }
+.panel .pierre-host diffs-container { --diffs-dark-bg: var(--surface); }
 
 /* ---------- composer: the next row of the thread ---------- */
 

@@ -21,7 +21,8 @@ function themeType(): "light" | "dark" | "system" {
 	return set === "light" || set === "dark" ? set : "system";
 }
 
-const THEME = { light: "pierre-light", dark: "pierre-dark" } as const;
+// Dark mode uses One Dark, as Delta does (style.css puts it on the page's own background).
+const THEME = { light: "pierre-light", dark: "one-dark-pro" } as const;
 
 /** Sends a comment on lines of a file to the thread. */
 export type CommentHandler = (comment: LineComment) => void;
