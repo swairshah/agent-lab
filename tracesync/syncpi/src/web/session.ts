@@ -15,6 +15,8 @@ const REMOVED = 4001;
 
 /** The origin of draft changes that came from the server, so they aren't sent back. */
 const REMOTE = Symbol("remote");
+/** How long a side thread asked for can take before it counts as unanswered. */
+const SIDE_TIMEOUT_MS = 8_000;
 
 /** `at`: when it last moved here, so its name can show for a moment, then fade. */
 export type Caret = { name: string; owner: string; anchor?: unknown; head?: unknown; at: number };
@@ -39,6 +41,8 @@ export class SessionClient {
 	side: SideInfo | null = null;
 	/** The server forked or reopened the side thread at this page's request: show it. */
 	onSideOpen: () => void = () => {};
+	/** A side thread asked for didn't come back: a server from before side threads ignores the request. */
+	onSideUnanswered: () => void = () => {};
 	/** Side thread requests from this page, not answered yet. */
 	readonly #sideRequests = new Set<string>();
 	/** Where the current run's tools execute. */
@@ -223,6 +227,9 @@ export class SessionClient {
 		const requestId = crypto.randomUUID();
 		this.#sideRequests.add(requestId);
 		this.send({ type: "side", requestId, where, ...(fresh ? { fresh } : {}), ...(text ? { text } : {}) });
+		setTimeout(() => {
+			if (this.#sideRequests.delete(requestId)) this.onSideUnanswered();
+		}, SIDE_TIMEOUT_MS);
 	}
 
 	/** Survives a reload, except messages with attachments: those can be megabytes, more than storage holds. */

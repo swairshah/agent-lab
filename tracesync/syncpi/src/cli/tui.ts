@@ -407,7 +407,10 @@ export class App {
 				break;
 			case "side":
 				this.#side = message.side;
-				if (message.requestId !== undefined && message.requestId === this.#sideRequest) this.#show("side");
+				if (message.requestId !== undefined && message.requestId === this.#sideRequest) {
+					this.#sideRequest = undefined;
+					this.#show("side");
+				}
 				else if (this.#side === null && this.#showing === "side") this.#show("main");
 				break;
 			case "draft": {
@@ -567,8 +570,14 @@ export class App {
 				if (this.#me?.role === "viewer") return this.#note(c.gray("viewers can't start a side thread"), 4_000);
 				const fresh = arg === "new";
 				if (this.#side !== null && !fresh && arg.length === 0) return this.#show("side");
-				this.#sideRequest = randomUUID();
-				this.#conn.send({ type: "side", requestId: this.#sideRequest, ...(fresh ? { fresh } : {}), ...(arg.length > 0 && !fresh ? { text: arg } : {}), where: this.#where });
+				const requestId = (this.#sideRequest = randomUUID());
+				this.#conn.send({ type: "side", requestId, ...(fresh ? { fresh } : {}), ...(arg.length > 0 && !fresh ? { text: arg } : {}), where: this.#where });
+				// A server from before side threads ignores the request.
+				setTimeout(() => {
+					if (this.#sideRequest !== requestId) return;
+					this.#sideRequest = undefined;
+					this.#note(c.yellow("the server didn't open a side thread; it may be older than side threads (its owner can run syncpi update)"), 8_000);
+				}, 8_000).unref();
 				return this.#note(c.gray("your side thread: a private fork of this one, which can look but not change files. Esc goes back"), 6_000);
 			}
 			case "where": {

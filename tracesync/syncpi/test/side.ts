@@ -1,7 +1,7 @@
 // Side threads (/side): a private fork of the thread per person. Ada owns a session with the scripted model (from a
 // terminal, headless, and two browser tabs); Bob is an editor in another browser. Everything Bob's browser receives is
 // recorded, and none of Ada's side thread may be in it. `npm run test:side` (needs Chrome, or PLAYWRIGHT_CHROMIUM).
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,7 +35,7 @@ execFileSync("git", ["init", "-q"], { cwd: dir });
 execFileSync("git", ["add", "-A"], { cwd: dir });
 execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@example.test", "commit", "-qm", "init"], { cwd: dir });
 
-// Ada's terminal: the headless client, which prints the shared thread and, as "side …", her side thread.
+// Ada's terminal: the headless client, which prints the shared thread and, as "side …", Ada's side thread.
 const home = join(root, "home");
 const lines: string[] = [];
 const cli = spawn(process.execPath, [join(dist, "cli.mjs"), "--headless", "--faux", "--name", "Ada", "--no-sync"], { cwd: dir, env: { ...process.env, SYNCPI_HOME: home }, stdio: ["pipe", "pipe", "pipe"] });
@@ -91,7 +91,7 @@ try {
 	await B.locator("#presence [data-member]").first().click();
 	await until("Bob following", () => B.evaluate(() => !(document.querySelector("#follow-bar") as HTMLElement).hidden));
 
-	// Ada asks in her side thread, typed into the composer as /side <question>.
+	// Ada asks in their side thread, typed into the composer as /side <question>.
 	await send(A, "/side what did we decide about the total?", "(faux) what did we decide about the total?");
 	check((await showing(A))?.startsWith("Your side thread"), `Ada sees her side thread (${await showing(A)})`);
 	const side = (await threadText(A))!;
@@ -101,7 +101,7 @@ try {
 	check((await showing(B)) === "main", "Bob stays in the shared thread");
 	await until("Bob is told", () => B.locator("#toast").textContent().then((t) => t?.includes("Ada is in their private side thread")));
 	check(!(await threadText(B))!.includes("what did we decide"), "Bob's thread has no side question");
-	ok("Bob, following Ada, stays in the shared thread and is told only that she's in her private side thread");
+	ok("Bob, following Ada, stays in the shared thread and is told only that Ada is in their private side thread");
 
 	// Typing in the side thread doesn't go to the shared draft; the draft in the thread is kept.
 	await A.locator("#input").click();
@@ -172,7 +172,7 @@ try {
 	check(!(await threadText(B))!.includes("hello from the terminal"), "Bob's side thread isn't Ada's");
 	await B.waitForTimeout(500);
 	check(!(await A.locator("body").textContent())!.includes("is the total tested"), "Ada doesn't see Bob's");
-	ok("Bob's side thread is his own; Ada doesn't see it");
+	ok("Bob's side thread is Bob's own; Ada doesn't see it");
 
 	// The side agent was told what it is (its instructions are stored with its conversation).
 	const stored = readdirSync(home, { recursive: true, encoding: "utf8" })
@@ -208,10 +208,29 @@ try {
 	check((await inApp.locator("#side-title").textContent())?.startsWith("Your side thread") && !(await inApp.locator("#setup-banner").isHidden()), "the app shows its side thread");
 	ok("in the app, /side opens the side thread in the thread that asked");
 
+	// A server from before side threads ignores the request: the page says so instead of doing nothing.
+	const old = await (await browser.newContext({ viewport: { width: 1200, height: 800 } })).newPage();
+	await old.routeWebSocket(/\/ws/, (ws) => {
+		const server = ws.connectToServer();
+		ws.onMessage((m) => {
+			if (!(typeof m === "string" && JSON.parse(m).type === "side")) server.send(m);
+		});
+	});
+	await old.goto(`${url}/#token=${bob.token}`);
+	await old.waitForFunction(() => document.querySelector("#me-avatar")?.textContent);
+	await old.locator("#input").click();
+	await old.keyboard.type("/side ignored by an old server");
+	await old.keyboard.press(`${mod}+Enter`);
+	await until("the notice", () => old.locator("#toast").textContent().then((t) => t?.includes("didn't open a side thread")), 15_000);
+	check((await showing(old)) === "main", "the page stays in the thread");
+	ok("a server that ignores /side gets a notice saying it may need syncpi update");
+
 	check(errors.length === 0, `page errors: ${errors.join("; ")}`);
 	console.log(`\nAll ${checks} side-thread checks passed.`);
 } finally {
 	await browser?.close();
 	for (const p of processes) p.kill();
+	// The clients start their session servers detached; theirs are the ones whose state is under this test's folder.
+	spawnSync("pkill", ["-f", root]);
 	rmSync(root, { recursive: true, force: true });
 }

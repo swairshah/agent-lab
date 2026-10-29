@@ -1,7 +1,7 @@
 // Find (⌘F) and the palette (⌘K) in a real browser: a thread in a browser, served by a session with the scripted
 // model, and the app's shell with its threads and terminal (the desktop host). Part of `npm run test:search`.
 // Needs `npm run build` first, and Chrome (or PLAYWRIGHT_CHROMIUM pointing at a Chromium).
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -515,5 +515,7 @@ try {
 } finally {
 	await browser?.close();
 	for (const p of processes) p.kill();
+	// The clients start their session servers detached; theirs are the ones whose state is under this test's folder.
+	spawnSync("pkill", ["-f", root]);
 	rmSync(root, { recursive: true, force: true });
 }

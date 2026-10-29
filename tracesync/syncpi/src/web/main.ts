@@ -262,6 +262,7 @@ async function main(): Promise<void> {
 		session.openSide(where, fresh, text);
 	};
 	session.onSideOpen = () => show("side");
+	session.onSideUnanswered = () => toast("The session's server didn't open a side thread. It may be older than side threads: its owner can run syncpi update.", "error");
 	session.on("side", () => {
 		if (showing === "side" && session.side === null) show("main");
 	});
