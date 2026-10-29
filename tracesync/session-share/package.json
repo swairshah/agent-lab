@@ -1,0 +1,23 @@
+{
+  "name": "session-share",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "One pi-durable session shared by Claude Code, Codex and pi",
+  "engines": { "node": ">=24" },
+  "bin": { "session-share": "bin/session-share.mjs" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "^1.4.0",
+    "@earendil-works/pi-ai": "^1.4.0",
+    "@earendil-works/pi-coding-agent": "^1.4.0",
+    "@earendil-works/pi-durable": "^1.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
+  }
+}
