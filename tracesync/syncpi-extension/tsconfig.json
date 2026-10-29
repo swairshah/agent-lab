@@ -11,5 +11,5 @@
     "types": ["node"],
     "noUncheckedIndexedAccess": true
   },
-  "include": ["src"]
+  "include": ["src", "test"]
 }
