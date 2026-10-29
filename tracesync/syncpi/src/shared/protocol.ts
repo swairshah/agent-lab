@@ -157,10 +157,48 @@ export type ClientMessage =
 	| { type: "fileDoc"; path: string; open?: boolean; update?: string }
 	/** Where this person is, for anyone following them (null: nowhere to follow, they left). */
 	| { type: "view"; view: View | null }
-	| { type: "ping" };
+	| { type: "ping" }
+	/**
+	 * Editors, from a pi session synced with the thread (the syncpi pi extension; `origin` is that pi session's id):
+	 * messages for the thread's history, in pi-ai's shape (user, assistant, toolResult). Its own turns, which ran in
+	 * that pi, and on /sync, what the pi session had before. Each is recorded once, by `origin` and `id`. Answered
+	 * with "accepted".
+	 */
+	| { type: "record"; requestId: string; origin: string; messages: RecordedMessage[] }
+	/**
+	 * Editors' pi sessions: "start" asks for the turn, so a turn runs in that pi. The server's agent is stopped first
+	 * when this person may stop it (their own run, or an admin), or else finished first. While the pi has the turn,
+	 * other people's messages wait for it (or steer it, with "steer"). "end" gives the turn back.
+	 */
+	| { type: "turn"; requestId: string; action: "start" | "end" }
+	/** While this person's pi has the turn: what it's doing, as agent events, for everyone watching the thread. */
+	| { type: "live"; events: LiveEvent[] };
+
+/**
+ * One message of a synced pi session: `id` is unique in that session, `message` a pi-ai Message. `steer`: it is
+ * someone's steer the server passed to this pi (its id there), so it's theirs, not this pi's person's.
+ */
+export type RecordedMessage = { id: string; message: unknown; steer?: string };
+
+/** What a pi's turn shows while it runs: its partial answer, and its tools' running output. */
+export type LiveEvent =
+	| { type: "message_update"; message: unknown }
+	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown }
+	| { type: "tool_execution_update"; toolCallId: string; output: string };
 
 export type ServerMessage =
     | { type: "accepted"; requestId: string }
+	/**
+	 * The turn is this pi's. `upTo` is the thread's last entry then: what other people's turns added up to there
+	 * should be in the pi's context before it runs.
+	 */
+	| { type: "turn"; requestId: string; upTo: number }
+	/**
+	 * To the pi that has the turn: `by` stopped it, or steers it with `text` (as the model should see it), which the
+	 * pi records with `steer: id`.
+	 */
+	| { type: "piControl"; action: "stop"; by: string }
+	| { type: "piControl"; action: "steer"; by: string; id: string; text: string }
 	| { type: "welcome"; me: Member; session: SessionInfo; members: Member[] }
 	/** Agent events of one conversation. The first batch of each conversation starts with a snapshot. */
 	| { type: "events"; conv: ConvName; events: AgentEvent[] }

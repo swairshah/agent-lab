@@ -24,6 +24,7 @@ import { hashBytes, listFiles, MAX_FILE_BYTES, safePath } from "../shared/files.
 import { type ClientMessage, type ConvName, type InviteInfo, type PiContext, type Presence, parseChannelFrame, ROLES, type Role, type ServerMessage, type View } from "../shared/protocol.ts";
 import { DRAFT_LIMITS, draftText, fileKey, fromBase64, patchText, toBase64, Y } from "../shared/drafts.ts";
 import { type DeviceClient, Devices } from "./devices.ts";
+import { PiTurns, type TurnClient } from "./pi-turns.ts";
 import { RECORDINGS } from "./remote-tools.ts";
 import { context, Session } from "./session.ts";
 import { StateFile, type StoredMember, token } from "./state.ts";
@@ -40,6 +41,8 @@ type Client = {
 	view?: View;
 	/** The files whose live documents they follow. */
 	files: Set<string>;
+	/** As a synced pi, which takes turns on the thread (pi-turns.ts). */
+	pi?: TurnClient;
 };
 
 /**
@@ -176,6 +179,9 @@ export class Room {
 	readonly #drafts = new Map<string, Draft>();
 	readonly #files = new Map<string, FileDoc>();
 	#lastActive = Date.now();
+	readonly #turns: PiTurns;
+	/** Synced pis' messages are recorded one batch after another, in the order they came. */
+	#recording: Promise<void> = Promise.resolve();
 
 	constructor(stateDir: string, base: string, webDir: string, faux: boolean) {
 		this.stateDir = stateDir;
@@ -199,6 +205,25 @@ export class Room {
 				this.#broadcast({ type: "land", land });
 			},
 		});
+		this.#turns = new PiTurns({
+			current: () => this.session.current(),
+			interrupt: (taskId) => this.session.interrupt(taskId),
+			idle: () => this.session.idle(),
+			lastEntry: () => this.session.lastEntry(),
+			mayStop: (memberId, owner) => {
+				const member = this.state.value.members[memberId];
+				return member !== undefined && (atLeast(member, "admin") || owner === memberId);
+			},
+			events: (events) => {
+				for (const client of this.#clients) if (client.watches.main !== undefined) this.#send(client, { type: "events", conv: "main", events });
+			},
+			target: (label) => this.#broadcast({ type: "target", label: label ?? this.session.targetLabel }),
+		});
+	}
+
+	/** This client as a synced pi. */
+	#pi(client: Client): TurnClient {
+		return (client.pi ??= { memberId: client.member.id, name: client.member.name, send: (m) => this.#send(client, m) });
 	}
 
 	open(): Promise<void> {
@@ -415,6 +440,47 @@ export class Room {
 				// that run), when the sender may stop it: their own run, or anyone's for an admin. Otherwise it waits.
 				let stop: Awaited<ReturnType<Session["current"]>>;
 				const conv = message.conv === "land" || message.conv === "side" ? message.conv : undefined;
+				const deliver = async (): Promise<boolean> => {
+					try {
+						await this.session.submit(
+							member,
+							message.requestId,
+							text,
+							message.mode === "steer" ? "steer" : "followUp",
+							message.where === "device" ? "device" : "vm",
+							Array.isArray(message.attachments) ? message.attachments : [],
+							comments,
+							others,
+							conv,
+						);
+						this.#send(client, { type: "accepted", requestId: message.requestId });
+						return true;
+					} catch (error) {
+						this.#send(client, { type: "error", message: String((error as Error).message ?? error), requestId: message.requestId });
+						return false;
+					}
+				};
+				const clearDraft = () => {
+					if (draft === undefined) return;
+					draft.writers.clear();
+					draft.tagged.clear();
+					this.#broadcast({ type: "draft", owner: message.draft!, name: this.state.value.members[message.draft!]?.name ?? "someone", sent: member.id });
+				};
+				// Someone's pi has the turn: a steer goes to it, and other messages wait for its turn to end (stopping it
+				// first when the sender may, as with the server's own runs).
+				const pi = conv === undefined ? this.#turns.holder : undefined;
+				if (pi !== undefined) {
+					if (message.mode === "steer" && this.#turns.steer(member.id, member.name, text)) {
+						this.#send(client, { type: "accepted", requestId: message.requestId });
+						return clearDraft();
+					}
+					if (message.mode === "interrupt" && (atLeast(member, "admin") || pi.memberId === member.id)) {
+						this.#turns.stop(member.name);
+						await this.session.notice(`${member.name} interrupted ${pi.memberId === member.id ? "their" : `${pi.name}'s`} pi`);
+					} else this.#send(client, { type: "notice", text: `Queued: ${pi.name}'s pi has the turn${message.mode === "interrupt" ? ", and only admins can stop someone else's" : ""}.` });
+					// Acknowledged once it reaches the agent; until then the sender's client shows it as still sending.
+					if (this.#turns.hold(message.requestId, async () => void (await deliver()))) return clearDraft();
+				}
 				// In your own side thread a new message stops its run, and nobody else hears about it.
 				if (message.mode === "interrupt" && conv === "side") {
 					const run = await this.session.sideRun(member.id);
@@ -429,28 +495,7 @@ export class Room {
 					await this.session.interrupt(stop.taskId);
 					await this.session.notice(`${member.name} interrupted the agent`);
 				}
-				try {
-					await this.session.submit(
-						member,
-						message.requestId,
-						text,
-						message.mode === "steer" ? "steer" : "followUp",
-						message.where === "device" ? "device" : "vm",
-						Array.isArray(message.attachments) ? message.attachments : [],
-						comments,
-						others,
-						conv,
-					);
-                    this.#send(client, { type: "accepted", requestId: message.requestId });
-				} catch (error) {
-					this.#send(client, { type: "error", message: String((error as Error).message ?? error), requestId: message.requestId });
-					return;
-				}
-				if (draft !== undefined) {
-					draft.writers.clear();
-					draft.tagged.clear();
-					this.#broadcast({ type: "draft", owner: message.draft!, name: this.state.value.members[message.draft!]?.name ?? "someone", sent: member.id });
-				}
+				if (await deliver()) clearDraft();
 				return;
 			}
 			case "abort": {
@@ -459,6 +504,13 @@ export class Room {
 					if (!atLeast(member, "editor")) return;
 					await this.session.abort("land");
 					await this.session.notice(`${member.name} stopped the land`);
+					return;
+				}
+				const pi = this.#turns.holder;
+				if (pi !== undefined) {
+					if (!atLeast(member, "admin") && pi.memberId !== member.id) return this.#error(client, "only admins can stop someone else's request");
+					this.#turns.stop(member.name);
+					await this.session.notice(`${member.name} stopped ${pi.memberId === member.id ? "their" : `${pi.name}'s`} pi`);
 					return;
 				}
 				const runner = await this.session.runner();
@@ -662,6 +714,30 @@ export class Room {
 			case "fenceDone":
 				this.devices.fenceDone(message.id);
 				return;
+			case "record": {
+				if (!atLeast(member, "editor")) return this.#send(client, { type: "error", requestId: message.requestId, message: "viewers can't add to the thread" });
+				const pi = this.#pi(client);
+				const messages = Array.isArray(message.messages) ? message.messages : [];
+				const steerer = (id: string) => this.state.value.members[this.#turns.steerer(pi, id) ?? ""];
+				const done = this.#recording.then(() => this.session.record(member, String(message.origin), messages, steerer));
+				this.#recording = done.catch(() => {});
+				try {
+					await done;
+				} catch (error) {
+					return this.#send(client, { type: "error", requestId: message.requestId, message: String((error as Error).message ?? error) });
+				}
+				this.#turns.recorded(pi, messages.flatMap((m) => ((m.message as { role?: string; toolCallId?: unknown })?.role === "toolResult" ? [String((m.message as { toolCallId: unknown }).toolCallId)] : [])));
+				return this.#send(client, { type: "accepted", requestId: message.requestId });
+			}
+			case "turn": {
+				if (!atLeast(member, "editor")) return this.#send(client, { type: "error", requestId: message.requestId, message: "viewers can't talk to the agent" });
+				if (message.action === "start") this.#turns.ask(this.#pi(client), message.requestId);
+				else await this.#turns.end(this.#pi(client));
+				return;
+			}
+			case "live":
+				if (client.pi !== undefined) this.#turns.live(client.pi, message.events);
+				return;
 			case "envClose":
 				if (client.device !== undefined) this.devices.clientClosedChannel(client.device, message.channel);
 				return;
@@ -728,6 +804,7 @@ export class Room {
 			this.#clients.delete(client);
 			this.#lastActive = Date.now();
 			if (client.device !== undefined) this.devices.unregister(client.device);
+			if (client.pi !== undefined) void this.#turns.left(client.pi);
 			for (const watch of Object.values(client.watches)) void watch?.stop();
 			this.#broadcast(this.#presence());
 		});
@@ -745,6 +822,11 @@ export class Room {
 			const page = await this.session.conversation(conv, client.member.id).entries({ maxEntryId: (oldest - 1) as never, order: "descending" }, HISTORY, undefined, context);
 			const entries = page.items.filter((e) => e.kind !== "pi.system").reverse();
 			if (entries.length > 0) this.#send(client, { type: "history", conv, entries, complete: page.items.length < HISTORY });
+		}
+		// Someone's pi is mid-turn: what it's doing so far.
+		if (conv === "main") {
+			const replay = this.#turns.replay();
+			if (replay.length > 0) this.#send(client, { type: "events", conv, events: replay });
 		}
 		watch.start(async (events) => {
 			const out = slim(events);

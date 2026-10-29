@@ -45,6 +45,14 @@ Not yet: tools from your pi extensions (planned to run on your machine for your 
 - Messages there interrupt its own run, as in the thread; `/queue`, `/steer` and `/stop` act on it while it's shown. Esc (terminal) or Back to the thread (web) returns.
 - Side threads aren't kept: the server remembers them until it restarts. How to keep them is in the commit that added them (`git log --grep "Side threads"`).
 
+## From inside pi: /sync
+
+The pi extension in [`../syncpi-extension`](../syncpi-extension) makes a running pi session a syncpi session: `/sync` in pi starts one for the folder (or rejoins it), with what the pi session had so far, and `/session-share` makes a link for others. Your pi keeps running your turns, with your model, tools, extensions and modes; the others' turns run on the server's agent. Both agents see one conversation, and one works at a time:
+
+- A synced pi records every message it adds into the thread (the `record` message; `syncpi.pi` entries the server's agent sees as its history), and sends its run live while it works (`live`).
+- Before pi runs, it takes the turn (`turn`): the server's agent finishes first, or is stopped when that person may stop it. While a pi has the turn, other people's messages wait for it, steer it (passed to the pi, which records the steer as theirs), or stop it (`src/server/pi-turns.ts`).
+- The extension uses syncpi through `syncpi/client` (`src/client`, built to `dist/client.mjs`).
+
 ## Where the agent's tools run
 
 On the machine of whoever asked. A message you send from your terminal runs its tools on your computer, in your copy of the project, with your toolchains (Xcode, simulators, local databases). A message from Bob's terminal runs on Bob's computer. A message from a browser runs on the session VM. The changes sync to everyone either way. `/where vm` (or `/where here`) switches where your messages run.
@@ -163,6 +171,7 @@ npm run typecheck
 npm run smoke      # local server + scripted model: owner and collaborator, chat, sharing, two-way sync, rejoin
 npm run test:search  # Find and the palette: unit tests, then Chrome on a scripted session and the app's host
 npm run test:side    # side threads: two people, a terminal, two tabs and the app; nothing reaches the other person
+npm --prefix ../syncpi-extension test   # /sync: a real pi (RPC mode, scripted model) and a collaborator take turns
 ```
 
 `test:search` and `test:side` drive Google Chrome through Playwright (`channel: "chrome"`); set `PLAYWRIGHT_CHROMIUM` to a Chromium

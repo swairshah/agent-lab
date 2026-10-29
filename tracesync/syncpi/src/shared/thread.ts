@@ -173,6 +173,8 @@ export class Thread {
 			case "tool_execution_start": {
 				if (event.parentToolCallId !== undefined) return;
 				const tool = this.#tool(event.toolCallId, event.toolName, event.args as Record<string, Json>);
+				// A finished tool stays finished: a synced pi's live events can come after its recorded result.
+				if (tool.status === "done" || tool.status === "error") return;
 				tool.status = "running";
 				this.#touch(tool);
 				return;
@@ -180,7 +182,7 @@ export class Thread {
 			case "tool_execution_update": {
 				if (event.parentToolCallId !== undefined) return;
 				const tool = this.#tools.get(event.toolCallId);
-				if (tool === undefined) return;
+				if (tool === undefined || tool.status === "done" || tool.status === "error") return;
 				if (event.details !== undefined) tool.details = event.details;
 				if (event.output !== undefined) {
 					if ("set" in event.output) tool.output = event.output.set;
@@ -275,7 +277,9 @@ export class Thread {
 	#entry(entry: Entry): void {
 		const message = entry.model?.[0];
 		const key = String(entry.id);
-		switch (entry.kind) {
+		// A message recorded from someone's synced pi shows as what it is: their message, an answer, a tool's result.
+		const kind = entry.kind === "syncpi.pi" ? (PI_KINDS[message?.role ?? ""] ?? "") : entry.kind;
+		switch (kind) {
 			case "pi.system":
 				return;
 			case "pi.assistant": {
@@ -332,7 +336,7 @@ export class Thread {
 				return;
 			}
 			case "syncpi.message": {
-				const data = entry.data as { author?: string; memberId?: string; text?: string; attachments?: { name: string; kind: "image" | "text" }[]; comments?: LineComment[]; at?: number; requestId?: string; where?: "device" | "vm"; with?: string[] };
+				const data = (entry.data ?? {}) as { author?: string; memberId?: string; text?: string; attachments?: { name: string; kind: "image" | "text" }[]; comments?: LineComment[]; at?: number; requestId?: string; where?: "device" | "vm"; with?: string[] };
 				const images = Array.isArray(message?.content) ? message.content.filter((b) => b.type === "image") : [];
 				let image = 0;
 				const attachments = data.attachments?.map((a) => {
@@ -348,6 +352,9 @@ export class Thread {
 		}
 	}
 }
+
+/** How a recorded pi message (`syncpi.pi`) shows, by its role. */
+const PI_KINDS: Record<string, string> = { user: "syncpi.message", assistant: "pi.assistant", toolResult: "pi.tool-result" };
 
 type Change =
 	| { type: "text_start" | "thinking_start" | "toolcall_start" | "block"; contentIndex: number; block: unknown }

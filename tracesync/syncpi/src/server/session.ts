@@ -34,7 +34,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { diff, Scanner } from "../shared/files.ts";
-import { ATTACHMENT_LIMITS, type Attachment, type BranchInfo, type ConvName, type EnvStatus, type FileHash, IMAGE_TYPES, type LandInfo, type SideInfo, type Where, COMMENT_LIMITS, type LineComment } from "../shared/protocol.ts";
+import { ATTACHMENT_LIMITS, type Attachment, type BranchInfo, type ConvName, type EnvStatus, type FileHash, IMAGE_TYPES, type LandInfo, type RecordedMessage, type SideInfo, type Where, COMMENT_LIMITS, type LineComment } from "../shared/protocol.ts";
 import { Thread, toolSummary } from "../shared/thread.ts";
 import type { Devices } from "./devices.ts";
 import { History } from "./history.ts";
@@ -135,6 +135,32 @@ function messageContent(text: string, attachments: Attachment[]): { content: str
  * anyway. On an exe.dev VM, dev servers are opened at https://<vm>.exe.xyz:<port>, and Vite refuses hosts it
  * doesn't know, so that host is allowed for every Vite started here without touching the project's config.
  */
+type PiBlock = { type: string; text?: string; [key: string]: unknown };
+type PiMessage = { role: "user" | "assistant" | "toolResult"; content: string | PiBlock[]; [key: string]: unknown };
+
+/** A recorded pi message, if it is one the thread can hold: a user, assistant or tool result message, at most 4 MB. */
+function recordedMessage(value: unknown): PiMessage | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	const m = value as Partial<PiMessage>;
+	if (m.role !== "user" && m.role !== "assistant" && m.role !== "toolResult") return undefined;
+	if (typeof m.content !== "string" && !Array.isArray(m.content)) return undefined;
+	if (m.role === "toolResult" && typeof m.toolCallId !== "string") return undefined;
+	if (JSON.stringify(m).length > 4 * 1024 * 1024) return undefined;
+	return structuredClone(m) as PiMessage;
+}
+
+function piText(content: PiMessage["content"]): string {
+	return typeof content === "string" ? content : content.flatMap((b) => (b.type === "text" && typeof b.text === "string" ? [b.text] : [])).join("");
+}
+
+/** `content` with `prefix` in front of its text. */
+function prefixed(content: PiMessage["content"], prefix: string): PiMessage["content"] {
+	if (typeof content === "string") return prefix + content;
+	const first = content.findIndex((b) => b.type === "text");
+	if (first < 0) return [{ type: "text", text: prefix.trimEnd() }, ...content];
+	return content.map((b, i) => (i === first ? { ...b, text: prefix + (b.text ?? "") } : b));
+}
+
 function shellEnv(vm: string | undefined): NodeJS.ProcessEnv {
 	const env = { ...process.env };
 	for (const key of Object.keys(env)) if (/_API_KEY$|^SYNCPI_/.test(key)) delete env[key];
@@ -147,6 +173,14 @@ function shellEnv(vm: string | undefined): NodeJS.ProcessEnv {
  * runs bash, `look <path>...` lists the project and reads those files in one turn, `milestone <title> | <summary>` marks a
  * milestone, anything else is echoed.
  */
+/** One message the faux model was given, in a line: `user: text`, `assistant: text +tool`, `toolResult(tool): text`. */
+function describeFaux(m: { role: string; content: unknown; toolName?: string }): string {
+	const blocks = typeof m.content === "string" ? [{ type: "text", text: m.content }] : (m.content as { type: string; text?: string; name?: string }[]);
+	const text = blocks.map((b) => b.text ?? "").join("").slice(0, 80);
+	const calls = blocks.flatMap((b) => (b.type === "toolCall" ? [` +${b.name}`] : [])).join("");
+	return m.role === "toolResult" ? `toolResult(${m.toolName}): ${text}` : `${m.role}: ${text}${calls}`;
+}
+
 function installFaux(models: MutableModels): void {
 	const faux = fauxProvider({ tokensPerSecond: 400 });
 	models.setProvider(faux.provider);
@@ -173,6 +207,8 @@ function installFaux(models: MutableModels): void {
 				});
 			}
 			const body = text.replace(/^\[[^\]]+\]\s*/, "");
+			// What the model was given, one message each: shows what its context holds (e.g. a synced pi's turns).
+			if (body === "what do you see") return fauxAssistantMessage(`(faux) I see ${ctx.messages.filter((m) => m.role !== "system").map(describeFaux).join(" | ")}`);
 			// Several comments: an answer under each.
 			const asked = [...body.matchAll(/<comment n="(\d+)"/g)].map((m) => m[1]!);
 			if (asked.length > 1) return fauxAssistantMessage(`(faux) On the whole: fine.\n${asked.map((n) => `<reply to="${n}">(faux) answer to comment ${n}</reply>`).join("\n")}`);
@@ -633,6 +669,46 @@ export class Session {
 			},
 			context,
 		);
+	}
+
+	/**
+	 * Messages from `member`'s synced pi session `origin`, recorded into the shared thread in order, as its history:
+	 * the model sees them as they were (a user message with who wrote it), and people see them as that pi's turns.
+	 */
+	async record(member: StoredMember, origin: string, messages: RecordedMessage[], steerer: (id: string) => StoredMember | undefined): Promise<void> {
+		for (const { id, message, steer } of messages) {
+			const m = recordedMessage(message);
+			if (m === undefined) continue;
+			// Someone's steer, passed to this pi: theirs, already with their name in front (see PiTurns.steer).
+			const by = m.role === "user" && typeof steer === "string" ? steerer(steer) : undefined;
+			const author = by ?? member;
+			const written = m.role === "user" ? piText(m.content) : undefined;
+			// People see what was written, without the name the model sees in front of a steer.
+			const text = by === undefined ? written : written?.replace(/^\[[^\]]*\] /, "");
+			if (m.role === "user" && by === undefined) m.content = prefixed(m.content, `[${member.name}, in their pi] `);
+			await this.main.submit(
+				{
+					type: "write",
+					requestId: `pi:${member.id}:${origin}:${id}`.slice(0, 240),
+					entry: { kind: "syncpi.pi", data: { memberId: author.id, author: author.name, origin: String(origin).slice(0, 80), id: String(id).slice(0, 120), at: Date.now(), ...(text !== undefined ? { text } : {}) }, model: [m as never] },
+				},
+				context,
+			);
+		}
+	}
+
+	/** The shared thread's newest entry. */
+	async lastEntry(): Promise<number> {
+		const page = await this.main.entries({ order: "descending" }, 1, undefined, context);
+		return (page.items[0]?.id as number | undefined) ?? 0;
+	}
+
+	/** Whether the shared thread's agent has nothing running or queued. */
+	async idle(): Promise<boolean> {
+		const live = await this.harness.snapshot(LiveDoc, this.main.id, context);
+		if (live?.run !== undefined) return false;
+		const inbox = await this.harness.snapshot(InboxDoc, this.main.id, context);
+		return (inbox?.items ?? []).every((item) => item.mode === "write");
 	}
 
 	/** A line everyone sees in the thread; the model does not. `land`: it's about a land, and opens its thread. */

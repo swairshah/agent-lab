@@ -6,9 +6,9 @@
 //   syncpi rm <name>           forget a session (and delete its VM if you own it)
 //   syncpi update              copy a newly built server to this folder's session VM and restart it
 import { spawn } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, openSync, readdirSync, realpathSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, realpathSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { Readable } from "node:stream";
 import { parseArgs } from "node:util";
@@ -20,25 +20,17 @@ import {
 	destroyExe,
 	ensureHost,
 	ensureLocalRunning,
-	freePort,
-	gatewayModel,
-	piDefaults,
-	provisionExe,
-	provisionLocal,
-	provisionOnHost,
 	removeFromHost,
 	stopLocal,
 	updateServerExe,
 } from "./provision.ts";
-import { home, identity, loadSession, projectsDir, removeSession, type SessionRecord, saveSession, sessionLog, sessions } from "./store.ts";
+import { identity, projectsDir, removeSession, type SessionRecord, saveSession, sessionLog, sessions } from "./store.ts";
 import { LocalDevice } from "./device.ts";
 import { loadPiContext, printPiContext } from "./pi-context.ts";
 import { extractSnapshot, safeName, safeVm } from "./snapshot.ts";
 import { Mirror } from "./sync.ts";
 import { App, parseInvite } from "./tui.ts";
-
-/** Used when pi has no default model, or a VM session can't reach pi's default through the exe.dev integration. */
-const FALLBACK_MODEL = "anthropic/claude-opus-5-5";
+import { alive, findByDir, provision, retryProvision, startSession, untilReady } from "./lifecycle.ts";
 
 const { values: opts, positionals } = parseArgs({
 	allowPositionals: true,
@@ -98,118 +90,13 @@ function here(): string {
 	return realpathSync(process.cwd());
 }
 
-function findByDir(dir: string): SessionRecord | undefined {
-	return sessions().find((s) => s.dir === dir);
-}
-
 function findByName(name: string): SessionRecord | undefined {
 	return sessions().find((s) => s.name === name || s.id === name || s.vm === name);
 }
 
-/**
- * Records a new session and starts creating its server in a background process, so the UI can open right away. The
- * VM name (or local port) is chosen here, which fixes the session's URL before the server exists.
- */
-async function start(dir: string): Promise<SessionRecord> {
-	const id = randomBytes(6).toString("base64url").toLowerCase().replace(/[^a-z0-9]/g, "x");
-	const local = opts.local || opts.faux;
-	const pi = piDefaults();
-	let model = opts.model ?? pi.model ?? FALLBACK_MODEL;
-	if (!local) {
-		const mapped = gatewayModel(model, FALLBACK_MODEL);
-		if (mapped.changed) say(`${model} is not available through the exe.dev LLM integration; using ${mapped.model}`);
-		model = mapped.model;
-	}
-	const name = basename(dir);
-	// Sessions share one host VM unless --vm names another; a session id is its path there.
-	const vm = local ? undefined : safeVm(opts.vm ?? DEFAULT_HOST);
-	const port = local ? await freePort() : undefined;
-	const record: SessionRecord = {
-		id,
-		name,
-		url: vm !== undefined ? `https://${vm}.exe.xyz/${id}` : `http://127.0.0.1:${port}`,
-		token: randomBytes(24).toString("base64url"),
-		role: "owner",
-		dir,
-		compute: local ? "local" : "host",
-		vm,
-		port,
-		localRoot: local ? join(home, "local", id) : undefined,
-		createdAt: Date.now(),
-		status: "provisioning",
-		step: "starting",
-		setup: {
-			model,
-			setupModel: opts["setup-model"] ?? model,
-			thinkingLevel: pi.thinkingLevel,
-			owner: opts.name !== undefined ? { name: opts.name } : identity(),
-			faux: opts.faux,
-		},
-	};
-	// The server gets the folder as it is now; anything changed after this syncs up once it is running.
-	await Mirror.adopt(id, dir);
-	saveSession(record);
-	const log = openSync(sessionLog(id), "a");
-	const child = spawn(process.execPath, [process.argv[1]!, "__provision", id], { detached: true, stdio: ["ignore", log, log] });
-	child.unref();
-	saveSession({ ...record, provisioner: child.pid });
-	return { ...record, provisioner: child.pid };
-}
-
-/** Runs the background setup again for a session whose setup failed. */
-function retryProvision(record: SessionRecord): SessionRecord {
-	const log = openSync(sessionLog(record.id), "a");
-	const child = spawn(process.execPath, [process.argv[1]!, "__provision", record.id], { detached: true, stdio: ["ignore", log, log] });
-	child.unref();
-	const next: SessionRecord = { ...record, status: "provisioning", step: "starting", error: undefined, provisioner: child.pid };
-	saveSession(next);
-	return next;
-}
-
-/** `syncpi __provision <id>`: the background half of `start`. Reports each step in the session record. */
-async function provision(id: string): Promise<void> {
-	const record = loadSession(id);
-	if (record?.setup === undefined) throw new Error(`no session ${id} to set up`);
-	const update = (patch: Partial<SessionRecord>) => saveSession({ ...(loadSession(id) ?? record), ...patch });
-	const step = (text: string) => {
-		console.log(`${new Date().toISOString()} ${text}`);
-		update({ step: text });
-	};
-	const config = { id, name: record.name, ownerToken: record.token, ...record.setup };
-	try {
-		if (record.compute === "local") await provisionLocal(record.dir, config, record.port!, step, { faux: record.setup.faux });
-		else if (record.compute === "host") await provisionOnHost(record.dir, config, record.vm!, step);
-		else await provisionExe(record.dir, config, record.vm!, step);
-		update({ status: "ready", step: undefined, error: undefined, provisioner: undefined });
-		console.log("ready");
-	} catch (error) {
-		const message = String((error as Error).message ?? error);
-		console.log(`failed: ${message}`);
-		update({ status: "failed", step: undefined, error: message, provisioner: undefined });
-	}
-}
-
-function alive(pid: number | undefined): boolean {
-	if (pid === undefined) return false;
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-/** Resolves once the session's server is up; reports provisioning steps meanwhile. */
-async function untilReady(id: string, onStep: (step: string) => void): Promise<SessionRecord> {
-	for (;;) {
-		const record = loadSession(id);
-		if (record === undefined) throw new Error("the session was removed");
-		if (record.status === undefined || record.status === "ready") return record;
-		if (record.status === "failed") throw new Error(record.error ?? "setup failed");
-		if (!alive(record.provisioner)) throw new Error(`setup was interrupted (log: ${sessionLog(id)})`);
-		onStep(record.step ?? "starting");
-		await new Promise((r) => setTimeout(r, 500));
-	}
+/** Starts a session for `dir` with this command's options; its background half runs this same script. */
+function start(dir: string): Promise<SessionRecord> {
+	return startSession(dir, { local: opts.local, faux: opts.faux, model: opts.model, setupModel: opts["setup-model"], vm: opts.vm, owner: opts.name !== undefined ? { name: opts.name } : undefined, say }, process.argv[1]!);
 }
 
 async function joinFromUrl(url: string): Promise<SessionRecord> {
@@ -267,7 +154,7 @@ async function attach(initial: SessionRecord): Promise<void> {
 			throw new Error(`this folder's session could not be set up: ${record.error}\n  details: ${sessionLog(record.id)}\n  start over with: syncpi rm && syncpi`);
 		}
 		say(`\x1b[2m· the last setup failed (${record.error}); trying again\x1b[0m`);
-		record = retryProvision(record);
+		record = retryProvision(record, process.argv[1]!);
 	}
 	const conn = new Connection(record.url, record.token);
 	const mirror = opts["no-sync"] ? undefined : new Mirror(record.id, record.dir, conn);

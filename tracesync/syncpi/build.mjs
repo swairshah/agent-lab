@@ -21,6 +21,8 @@ await Promise.all([
     build({ ...node, entryPoints: ["src/desktop/host.ts"], outfile: "dist/desktop-host.mjs", external: [...node.external, "node-pty", "@earendil-works/pi-env", "@earendil-works/pi-coding-agent"] }),
     build({ ...node, entryPoints: ["src/desktop/context.ts"], outfile: "dist/pi-context.mjs", external: [...node.external, "@earendil-works/pi-coding-agent"] }),
 	build({ ...node, entryPoints: ["src/server/main.ts"], outfile: "dist/server.mjs" }),
+	// syncpi as a library (src/client): for the pi extension. pi-env and pi-coding-agent stay package imports, as in the CLI.
+	build({ ...node, entryPoints: ["src/client/index.ts"], outfile: "dist/client.mjs", external: [...node.external, "@earendil-works/pi-env", "@earendil-works/pi-coding-agent"] }),
 	build({ ...node, entryPoints: ["src/server/relay.ts"], outfile: "dist/relay.mjs" }),
 	// Records a browser for the agent; Playwright is installed next to it on a VM (src/cli/provision.ts).
 	build({ ...node, entryPoints: ["src/server/recorder.ts"], outfile: "dist/recorder.mjs", external: [...node.external, "playwright", "playwright-core"] }),

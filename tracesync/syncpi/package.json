@@ -36,6 +36,12 @@
   "bin": {
     "syncpi": "dist/cli.mjs"
   },
+  "exports": {
+    "./client": {
+      "types": "./src/client/index.ts",
+      "default": "./dist/client.mjs"
+    }
+  },
   "scripts": {
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit",
