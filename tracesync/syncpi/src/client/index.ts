@@ -13,6 +13,8 @@ import type { ServerMessage } from "../shared/protocol.ts";
 
 export type * from "../shared/protocol.ts";
 export { type Item, Thread, type ThreadState, toolSummary } from "../shared/thread.ts";
+/** People's unsent drafts are Yjs text, shared live with the session (shown as typing). */
+export { draftText, fromBase64, isCommand, toBase64, Y } from "../shared/drafts.ts";
 export { Connection, findByDir, LocalDevice, Mirror, type SessionRecord, type StartOptions };
 
 /** A file built next to this bundle in dist/. */

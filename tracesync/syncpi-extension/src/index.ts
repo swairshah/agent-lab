@@ -14,13 +14,31 @@ import { realpathSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { convertToLlm, sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { findByDir, type LiveEvent, LiveSession, openSession, type RecordedMessage, type ServerMessage, type SessionRecord, type StartOptions, whenReady } from "syncpi/client";
+import {
+	draftText,
+	findByDir,
+	fromBase64,
+	isCommand,
+	type LiveEvent,
+	LiveSession,
+	openSession,
+	type RecordedMessage,
+	type ServerMessage,
+	type SessionRecord,
+	type StartOptions,
+	whenReady,
+	Y,
+} from "syncpi/client";
 
 /** Messages from the thread that this pi didn't write: other people's turns. */
 const MESSAGE = "syncpi";
 /** This pi session is synced with a syncpi session (`id`), or stopped being (`stopped`). */
 const LINK = "syncpi-link";
 const STATUS = "syncpi";
+/** The widget above the editor that shows who is writing a message. */
+const TYPING = "syncpi-typing";
+/** How long after someone's last keystroke they still count as typing (then: "has a draft"). */
+const TYPING_MS = 4_000;
 /** How long the server has to say it heard a request for the turn. */
 const ANSWER_MS = 8_000;
 /** How long a recording (or an invite) may take before it counts as unanswered. */
@@ -87,7 +105,13 @@ class Sync {
 	#liveMessage: unknown;
 	#target = "";
 	#flushing: Promise<void> = Promise.resolve();
+	/** Other people's unsent drafts (shared live, as in syncpi's composer), by whose they are. */
+	readonly #drafts = new Map<string, { name: string; doc: Y.Doc; changed: number }>();
+	#typingTimer: NodeJS.Timeout | undefined;
+	/** Drafts arriving whole right after a (re)connect aren't someone typing. */
+	#draftsFrom = 0;
 	me = "";
+	#meId = "";
 
 	constructor(pi: ExtensionAPI, ctx: ExtensionContext, record: SessionRecord) {
 		this.#pi = pi;
@@ -118,6 +142,8 @@ class Sync {
 
 	close(): void {
 		clearTimeout(this.#liveTimer);
+		clearTimeout(this.#typingTimer);
+		this.#ctx.ui.setWidget(TYPING, undefined);
 		for (const request of this.#requests.values()) request.reject(new Error("syncpi: closed"));
 		this.#requests.clear();
 		this.live.close();
@@ -139,6 +165,9 @@ class Sync {
 		switch (message.type) {
 			case "welcome":
 				this.me = message.me.name;
+				this.#meId = message.me.id;
+				this.#drafts.clear();
+				this.#draftsFrom = Date.now() + 1_000;
 				// A fresh snapshot follows: take in what's new since, with the history before it.
 				this.#first = [];
 				return;
@@ -178,6 +207,17 @@ class Sync {
 					this.#pi.sendUserMessage(message.text, { deliverAs: "steer" });
 				}
 				return;
+			case "draft": {
+				if (message.owner === this.#meId) return;
+				let draft = this.#drafts.get(message.owner);
+				if (draft === undefined) this.#drafts.set(message.owner, (draft = { name: message.name, doc: new Y.Doc(), changed: 0 }));
+				draft.name = message.name;
+				if (message.update !== undefined) {
+					Y.applyUpdate(draft.doc, fromBase64(message.update));
+					if (Date.now() > this.#draftsFrom) draft.changed = Date.now();
+				}
+				return this.#typing();
+			}
 			case "accepted":
 				this.#requests.get(message.requestId)?.resolve();
 				this.#requests.delete(message.requestId);
@@ -198,6 +238,27 @@ class Sync {
 			default:
 				return;
 		}
+	}
+
+	/**
+	 * Who is writing a message, above the editor: "Bob is typing…" and the end of what they've written so far, or
+	 * "Bob has a draft" once they pause. Not commands (/…, !…), as in syncpi's own clients.
+	 */
+	#typing(): void {
+		clearTimeout(this.#typingTimer);
+		const now = Date.now();
+		const lines: string[] = [];
+		let typing = false;
+		for (const { name, doc, changed } of this.#drafts.values()) {
+			const text = draftText(doc).toString().replace(/\s+/g, " ").trim();
+			if (text === "" || isCommand(text)) continue;
+			const active = now - changed < TYPING_MS;
+			typing ||= active;
+			lines.push(`${name} ${active ? "is typing…" : "has a draft"}  ${text.length > 80 ? `…${text.slice(-80)}` : text}`);
+		}
+		this.#ctx.ui.setWidget(TYPING, lines.length > 0 ? lines : undefined);
+		// "is typing" becomes "has a draft" when they stop.
+		if (typing) this.#typingTimer = setTimeout(() => this.#typing(), TYPING_MS);
 	}
 
 	#takeFirst(): void {

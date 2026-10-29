@@ -4,7 +4,8 @@
 
 ```sh
 npm install                      # needs ../syncpi built (npm run build there)
-pi -e ./src/index.ts             # or: pi install ./  (then it loads in every pi session)
+pi -e ./src/index.ts             # this run only
+ln -s "$PWD" ~/.pi/agent/extensions/syncpi   # every pi session (what this machine has)
 ```
 
 In pi:
@@ -31,6 +32,7 @@ The syncpi session's thread (a pi-durable conversation on the syncpi server) and
   - other people's messages wait for it to end;
   - `/steer` reaches pi's run at its next step, and is recorded as theirs;
   - an admin's message (or one of yours from another client) stops pi's run.
+- **Who is writing.** syncpi shares everyone's unsent draft live. Above pi's editor you see "Bob is typing…" with the end of what Bob has written, or "Bob has a draft" once he pauses. The line goes when he sends or clears it.
 - **Files** are kept in sync with the session's copy, and this machine is your device for requests you send from syncpi's other clients, as with syncpi's own terminal client.
 
 The extension uses syncpi through its `syncpi/client` export. The server side is `src/server/pi-turns.ts` and the `record`, `turn` and `live` messages in syncpi's protocol.
@@ -41,7 +43,7 @@ The extension uses syncpi through its `syncpi/client` export. The server side is
 npm test    # builds ../syncpi, then runs test/sync.ts
 ```
 
-`test/sync.ts` runs a real pi in RPC mode with this extension and a scripted model (`test/faux-pi.ts`, which also adds two tools only that pi has), against a local syncpi server with its own scripted model. A collaborator joins over the protocol. Ten checks:
+`test/sync.ts` runs a real pi in RPC mode with this extension and a scripted model (`test/faux-pi.ts`, which also adds two tools only that pi has), against a local syncpi server with its own scripted model. A collaborator joins over the protocol. Eleven checks:
 
 1. `/sync` shares what the pi session had.
 2. A pi turn with its own tool reaches the thread in order.
@@ -51,11 +53,13 @@ npm test    # builds ../syncpi, then runs test/sync.ts
 6. An editor's message waits for pi's turn.
 7. The owner stops their pi's run from another client.
 8. A pi message stops the server's run.
-9. `/sync stop` carries on locally with the whole conversation.
-10. Against a server from before `/sync`, pi says it may need `syncpi update` and carries on unsynced, without waiting again.
+9. The collaborator's draft shows above pi's editor as they type, then as a draft, then goes when cleared.
+10. `/sync stop` carries on locally with the whole conversation.
+11. Against a server from before `/sync`, pi says it may need `syncpi update` and carries on unsynced, without waiting again.
 
 ## Not done yet
 
+- **Your typing in pi isn't shared.** Others see your messages once you send them, not as you type. pi has no event for editor changes, so sharing would mean polling the editor.
 - **In pi, other people's runs show only when each message is finished.** The footer shows whose turn it is, but not their partial answers.
 - **pi's own `/new`, `/tree` and `/compact`** change only this pi session. The thread keeps everything, and pi's context and the thread's can then differ.
 - **Side threads, `/land` and `/tree` on the thread** are syncpi's, from its web view, app or terminal.

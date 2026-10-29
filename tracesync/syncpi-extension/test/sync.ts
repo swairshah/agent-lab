@@ -6,7 +6,7 @@ import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Connection, type Item, type ServerMessage, Thread } from "syncpi/client";
+import { Connection, draftText, type Item, type ServerMessage, Thread, toBase64, Y } from "syncpi/client";
 import { WebSocketServer } from "ws";
 
 const here = import.meta.dirname;
@@ -181,7 +181,23 @@ try {
 	await until("Ada's answer in the thread", () => items().some((i) => i.kind === "assistant" && i.text === "(pi) me first"));
 	ok("a message in Ada's pi stops Bob's server run (she's an admin) and runs at once");
 
-	// 10. /sync stop: the session keeps the shared conversation, and pi carries on locally with it.
+	// 10. Bob writes a message (his draft is shared live, as in syncpi's composer): Ada's pi shows him typing it.
+	const bobId = bob.messages.flatMap((m) => (m.type === "welcome" ? [m.me.id] : []))[0]!;
+	const draft = new Y.Doc();
+	const sendDraft = () => bobConn!.send({ type: "draft", owner: bobId, update: toBase64(Y.encodeStateAsUpdate(draft)) });
+	const typing = () => records.filter((r) => r.type === "extension_ui_request" && r.method === "setWidget" && r.widgetKey === "syncpi-typing").at(-1)?.widgetLines as string[] | undefined;
+	draftText(draft).insert(0, "I think we should");
+	sendDraft();
+	draftText(draft).insert(draftText(draft).length, " rename the tool");
+	sendDraft();
+	await until("Ada's pi to show Bob typing", () => typing()?.[0] === "Bob is typing…  I think we should rename the tool");
+	await until("the pause to show", () => typing()?.[0]?.startsWith("Bob has a draft"), 8_000);
+	draftText(draft).delete(0, draftText(draft).length);
+	sendDraft();
+	await until("the typing line to go", () => typing() === undefined);
+	ok("Bob writing a message shows in Ada's pi as he types it, as a draft when he pauses, and goes when it's cleared");
+
+	// 11. /sync stop: the session keeps the shared conversation, and pi carries on locally with it.
 	const asked = () => items().filter((i) => i.kind === "user" && i.author === "Ada" && i.text === "what do you see").length;
 	const askedBefore = asked();
 	send({ type: "prompt", message: "/sync stop" });
@@ -192,7 +208,7 @@ try {
 	check(asked() === askedBefore, "and nothing more reaches the thread");
 	ok("/sync stop: pi carries on locally with the whole shared conversation, and the thread hears no more");
 
-	// 10. A server from before /sync (it ignores the turn and recordings): pi says so and carries on, unsynced.
+	// 12. A server from before /sync (it ignores the turn and recordings): pi says so and carries on, unsynced.
 	const oldServer = new WebSocketServer({ port: 0 });
 	await new Promise((r) => oldServer.once("listening", r));
 	oldServer.on("connection", (ws) => {
