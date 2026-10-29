@@ -17,6 +17,8 @@ export class TextBinding {
 	readonly #onRemote: () => void;
 	readonly #cleanup: (() => void)[] = [];
 	#frame = 0;
+	/** Text that stays here rather than going to the others (a question for your side thread being typed). */
+	hold: (value: string) => boolean = () => false;
 
 	/** `key`: whose draft, or "file:<path>". `onRemote`: after someone else's change is shown. */
 	constructor(input: HTMLTextAreaElement, session: SessionClient, key: string, onRemote: () => void = () => {}) {
@@ -75,6 +77,7 @@ export class TextBinding {
 
 	/** The textarea changed here (typed, or set by code): the same change goes into the text, for everyone. */
 	changed(): void {
+		if (this.hold(this.#input.value)) return;
 		replaceText(this.text, this.#input.value, this, this.#input.selectionEnd);
 		this.renderPeers();
 		this.shareCaret();

@@ -82,6 +82,8 @@ export class Follow {
 
 	/** Set while this person is using Find: where its matches take them isn't shared. */
 	paused = false;
+	/** The person followed is in their side thread (and was told so). */
+	#inSide = false;
 
 	/** Where this person is now, for anyone following them; sent when it changes, a few times a second at most. */
 	share(): void {
@@ -119,6 +121,13 @@ export class Follow {
 			this.#o.notify(`${session.nameOf(id)} left.`);
 			return this.stop();
 		}
+		// Their side thread is private: say so once, and stay where you are until they're back.
+		if (view.conv === "side") {
+			if (!this.#inSide) this.#o.notify(`${session.nameOf(id)} is in their private side thread.`);
+			this.#inSide = true;
+			return;
+		}
+		this.#inSide = false;
 		this.#moving = true;
 		if (view.conv !== showing()) show(view.conv);
 		const node = view.at === undefined ? null : box.querySelector<HTMLElement>(`:scope > [data-key="${CSS.escape(view.at)}"]`);

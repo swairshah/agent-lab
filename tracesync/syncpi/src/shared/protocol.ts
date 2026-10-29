@@ -5,9 +5,10 @@ import type { AgentEvent } from "@earendil-works/pi-durable";
 /**
  * "main" is the shared thread. "setup" is the background agent that prepares the VM; it is visible but not shared.
  * "land" is the latest land subthread: an agent that gets the thread's changes onto the main branch (a fork of the
- * thread, so it knows what changed); people can watch it and answer it.
+ * thread, so it knows what changed); people can watch it and answer it. "side" is this person's private side thread:
+ * a fork of the thread to ask about it, which only their own clients see (each member has their own).
  */
-export type ConvName = "main" | "setup" | "land";
+export type ConvName = "main" | "setup" | "land" | "side";
 
 /**
  * Where someone is in the app, so others can follow them: which thread (`conv`) and where in it (`at`, the key of
@@ -15,6 +16,9 @@ export type ConvName = "main" | "setup" | "land";
  * it's closed) and how far down it is (`scroll`, 0 to 1); and the file they're editing, if any.
  */
 export type View = { conv: ConvName; at?: string; offset?: number; panel: string | null; scroll?: number; editing?: string };
+
+/** This person's side thread: when it was forked from the thread. */
+export type SideInfo = { at: number };
 
 /** The latest land: who started it, and how it went (`detail`: the commit when landed, else why not). */
 export type LandInfo = { by: string; at: number; status: "running" | "landed" | "failed"; detail?: string };
@@ -105,14 +109,20 @@ export type ClientMessage =
 	 * this one, when the sender may stop it, and otherwise queues it; "followUp" queues it behind the current run;
 	 * "steer" joins the current run. `draft`: it was the shared draft of this member, which is cleared for everyone.
 	 */
-	| { type: "submit"; requestId: string; text: string; mode?: "interrupt" | "followUp" | "steer"; where?: Where; attachments?: Attachment[]; comments?: LineComment[]; draft?: string; conv?: "land" }
+	| { type: "submit"; requestId: string; text: string; mode?: "interrupt" | "followUp" | "steer"; where?: Where; attachments?: Attachment[]; comments?: LineComment[]; draft?: string; conv?: "land" | "side" }
 	/** This client runs its member's requests on its machine. */
 	| { type: "device"; device: DeviceInfo }
 	/** A fence finished: the local copy is in step with the session as of the fence. */
 	| { type: "fenceDone"; id: number; error?: string }
 	/** The local daemon for a channel exited. */
 	| { type: "envClose"; channel: number }
-	| { type: "abort"; conv?: "land" }
+	| { type: "abort"; conv?: "land" | "side" }
+	/**
+	 * Editors: open this person's side thread, forked from the thread as it is now (or kept, if they have one and not
+	 * `fresh`), then ask it `text`, if any. Only their own clients see it. `requestId`: echoed back, so the client
+	 * that asked shows it (in the app, requests leave through another connection than the page's).
+	 */
+	| { type: "side"; fresh?: boolean; text?: string; where?: Where; requestId?: string }
 	/** Editors: land the thread's changes on the main branch, in a land subthread, running where this person's run. */
 	| { type: "land"; where?: Where }
 	/** Admins: create an invite. With `email`, only that person can use it (signing in with exe.dev). */
@@ -173,6 +183,8 @@ export type ServerMessage =
 	/** Someone's cursor, in a draft or a file ("file:<path>"), or none (they left). */
 	| { type: "caret"; memberId: string; name: string; owner?: string; anchor?: unknown; head?: unknown }
 	| { type: "env"; env: EnvStatus }
+	/** This person's side thread (null: none); sent on connect and when it's opened. `requestId`: the request it answers. */
+	| { type: "side"; side: SideInfo | null; requestId?: string }
 	/** The latest land (null: none yet); sent on connect and whenever it changes. */
 	| { type: "land"; land: LandInfo | null }
 	/**

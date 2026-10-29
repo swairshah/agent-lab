@@ -124,7 +124,7 @@ export class ThreadView {
 		const conv = this.#conv;
 		const branch = this.#session.currentBranch;
 		const partial = this.#session.threads[conv].partial;
-		const name = conv === "setup" ? "Setup agent's thread" : conv === "land" ? "Land thread" : "Conversation";
+		const name = conv === "setup" ? "Setup agent's thread" : conv === "land" ? "Land thread" : conv === "side" ? "Side thread" : "Conversation";
 		return {
 			id: `conversation:${conv}:${branch}`,
 			label: partial ? `Loaded ${name.toLowerCase()} · earlier messages aren't searched` : name,

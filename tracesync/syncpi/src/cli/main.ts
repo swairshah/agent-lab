@@ -91,7 +91,7 @@ no API keys are copied anywhere.
   --no-pi           don't offer your pi setup (skills, AGENTS.md, prompt templates)
   --name <name>     your display name (default: git user.name)
 
-inside: /session-share  /web  /env  /who  /remote  /steer  /stop  /sync  /ssh  /quit`);
+inside: /session-share  /web  /env  /who  /remote  /steer  /queue  /side  /stop  /sync  /ssh  /quit`);
 }
 
 function here(): string {
@@ -301,8 +301,8 @@ async function attach(initial: SessionRecord): Promise<void> {
 }
 
 /**
- * A line-based client for scripts and tests: prints each finished item of the shared thread, reads messages (and
- * /session-share, /quit) from stdin.
+ * A line-based client for scripts and tests: prints each finished item of the shared thread (and of this person's
+ * side thread, as "side …"), reads messages (and /session-share, /side, /quit) from stdin.
  */
 function headless(record: SessionRecord, conn: Connection, mirror: Mirror | undefined, device: LocalDevice | undefined) {
 	let lastStep: string | undefined;
@@ -318,20 +318,21 @@ function headless(record: SessionRecord, conn: Connection, mirror: Mirror | unde
 
 async function runHeadless(record: SessionRecord, conn: Connection, mirror: Mirror | undefined, device: LocalDevice | undefined): Promise<void> {
 	const thread = new Thread();
+	const side = new Thread();
 	const printed = new Set<string>();
 	let members: Member[] = [];
 	let branches: BranchInfo[] = [];
 	const out = (line: string) => process.stdout.write(`${line}\n`);
-	const flush = () => {
-		for (const item of thread.state.items) {
-			if (printed.has(item.key)) continue;
+	const flush = (from = thread, prefix = "") => {
+		for (const item of from.state.items) {
+			if (printed.has(prefix + item.key)) continue;
 			if (item.kind === "assistant" && item.streaming) return;
 			if (item.kind === "tool" && (item.status === "running" || item.status === "pending")) return;
-			printed.add(item.key);
-			if (item.kind === "user") out(`[${item.author ?? "?"}] ${item.text}`);
-			else if (item.kind === "assistant") out(`agent: ${item.text}${item.error ? ` (error: ${item.error})` : ""}`);
-			else if (item.kind === "tool") out(`tool ${item.name} ${toolSummary(item)} -> ${item.status}`);
-			else out(`-- ${item.text}`);
+			printed.add(prefix + item.key);
+			if (item.kind === "user") out(`${prefix}[${item.author ?? "?"}] ${item.text}`);
+			else if (item.kind === "assistant") out(`${prefix}agent: ${item.text}${item.error ? ` (error: ${item.error})` : ""}`);
+			else if (item.kind === "tool") out(`${prefix}tool ${item.name} ${toolSummary(item)} -> ${item.status}`);
+			else out(`${prefix}-- ${item.text}`);
 		}
 	};
 	if (mirror !== undefined) mirror.onEvent = (e) => out(`sync ${e.type} ${"path" in e ? e.path : ""}${"message" in e ? e.message : ""}`);
@@ -345,7 +346,10 @@ async function runHeadless(record: SessionRecord, conn: Connection, mirror: Mirr
 		else if (message.type === "events" && message.conv === "main") {
 			thread.apply(message.events);
 			flush();
-		} else if (message.type === "files") mirror?.remoteChanged(message.full === true, message.changed, message.version);
+		} else if (message.type === "events" && message.conv === "side") {
+			side.apply(message.events);
+			flush(side, "side ");
+		} else if (message.type === "side") out(`side ${message.side === null ? "none" : `forked ${message.side.at}`}`); else if (message.type === "files") mirror?.remoteChanged(message.full === true, message.changed, message.version);
 		else if (message.type === "invite") out(`share ${message.url} ${message.invite.role}${message.invite.email ? ` ${message.invite.email}` : ""}`);
 		else if (message.type === "env") out(`env ${message.env.status}${message.env.activity ? ` ${message.env.activity}` : ""}`);
 		else if (message.type === "presence") {
@@ -388,6 +392,11 @@ async function runHeadless(record: SessionRecord, conn: Connection, mirror: Mirr
 			conn.send({ type: "fork", before: users[Number(words[0]) - 1]?.key ?? "" });
 		}
 		else if (command === "/revoke") conn.send({ type: "revoke", code: words[0] ?? "" });
+		else if (command === "/side") {
+			const fresh = words[0] === "new";
+			const question = (fresh ? words.slice(1) : words).join(" ");
+			conn.send({ type: "side", ...(fresh ? { fresh } : {}), ...(question ? { text: question } : {}), where: device === undefined ? "vm" : "device" });
+		}
 		else if (text.startsWith("/vm ")) conn.send({ type: "submit", requestId: randomUUID(), text: text.slice(4), where: "vm" });
 		else if (text.length > 0) conn.send({ type: "submit", requestId: randomUUID(), text, where: device === undefined ? "vm" : "device" });
 	}

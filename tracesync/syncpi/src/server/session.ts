@@ -34,7 +34,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { diff, Scanner } from "../shared/files.ts";
-import { ATTACHMENT_LIMITS, type Attachment, type BranchInfo, type ConvName, type EnvStatus, type FileHash, IMAGE_TYPES, type LandInfo, type Where, COMMENT_LIMITS, type LineComment } from "../shared/protocol.ts";
+import { ATTACHMENT_LIMITS, type Attachment, type BranchInfo, type ConvName, type EnvStatus, type FileHash, IMAGE_TYPES, type LandInfo, type SideInfo, type Where, COMMENT_LIMITS, type LineComment } from "../shared/protocol.ts";
 import { Thread, toolSummary } from "../shared/thread.ts";
 import type { Devices } from "./devices.ts";
 import { History } from "./history.ts";
@@ -226,6 +226,16 @@ const LAND_REQUEST = `Land this thread's changes on the project's main branch, t
 
 End your last message with exactly one line: "LANDED <commit sha>" once the changes are on the remote main branch, or "NOT LANDED: <why>".`;
 
+/** Added to the thread's instructions in a side thread (see Session.openSide). */
+function sideInstructions(name: string): string {
+	return `
+
+This is ${name}'s private side thread: a fork of the shared thread above, which only ${name} sees. Answer their questions about the thread and the project. You can read files and run commands to look around, but don't change anything (no edits, installs, commits or deploys): the project is shared, and changes belong in the shared thread. If they ask for a change, say what you would do and suggest they ask in the shared thread.`;
+}
+
+/** Tools a side thread doesn't get: it looks, it doesn't change the shared project or the thread's timeline. */
+const SIDE_WITHOUT = new Set(["write", "edit", "milestone", "remote_bash", "record_browser"]);
+
 type TaskId = Parameters<Harness["abortTask"]>[0];
 
 /** Who started a run and where its tools execute, read back from the request ID of its first input. */
@@ -245,6 +255,11 @@ export class Session {
 	/** The latest land subthread, if there has been one. */
 	land: Conversation | undefined;
 	#landWatch: AgentEventStream | undefined;
+	/**
+	 * Each member's side thread (openSide), by member id. Kept in memory only: after a restart they're gone (their
+	 * conversations stay in session.sqlite, unreferenced).
+	 */
+	readonly #sides = new Map<string, { conversation: Conversation; at: number }>();
 	readonly #listeners: SessionEvents;
 	readonly #scanner: Scanner;
 	/** The project before the shared thread's last turn. */
@@ -314,10 +329,13 @@ export class Session {
 				registry,
 				// The setup agent always works on the VM. The shared thread works wherever its current run's sender asked:
 				// their own machine from a terminal, or the VM.
-				// A land subthread works where the person who started it asked, too (their git credentials are there).
+				// A land subthread works where the person who started it asked, too (their git credentials are there), and a side
+				// thread where its person asked.
 				env: async (target) => {
 					const vm = () => new NodeExecutionEnv({ cwd: target.cwd ?? this.workdir, shellEnv: env });
-					const routed = this.main !== undefined && (target.conversationId === this.main.id || target.conversationId === this.land?.id);
+					const routed =
+						this.main !== undefined &&
+						(target.conversationId === this.main.id || target.conversationId === this.land?.id || [...this.#sides.values()].some((side) => side.conversation.id === target.conversationId));
 					if (!routed) return vm();
 					return this.#envFor(await this.#route(target.read, target.conversationId as ConversationId), vm);
 				},
@@ -362,12 +380,56 @@ export class Session {
 		void this.#runSetup();
 	}
 
-	conversation(name: ConvName): Conversation {
+	/** `memberId`: whose side thread, for "side". */
+	conversation(name: ConvName, memberId?: string): Conversation {
 		if (name === "land") {
 			if (this.land === undefined) throw new Error("nothing has been landed yet");
 			return this.land;
 		}
+		if (name === "side") {
+			const side = memberId === undefined ? undefined : this.#sides.get(memberId);
+			if (side === undefined) throw new Error("you have no side thread; /side starts one");
+			return side.conversation;
+		}
 		return name === "main" ? this.main : this.setup;
+	}
+
+	// ---------- side threads: a private fork of the thread, per person ----------
+
+	sideInfo(memberId: string): SideInfo | null {
+		const side = this.#sides.get(memberId);
+		return side === undefined ? null : { at: side.at };
+	}
+
+	/**
+	 * `member`'s side thread: a fork of the shared thread as it is now, to ask about it without the others seeing. It
+	 * keeps the thread's model and instructions (plus a note that it's a side thread), and can look but not change
+	 * anything. An existing one is kept unless `fresh`. Nothing is written to the shared thread.
+	 */
+	async openSide(member: StoredMember, fresh: boolean): Promise<{ info: SideInfo; created: boolean }> {
+		const existing = this.#sides.get(member.id);
+		if (existing !== undefined && !fresh) return { info: { at: existing.at }, created: false };
+		if (existing !== undefined) await this.abort("side", member.id).catch(() => {});
+		const last = (await this.main.entries({ order: "descending" }, 1, undefined, context)).items[0];
+		const agent = await this.main.agent(context);
+		const change = {
+			instructions: `${agent.instructions ?? ""}${sideInstructions(member.name)}`,
+			modelTools: { remove: agent.tools.filter((tool) => SIDE_WITHOUT.has(tool.name)) },
+		};
+		const conversation =
+			last === undefined
+				? await this.harness.createConversation({ ownership: { kind: "ownerless" }, agent: { model: agent.model, thinkingLevel: agent.thinkingLevel, cwd: agent.cwd, ...change } }, context)
+				: await this.main.fork(last.id, { ownership: { kind: "ownerless" }, agent: change }, context);
+		const side = { conversation, at: Date.now() };
+		this.#sides.set(member.id, side);
+		return { info: { at: side.at }, created: true };
+	}
+
+	/** A member was removed: their side thread stops and is forgotten. */
+	async #dropSide(memberId: string): Promise<void> {
+		if (!this.#sides.has(memberId)) return;
+		await this.abort("side", memberId).catch(() => {});
+		this.#sides.delete(memberId);
 	}
 
 	// ---------- land: the thread's changes onto the main branch ----------
@@ -535,18 +597,18 @@ export class Session {
 		this.#listeners.branch();
 	}
 
-	/** Attaches a client to one conversation: the snapshot and every later batch, without gaps. */
-	watch(name: ConvName): Promise<AgentEventStream> {
-		return watchEvents(this.harness, this.conversation(name).id, context);
+	/** Attaches a client to one conversation: the snapshot and every later batch, without gaps. `memberId`: for "side". */
+	watch(name: ConvName, memberId?: string): Promise<AgentEventStream> {
+		return watchEvents(this.harness, this.conversation(name, memberId).id, context);
 	}
 
 	/**
 	 * `others`: who else wrote it, when it was a draft written together. `conv` "land": an answer in the land
-	 * subthread. `shownText`: what people see of it, when not the text itself.
+	 * subthread; "side": a question in `member`'s side thread. `shownText`: what people see of it, when not the text.
 	 */
-	async submit(member: StoredMember, requestId: string, text: string, mode: "followUp" | "steer", where: Where, attachments: Attachment[] = [], comments: LineComment[] = [], others: string[] = [], conv?: "land", shownText?: string): Promise<void> {
-		const conversation = conv === "land" ? this.land : this.main;
-		if (conversation === undefined) throw new Error("there's no land thread");
+	async submit(member: StoredMember, requestId: string, text: string, mode: "followUp" | "steer", where: Where, attachments: Attachment[] = [], comments: LineComment[] = [], others: string[] = [], conv?: "land" | "side", shownText?: string): Promise<void> {
+		const conversation = conv === "land" ? this.land : conv === "side" ? this.#sides.get(member.id)?.conversation : this.main;
+		if (conversation === undefined) throw new Error(conv === "side" ? "you have no side thread; /side starts one" : "there's no land thread");
 		const checked = checkComments(comments);
 		// A request can only run on its sender's own machine, and only while it is connected.
 		const destination: Where = where === "device" && this.devices.online(member.id) !== undefined ? "device" : "vm";
@@ -587,8 +649,8 @@ export class Session {
 	 * Stops the current run only. Queued messages, including other people's, stay queued; the next one starts a new run.
 	 * (Conversation.abort would withdraw every queued input.)
 	 */
-	async abort(conv?: "land"): Promise<void> {
-		const id = conv === "land" ? this.land?.id : this.main.id;
+	async abort(conv?: "land" | "side", memberId?: string): Promise<void> {
+		const id = conv === "land" ? this.land?.id : conv === "side" ? this.#sides.get(memberId ?? "")?.conversation.id : this.main.id;
 		if (id === undefined) return;
 		const live = await this.harness.snapshot(LiveDoc, id, context);
 		if (live?.run !== undefined) await this.harness.abortTask(live.run.taskId, context);
@@ -598,14 +660,22 @@ export class Session {
 	 * Stops the run `taskId`, if it's still going, and resolves once it has ended: a message sent then starts a run
 	 * at once, with the messages queued behind the stopped run.
 	 */
-	async interrupt(taskId: TaskId): Promise<void> {
+	async interrupt(taskId: TaskId, conversation: Conversation = this.main): Promise<void> {
 		await this.harness.abortTask(taskId, context).catch(() => {});
 		const deadline = Date.now() + 15_000;
 		while (Date.now() < deadline) {
-			const live = await this.harness.snapshot(LiveDoc, this.main.id, context);
+			const live = await this.harness.snapshot(LiveDoc, conversation.id, context);
 			if (live?.run?.taskId !== taskId) return;
 			await new Promise((r) => setTimeout(r, 50));
 		}
+	}
+
+	/** The run in `member`'s side thread, if one is running. */
+	async sideRun(memberId: string): Promise<{ taskId: TaskId; conversation: Conversation } | undefined> {
+		const side = this.#sides.get(memberId);
+		if (side === undefined) return undefined;
+		const live = await this.harness.snapshot(LiveDoc, side.conversation.id, context);
+		return live?.run === undefined ? undefined : { taskId: live.run.taskId, conversation: side.conversation };
 	}
 
 	/** The shared thread's current run, if one is running, and who started it. */
@@ -631,6 +701,7 @@ export class Session {
 			if (data?.memberId === memberId) await (await this.harness.submission(item.id, context))?.abort(context);
 		}
 		if ((await this.runner()) === memberId) await this.abort();
+		await this.#dropSide(memberId);
 	}
 
 	async #route(read: DocumentReader, conversation: ConversationId = this.main.id): Promise<Route> {

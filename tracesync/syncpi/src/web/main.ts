@@ -81,7 +81,7 @@ async function main(): Promise<void> {
 	// was made (thread-view.ts).
 	const sendComment = (comment: LineComment) => {
 		if (session.role === "viewer") return toast("Viewers can't comment; ask an admin to make you an editor.", "error");
-		session.submit(composer.takeText(), "interrupt", where, [], [comment]);
+		session.submit(composer.takeText(), "interrupt", where, [], [comment], undefined, showing === "side" ? "side" : undefined);
 	};
 	// A project file as an artifact, for a tab in the panel.
 	const loadFile = async (path: string, lines?: string) => {
@@ -142,10 +142,14 @@ async function main(): Promise<void> {
 		session.send({ type: "fork", before: key });
 		composer.setText(text);
 	};
-	const show = (conv: ConvName) => {
+	const show = (conv: ConvName): void => {
 		if (conv === "land" && session.land === null) return toast("Nothing has been landed yet: /land starts it.");
+		if (conv === "side" && session.side === null) return side();
 		showing = conv;
 		$("setup-banner").hidden = conv === "main";
+		$("side-fresh").hidden = conv !== "side";
+		// Your side thread is private: the composer there isn't the shared draft the others see as you type.
+		composer.setPrivate(conv === "side");
 		updateLandBanner();
 		threadView.show(conv);
 		threadMap.enabled = conv === "main";
@@ -227,8 +231,9 @@ async function main(): Promise<void> {
 			embedded,
 			notify: toast,
 			showSetup: () => show("setup"),
-			conv: () => (showing === "land" ? "land" : "main"),
+			conv: () => (showing === "land" || showing === "side" ? showing : "main"),
 			land: () => land(),
+			side: (text, fresh) => side(text, fresh),
 			togglePanel: () => panel.toggle(),
 			openSettings: (section) => settings.open(section),
 			confirm: (id) => dialogs.open(id),
@@ -247,6 +252,21 @@ async function main(): Promise<void> {
 	$("where-label").addEventListener("click", () => setWhere(where === "device" ? "vm" : "device"));
 	$<HTMLSelectElement>("where").addEventListener("change", (event) => setWhere((event.target as HTMLSelectElement).value as Where));
 
+	/**
+	 * Your side thread: a private fork of the thread to ask about it (the server keeps yours until it restarts, or
+	 * `fresh` forks it again from the thread as it is now). `text`: a question to ask it.
+	 */
+	const side = (text?: string, fresh = false): void => {
+		if (session.role === "viewer") return toast("Viewers can't start a side thread.", "error");
+		if (session.side !== null && !fresh && !text) return show("side");
+		session.openSide(where, fresh, text);
+	};
+	session.onSideOpen = () => show("side");
+	session.on("side", () => {
+		if (showing === "side" && session.side === null) show("main");
+	});
+	$("side-fresh").addEventListener("click", () => side(undefined, true));
+
 	/** The rocket: open the land in progress, or ask to start one. */
 	const land = () => {
 		if (session.role === "viewer") return toast("Viewers can't land changes.", "error");
@@ -263,13 +283,14 @@ async function main(): Promise<void> {
 		button.title = info === null ? "Land changes on main" : info.status === "running" ? `Landing (${info.by})… click to follow` : info.status === "landed" ? `Landed on main (${info.detail ?? ""}). Click to land again` : `Not landed: ${info.detail ?? ""}. Click to try again`;
 		$("land-stop").hidden = showing !== "land" || info?.status !== "running";
 		if (showing === "setup") $("side-title").textContent = "Setup agent's thread";
+		else if (showing === "side") $("side-title").textContent = "Your side thread · only you see it, and it can't change files";
 		else if (showing === "land" && info !== null)
 			$("side-title").textContent = info.status === "running" ? `Landing, started by ${info.by}` : info.status === "landed" ? `Landed on main (${info.detail?.slice(0, 12)})` : `Not landed: ${info.detail}`;
 	};
 	const updateComposer = () => {
 		const viewer = session.role === "viewer";
-		// The land thread can be answered too (it may ask how this project ships).
-		const talks = showing === "main" || showing === "land";
+		// The land thread can be answered too (it may ask how this project ships), and your side thread asked.
+		const talks = showing === "main" || showing === "land" || showing === "side";
 		$("composer").hidden = !talks;
 		$("viewer-note").hidden = !viewer;
 		$<HTMLTextAreaElement>("input").hidden = viewer;
@@ -291,7 +312,7 @@ async function main(): Promise<void> {
 		if (s.queued > 0) parts.push(`${s.queued} queued`);
 		$("status-text").textContent = parts.join(" · ");
 		$("activity").dataset.busy = String(s.busy || s.compacting);
-		$("stop").hidden = !(showing === "main" && session.threads.main.state.busy) || session.role === "viewer";
+		$("stop").hidden = !((showing === "main" || showing === "side") && session.threads[showing].state.busy) || session.role === "viewer";
 		const model = session.threads.main.state.model ?? session.info?.model ?? "model";
 		// The vendor's mark is one of our bundled SVGs; the name is escaped.
 		$("model-chip").innerHTML = `${modelVendor(model)?.svg ?? ""}<span>${escapeHtml(model)}</span>`;
@@ -385,7 +406,7 @@ async function main(): Promise<void> {
 	$("panel-toggle").addEventListener("click", () => panel.toggle());
 	$("diff-chip").addEventListener("click", () => panel.showChanges());
 	$("share").addEventListener("click", () => session.send({ type: "invite" }));
-	$("stop").addEventListener("click", () => session.send({ type: "abort" }));
+	$("stop").addEventListener("click", () => session.send(showing === "side" ? { type: "abort", conv: "side" } : { type: "abort" }));
 	$("setup-back").addEventListener("click", () => show("main"));
 	$("land-stop").addEventListener("click", () => session.send({ type: "abort", conv: "land" }));
 	$("land-button").addEventListener("click", () => land());
@@ -494,7 +515,7 @@ async function main(): Promise<void> {
 				panel.refresh();
 			},
 			"thread.share": admin(() => session.send({ type: "invite" })),
-			"agent.stop": editor(() => session.send({ type: "abort" })),
+			"agent.stop": editor(() => session.send(showing === "side" ? { type: "abort", conv: "side" } : { type: "abort" })),
 			"agent.model": admin(() => void pickModel()),
 			"agent.compact": editor(() => dialogs.open("compact")),
 			"agent.newContext": admin(() => dialogs.open("reset")),
@@ -502,6 +523,7 @@ async function main(): Promise<void> {
 			"agent.setup": () => show(showing === "setup" ? "main" : "setup"),
 			"agent.land": editor(() => land()),
 			"agent.landThread": () => show(showing === "land" ? "main" : "land"),
+			"agent.side": editor(() => (showing === "side" ? show("main") : side())),
 			"view.changes": () => panel.toggle(),
 			"view.files": () => panel.toggleTree(),
 			"view.people": () => settings.open("people"),

@@ -1,12 +1,12 @@
 // The web view's live session: one WebSocket (reconnecting, each time from a fresh snapshot), the state it carries,
 // and an outbox so a message typed while offline is sent once the connection is back. Views subscribe to the parts
 // they show; this module knows nothing about the DOM.
-import type { Attachment, BranchInfo, ClientMessage, LineComment, ConvName, EnvStatus, InviteInfo, LandInfo, Member, Presence, ServerMessage, SessionInfo, View, Where } from "../shared/protocol.ts";
+import type { Attachment, BranchInfo, ClientMessage, LineComment, ConvName, EnvStatus, InviteInfo, LandInfo, Member, SideInfo, Presence, ServerMessage, SessionInfo, View, Where } from "../shared/protocol.ts";
 import { draftText, fromBase64, replaceText, toBase64, Y } from "../shared/drafts.ts";
 import { Thread } from "../shared/thread.ts";
 import { storage } from "./dom.ts";
 
-export type Change = "session" | "thread" | "people" | "env" | "invites" | "branches" | "files" | "connection" | "target" | "drafts" | "land" | "views" | "docs";
+export type Change = "session" | "thread" | "people" | "env" | "invites" | "branches" | "files" | "connection" | "target" | "drafts" | "land" | "side" | "views" | "docs";
 
 type Submit = Extract<ClientMessage, { type: "submit" }>;
 
@@ -20,7 +20,7 @@ const REMOTE = Symbol("remote");
 export type Caret = { name: string; owner: string; anchor?: unknown; head?: unknown; at: number };
 
 export class SessionClient {
-	readonly threads: Record<ConvName, Thread> = { main: new Thread(), setup: new Thread(), land: new Thread() };
+	readonly threads: Record<ConvName, Thread> = { main: new Thread(), setup: new Thread(), land: new Thread(), side: new Thread() };
 	info: SessionInfo | undefined;
 	me: Member | undefined;
 	members: Member[] = [];
@@ -35,6 +35,12 @@ export class SessionClient {
 	readonly hashes = new Map<string, string>();
 	/** The latest land subthread and how it went; null before the first. */
 	land: LandInfo | null = null;
+	/** This person's side thread (a private fork of the thread), if they have one. */
+	side: SideInfo | null = null;
+	/** The server forked or reopened the side thread at this page's request: show it. */
+	onSideOpen: () => void = () => {};
+	/** Side thread requests from this page, not answered yet. */
+	readonly #sideRequests = new Set<string>();
 	/** Where the current run's tools execute. */
 	target = "";
 	connection: "connecting" | "open" | "reconnecting" | "removed" = "connecting";
@@ -194,7 +200,7 @@ export class SessionClient {
 	 * Sends a message to the agent; it stays in the outbox until the server acknowledges it. "interrupt" stops the
 	 * current run for it (as in Delta). `draft`: whose shared draft it was.
 	 */
-	submit(text: string, mode: "interrupt" | "followUp" | "steer", where: Where, attachments: Attachment[] = [], comments: LineComment[] = [], draft?: string, conv?: "land"): void {
+	submit(text: string, mode: "interrupt" | "followUp" | "steer", where: Where, attachments: Attachment[] = [], comments: LineComment[] = [], draft?: string, conv?: "land" | "side"): void {
 		const message: Submit = {
 			type: "submit",
 			requestId: crypto.randomUUID(),
@@ -210,6 +216,13 @@ export class SessionClient {
 		this.#saveOutbox();
 		this.send(message);
 		this.#emit("thread");
+	}
+
+	/** Opens this person's side thread (forked again when `fresh`), asking it `text`; it's shown once it's there. */
+	openSide(where: Where, fresh = false, text?: string): void {
+		const requestId = crypto.randomUUID();
+		this.#sideRequests.add(requestId);
+		this.send({ type: "side", requestId, where, ...(fresh ? { fresh } : {}), ...(text ? { text } : {}) });
 	}
 
 	/** Survives a reload, except messages with attachments: those can be megabytes, more than storage holds. */
@@ -296,6 +309,11 @@ export class SessionClient {
 			case "land":
 				this.land = message.land;
 				return this.#emit("land");
+			case "side":
+				// (A new fork's snapshot replaces what the side thread showed.)
+				this.side = message.side;
+				if (message.requestId !== undefined && this.#sideRequests.delete(message.requestId)) this.onSideOpen();
+				return this.#emit("side");
 			case "files": {
 				const names = new Set(message.full ? [] : this.files);
 				if (message.full) this.hashes.clear();

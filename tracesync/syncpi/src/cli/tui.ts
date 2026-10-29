@@ -20,7 +20,7 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { type BranchInfo, type ConvName, type EnvStatus, type InviteInfo, type Member, type Presence, ROLES, type Role, type ServerMessage, type SessionInfo } from "../shared/protocol.ts";
+import { type BranchInfo, type ConvName, type EnvStatus, type InviteInfo, type Member, type Presence, ROLES, type Role, type ServerMessage, type SessionInfo, type SideInfo } from "../shared/protocol.ts";
 import { type Artifact, patchStats, replyArtifacts, threadArtifacts, toolArtifacts } from "../shared/artifacts.ts";
 import { draftText, fromBase64, isCommand, Y } from "../shared/drafts.ts";
 import { type Item, milestoneOf, Thread, toolSummary } from "../shared/thread.ts";
@@ -226,6 +226,7 @@ const COMMANDS = [
 	{ name: "env", description: "Show or hide the setup agent's thread" },
 	{ name: "steer", description: "Add to what the agent is doing, without stopping it", argumentHint: "<message>" },
 	{ name: "queue", description: "Send after the agent's current run, without stopping it", argumentHint: "<message>" },
+	{ name: "side", description: "Your private side thread, forked from this one, to ask about it (/side new forks it again)", argumentHint: "[question]" },
 	{ name: "land", description: "Land this thread's changes on main (the project's land skill; runs where yours do)" },
 	{ name: "remote", description: "Run this request on the session VM; it keeps going if you quit", argumentHint: "<task>" },
 	{ name: "stop", description: "Stop the agent (also Esc)" },
@@ -246,13 +247,17 @@ export class App {
 	/** Where the shared thread's current run executes, as the server reports it. */
 	#target = "";
 	#localTools = 0;
-	readonly #threads: Record<ConvName, Thread> = { main: new Thread(), setup: new Thread(), land: new Thread() };
+	readonly #threads: Record<ConvName, Thread> = { main: new Thread(), setup: new Thread(), land: new Thread(), side: new Thread() };
 	readonly #view: ThreadView;
 	readonly #header = new Lines();
 	readonly #notes = new Lines();
 	readonly #status = new Lines();
 	readonly #editor: Editor;
 	#showing: ConvName = "main";
+	/** This person's side thread (a private fork of the thread), if they have one. */
+	#side: SideInfo | null = null;
+	/** The /side request this terminal sent last: its answer opens the side thread here. */
+	#sideRequest: string | undefined;
 	#session: SessionInfo | undefined;
 	#me: Member | undefined;
 	#online: Presence[] = [];
@@ -363,6 +368,14 @@ export class App {
 				this.#show("main");
 				return { consume: true };
 			}
+			// In your side thread Esc stops its run, or else goes back to the shared thread.
+			if (this.#showing === "side") {
+				if (this.#threads.side.state.busy) {
+					this.#conn.send({ type: "abort", conv: "side" });
+					this.#note(c.gray("stopping your side thread's agent…"), 3_000);
+				} else this.#show("main");
+				return { consume: true };
+			}
 			if (this.#threads.main.state.busy) {
 				this.#conn.send({ type: "abort" });
 				this.#note(c.gray("stopping the agent…"), 3_000);
@@ -391,6 +404,11 @@ export class App {
 				this.#threads[message.conv].prepend(message.entries);
 				if (message.conv === "main") this.#numberArtifacts();
 				this.#view.invalidate();
+				break;
+			case "side":
+				this.#side = message.side;
+				if (message.requestId !== undefined && message.requestId === this.#sideRequest) this.#show("side");
+				else if (this.#side === null && this.#showing === "side") this.#show("main");
 				break;
 			case "draft": {
 				let draft = this.#drafts.get(message.owner);
@@ -447,8 +465,14 @@ export class App {
 	#send(text: string): void {
 		if (this.#me?.role === "viewer") return this.#note(c.gray("you're a viewer in this session; an admin can make you an editor"), 6_000);
 		if (this.#showing === "setup") this.#show("main");
-		// As in Delta, a new message stops the agent's current run and starts its own (/steer and /queue don't).
-		this.#conn.send({ type: "submit", requestId: randomUUID(), text, mode: "interrupt", where: this.#where });
+		// As in Delta, a new message stops the agent's current run and starts its own (/steer and /queue don't). In
+		// your side thread, it goes there.
+		this.#conn.send({ type: "submit", requestId: randomUUID(), text, mode: "interrupt", where: this.#where, ...this.#sideConv() });
+	}
+
+	/** Messages and /stop go to your side thread while it's shown. */
+	#sideConv(): { conv?: "side" } {
+		return this.#showing === "side" ? { conv: "side" } : {};
 	}
 
 	#command(text: string): void {
@@ -530,15 +554,23 @@ export class App {
 				return this.#note(c.gray("landing: an agent commits, rebases, runs the checks and pushes to main; its progress shows here"), 8_000);
 			case "queue":
 				if (arg.length === 0) return this.#note(c.gray("usage: /queue <message>"), 4_000);
-				this.#conn.send({ type: "submit", requestId: randomUUID(), text: arg, mode: "followUp", where: this.#where });
+				this.#conn.send({ type: "submit", requestId: randomUUID(), text: arg, mode: "followUp", where: this.#where, ...this.#sideConv() });
 				return;
 			case "steer":
 				if (arg.length === 0) return this.#note(c.gray("usage: /steer <message>"), 4_000);
-				this.#conn.send({ type: "submit", requestId: randomUUID(), text: arg, mode: "steer", where: this.#where });
+				this.#conn.send({ type: "submit", requestId: randomUUID(), text: arg, mode: "steer", where: this.#where, ...this.#sideConv() });
 				return;
 			case "stop":
-				this.#conn.send({ type: "abort" });
+				this.#conn.send({ type: "abort", ...this.#sideConv() });
 				return;
+			case "side": {
+				if (this.#me?.role === "viewer") return this.#note(c.gray("viewers can't start a side thread"), 4_000);
+				const fresh = arg === "new";
+				if (this.#side !== null && !fresh && arg.length === 0) return this.#show("side");
+				this.#sideRequest = randomUUID();
+				this.#conn.send({ type: "side", requestId: this.#sideRequest, ...(fresh ? { fresh } : {}), ...(arg.length > 0 && !fresh ? { text: arg } : {}), where: this.#where });
+				return this.#note(c.gray("your side thread: a private fork of this one, which can look but not change files. Esc goes back"), 6_000);
+			}
 			case "where": {
 				if (arg === "vm") this.#where = "vm";
 				else if (arg === "here" || arg === "local") {
@@ -713,7 +745,7 @@ export class App {
 		const name = s?.name ?? this.#record.name;
 		const people = [...new Map(this.#online.map((p) => [p.memberId, p])).values()].map((p) => personColor(p.name)(`● ${p.name}`)).join(" ");
 		const waiting = this.#setup !== undefined ? c.gray("the session is being created; type away, messages are sent once it is up") : c.gray("connecting…");
-		const title = this.#showing === "setup" ? c.yellow(" · setup agent (Esc to go back)") : "";
+		const title = this.#showing === "setup" ? c.yellow(" · setup agent (Esc to go back)") : this.#showing === "side" ? c.yellow(" · your side thread, only you see it (Esc to go back)") : "";
 		const me = this.#me === undefined ? "" : c.gray(` · you: ${this.#me.name}, ${this.#me.role}`);
 		const branchInfo = this.#branches.find((b) => b.id === this.#branch);
 		const branchLabel = branchInfo !== undefined && this.#branches.length > 1 ? c.yellow(` · ${branchInfo.label}`) : "";
@@ -727,7 +759,7 @@ export class App {
 			parts.push(c.yellow(`${SPINNER[this.#frame % SPINNER.length]} setting up: ${this.#setup.step}${queued > 0 ? ` · ${queued} message${queued > 1 ? "s" : ""} waiting` : ""}`));
 		} else if (this.#connState !== "open") parts.push(c.yellow(`${this.#connState}${this.#connDetail ? ` (${this.#connDetail})` : ""}`));
 		if (thread.retry) parts.push(c.yellow(`retrying: ${thread.retry}`));
-		else if (thread.busy) parts.push(c.accent(`${SPINNER[this.#frame % SPINNER.length]} working${this.#showing === "main" ? " · Esc to stop" : ""}`));
+		else if (thread.busy) parts.push(c.accent(`${SPINNER[this.#frame % SPINNER.length]} working${this.#showing === "main" || this.#showing === "side" ? " · Esc to stop" : ""}`));
 		if (thread.compacting) parts.push(c.accent("summarizing older messages…"));
 		if (thread.queued > 0) parts.push(`${thread.queued} queued`);
 		if (this.#setup === undefined) parts.push(envLabel(this.#env));

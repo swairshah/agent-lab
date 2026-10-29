@@ -21,10 +21,12 @@ export type CommandContext = {
 	embedded: boolean;
 	notify(text: string, tone?: "info" | "error"): void;
 	showSetup(): void;
-	/** Which thread the composer talks to: the shared thread, or the land subthread being shown. */
-	conv(): "main" | "land";
+	/** Which thread the composer talks to: the shared thread, the land subthread or your side thread being shown. */
+	conv(): "main" | "land" | "side";
 	/** Lands the thread's changes (asks first), or shows the land in progress. */
 	land(): void;
+	/** Opens your side thread (forked again when `fresh`), and asks it `text`. */
+	side(text?: string, fresh?: boolean): void;
 	togglePanel(): void;
 	openSettings(section?: Section): void;
 	confirm(id: "compact" | "reset"): void;
@@ -73,9 +75,10 @@ const COMMANDS: Command[] = [
 		if (!arg) return c.notify("Say what to do: /remote <task>");
 		c.session.submit(arg, "interrupt", "vm");
 	} },
-	{ name: "steer", description: "Add to what the agent is doing, without stopping it: /steer <message>", run: (arg, _w, c) => arg && c.session.submit(arg, "steer", c.where()) },
-	{ name: "queue", description: "Send after the agent's current run, without stopping it: /queue <message>", run: (arg, _w, c) => arg && c.session.submit(arg, "followUp", c.where()) },
-	{ name: "stop", description: "Stop the agent", run: (_a, _w, c) => c.session.send({ type: "abort" }) },
+	{ name: "steer", description: "Add to what the agent is doing, without stopping it: /steer <message>", run: (arg, _w, c) => arg && c.session.submit(arg, "steer", c.where(), [], [], undefined, sideOnly(c)) },
+	{ name: "queue", description: "Send after the agent's current run, without stopping it: /queue <message>", run: (arg, _w, c) => arg && c.session.submit(arg, "followUp", c.where(), [], [], undefined, sideOnly(c)) },
+	{ name: "stop", description: "Stop the agent", run: (_a, _w, c) => c.session.send(c.conv() === "side" ? { type: "abort", conv: "side" } : { type: "abort" }) },
+	{ name: "side", description: "Your private side thread, forked from this one, to ask about it: /side [question], /side new", run: (arg, _w, c) => (arg === "new" ? c.side(undefined, true) : c.side(arg || undefined)) },
 	{ name: "env", description: "The setup agent's thread", run: (_a, _w, c) => c.showSetup() },
 	{ name: "land", description: "Land this thread's changes on main (the project's land skill)", run: (_a, _w, c) => c.land() },
 	{ name: "changes", description: "Changes and artifacts", run: (_a, _w, c) => c.togglePanel() },
@@ -93,6 +96,11 @@ const COMMANDS: Command[] = [
 		else c.notify(c.embedded ? "Use /where here or /where vm" : "Requests from a browser run on the session VM");
 	} },
 ];
+
+/** "side" when the composer is in your side thread (/steer and /queue go there), else the shared thread. */
+function sideOnly(c: CommandContext): "side" | undefined {
+	return c.conv() === "side" ? "side" : undefined;
+}
 
 function memberId(c: CommandContext, query: string): string {
 	return c.session.members.find((m) => m.name === query || m.email === query || m.id === query)?.id ?? query;
@@ -134,6 +142,9 @@ export class Composer {
 	#tagTimer: ReturnType<typeof setTimeout> | undefined;
 	/** Prompt template names offered by an embedding app; they expand there. */
 	prompts: string[] = [];
+	/** In your side thread: what's typed is yours alone, not the shared draft; `#privateText` keeps it while away. */
+	#private = false;
+	#privateText = "";
 
 	constructor(context: CommandContext, draftKey: string) {
 		this.#c = context;
@@ -149,7 +160,7 @@ export class Composer {
 		const session = context.session;
 		// Your own draft, once the session says who you are; as you left it, merged with what the server has.
 		session.on("session", () => {
-			if (this.#owner === undefined && session.me !== undefined) this.#bindOwn();
+			if (this.#owner === undefined && session.me !== undefined && !this.#private) this.#bindOwn();
 		});
 		session.on("connection", () => this.#binding?.shareCaret());
 		session.on("drafts", () => this.#renderWith());
@@ -157,7 +168,7 @@ export class Composer {
 		session.onDraftSent = (owner, by) => {
 			if (by === session.me?.id) return;
 			if (owner === this.#owner && owner !== session.me?.id) {
-				this.#bindOwn();
+				if (!this.#private) this.#bindOwn();
 				this.#c.notify(`${session.nameOf(by)} sent ${session.nameOf(owner)}'s draft`);
 			} else if (owner === session.me?.id) this.#c.notify(`${session.nameOf(by)} sent your draft`);
 		};
@@ -210,6 +221,28 @@ export class Composer {
 		this.#input.value = text;
 		this.#changed();
 		this.#input.focus();
+	}
+
+	/**
+	 * Private (your side thread): the composer stops writing the shared draft, which the others see as it's typed, and
+	 * shows what you wrote here last; back in the thread, it's your draft again, as you left it.
+	 */
+	setPrivate(on: boolean): void {
+		if (on === this.#private) return;
+		this.#private = on;
+		if (on) {
+			this.#binding?.dispose();
+			this.#binding = undefined;
+			// Your cursor leaves the draft, for the others.
+			this.#c.session.send({ type: "caret", owner: "" });
+			this.#input.value = this.#privateText;
+		} else {
+			this.#privateText = this.#input.value;
+			if (this.#c.session.me !== undefined) this.#bindOwn();
+			else this.#input.value = storage.get(this.#draftKey) ?? "";
+		}
+		this.#fit();
+		this.#renderWith();
 	}
 
 	/** Whose draft this composer is writing. */
@@ -283,12 +316,14 @@ export class Composer {
 			if (command !== undefined) command.run(words.join(" "), words, this.#c);
 			else this.#c.session.submit(text, "interrupt", this.#c.where());
 		} else {
-			const land = this.#c.conv() === "land";
-			this.#c.session.submit(text, land ? "followUp" : "interrupt", this.#c.where(), this.#attachments, [], this.#owner, land ? "land" : undefined);
+			const conv = this.#c.conv();
+			const land = conv === "land";
+			const owner = conv === "side" ? undefined : this.#owner;
+			this.#c.session.submit(text, land ? "followUp" : "interrupt", this.#c.where(), this.#attachments, [], owner, conv === "main" ? undefined : conv);
 			this.#attachments = [];
 			this.#renderAttachments();
 		}
-		const joined = this.#owner !== this.#c.session.me?.id;
+		const joined = !this.#private && this.#owner !== this.#c.session.me?.id;
 		this.#input.value = "";
 		this.#changed();
 		this.#hideCompletions();
@@ -392,6 +427,8 @@ export class Composer {
 			if (this.#input.value.trim() === "") this.#tagged.clear();
 			this.#fit();
 		});
+		// A question for your side thread is private: the others' copy of the draft stops at "/side".
+		this.#binding.hold = (value) => /^\/side\s/.test(value);
 		this.#fit();
 		this.#renderWith();
 	}
@@ -399,6 +436,7 @@ export class Composer {
 	/** The textarea changed here: the same change goes into the draft, for everyone. */
 	#changed(): void {
 		this.#fit();
+		if (this.#private) return void (this.#privateText = this.#input.value);
 		const binding = this.#binding;
 		if (binding === undefined) return storage.set(this.#draftKey, this.#input.value);
 		binding.changed();
@@ -415,7 +453,7 @@ export class Composer {
 		clearTimeout(this.#tagTimer);
 		const session = this.#c.session;
 		const text = this.#binding?.text.toString() ?? "";
-		if (this.#owner === undefined || text.trim() === "" || isCommand(text) || session.role === "viewer") return;
+		if (this.#private || this.#owner === undefined || text.trim() === "" || isCommand(text) || session.role === "viewer") return;
 		const others = session.members.filter((m) => m.id !== session.me?.id);
 		const named = new Set(mentioned(text, others.map((m) => m.name)));
 		const fresh = others.filter((m) => named.has(m.name) && !this.#tagged.has(m.id)).map((m) => m.id);
@@ -430,7 +468,7 @@ export class Composer {
 		const box = $("draft-with");
 		const owner = this.#owner;
 		const me = session.me?.id;
-		if (owner === undefined || me === undefined) return void (box.hidden = true);
+		if (owner === undefined || me === undefined || this.#private) return void (box.hidden = true);
 		const others = [...session.carets].filter(([id, c]) => c.owner === owner && id !== owner).map(([id, c]) => session.nameOf(id, c.name));
 		const mine = owner === me;
 		box.hidden = mine && others.length === 0;

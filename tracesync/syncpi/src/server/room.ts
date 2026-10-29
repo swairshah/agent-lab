@@ -11,6 +11,7 @@
 //
 // Roles are checked here, for every message and request: viewers read, editors also talk to the agent and edit files,
 // admins also manage people and invites. The session's creator is an admin who can't be removed or demoted.
+import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -356,6 +357,8 @@ export class Room {
 	/** Tells the others where `client` is in the app, for anyone following them. */
 	#view(client: Client, view: View | undefined): void {
 		if (view === undefined && client.view === undefined) return;
+		// Someone in their side thread: the others learn only that (where in it is private).
+		if (view?.conv === "side") view = { conv: "side", panel: null };
 		client.view = view;
 		const message: ServerMessage = { type: "view", memberId: client.member.id, name: client.member.name, view: view ?? null };
 		for (const other of this.#clients) if (other !== client && other.member.id !== client.member.id) this.#send(other, message);
@@ -405,12 +408,18 @@ export class Room {
 				if (text.length === 0 && !(Array.isArray(message.attachments) && message.attachments.length > 0) && comments.length === 0) return;
 				// A draft written together goes out with the names of the others who wrote it. Read before anything is
 				// awaited: the sender's client empties the draft right after sending it.
-				const draft = typeof message.draft === "string" ? this.#drafts.get(message.draft) : undefined;
+				// (Not for a side thread, which is private: the shared draft stays as it is.)
+				const draft = typeof message.draft === "string" && message.conv !== "side" ? this.#drafts.get(message.draft) : undefined;
 				const others = [...(draft?.writers ?? [])].filter((id) => id !== member.id).flatMap((id) => this.state.value.members[id]?.name ?? []);
 				// As in Delta, a new message stops the run in progress and starts its own (with anything queued behind
 				// that run), when the sender may stop it: their own run, or anyone's for an admin. Otherwise it waits.
 				let stop: Awaited<ReturnType<Session["current"]>>;
-				const conv = message.conv === "land" ? "land" : undefined;
+				const conv = message.conv === "land" || message.conv === "side" ? message.conv : undefined;
+				// In your own side thread a new message stops its run, and nobody else hears about it.
+				if (message.mode === "interrupt" && conv === "side") {
+					const run = await this.session.sideRun(member.id);
+					if (run !== undefined) await this.session.interrupt(run.taskId, run.conversation);
+				}
 				if (message.mode === "interrupt" && conv === undefined) {
 					const current = await this.session.current();
 					if (current !== undefined && (atLeast(member, "admin") || current.memberId === member.id)) stop = current;
@@ -445,6 +454,7 @@ export class Room {
 				return;
 			}
 			case "abort": {
+				if (message.conv === "side") return void (await this.session.abort("side", member.id));
 				if (message.conv === "land") {
 					if (!atLeast(member, "editor")) return;
 					await this.session.abort("land");
@@ -456,6 +466,25 @@ export class Room {
 				if (!atLeast(member, "admin") && runner !== member.id) return this.#error(client, "only admins can stop someone else's request");
 				await this.session.abort();
 				await this.session.notice(`${member.name} stopped the agent`);
+				return;
+			}
+			case "side": {
+				// The side agent runs commands, so it takes the role that may talk to the agent.
+				if (!atLeast(member, "editor")) return this.#error(client, "viewers can't start a side thread; ask an admin for the editor role");
+				const { info, created } = await this.session.openSide(member, message.fresh === true);
+				const requestId = typeof message.requestId === "string" ? message.requestId : randomUUID();
+				// Every client of this person has it (a terminal and a browser stay in step); the one that asked shows it.
+				// Nobody else hears of it.
+				for (const other of this.#clients) {
+					if (other.member.id !== member.id) continue;
+					if (created || other.watches.side === undefined) await this.#watch(other, "side");
+					this.#send(other, { type: "side", side: info, requestId });
+				}
+				const text = message.text?.trim();
+				if (text) {
+					await this.session.submit(member, requestId, text, "followUp", message.where === "device" ? "device" : "vm", [], [], [], "side");
+					this.#send(client, { type: "accepted", requestId });
+				}
 				return;
 			}
 			case "invite": {
@@ -661,6 +690,9 @@ export class Room {
 		for (const conv of ["main", "setup"] as ConvName[]) await this.#watch(client, conv);
 		if (this.session.land !== undefined) await this.#watch(client, "land");
 		this.#send(client, { type: "land", land: this.session.landInfo() });
+		const side = this.session.sideInfo(member.id);
+		if (side !== null) await this.#watch(client, "side");
+		this.#send(client, { type: "side", side });
 		this.#send(client, { type: "branches", branches: this.session.branches(), current: this.session.branchId });
 		this.#broadcast(this.#presence());
 		this.#send(client, { type: "target", label: this.session.targetLabel });
@@ -704,13 +736,13 @@ export class Room {
 	/** Attaches a client to a conversation: a fresh snapshot (which replaces what it shows), then every later batch. */
 	async #watch(client: Client, conv: ConvName): Promise<void> {
 		await client.watches[conv]?.stop();
-		const watch = await this.session.watch(conv);
+		const watch = await this.session.watch(conv, client.member.id);
 		client.watches[conv] = watch;
 		this.#send(client, { type: "events", conv, events: slim([watch.snapshot]) });
 		// People see the whole thread, also what came before a /new or a summary; the model only sees the context.
 		const oldest = watch.snapshot.entries.reduce((min, e) => Math.min(min, e.id as number), Number.POSITIVE_INFINITY);
 		if (Number.isFinite(oldest) && oldest > 1) {
-			const page = await this.session.conversation(conv).entries({ maxEntryId: (oldest - 1) as never, order: "descending" }, HISTORY, undefined, context);
+			const page = await this.session.conversation(conv, client.member.id).entries({ maxEntryId: (oldest - 1) as never, order: "descending" }, HISTORY, undefined, context);
 			const entries = page.items.filter((e) => e.kind !== "pi.system").reverse();
 			if (entries.length > 0) this.#send(client, { type: "history", conv, entries, complete: page.items.length < HISTORY });
 		}

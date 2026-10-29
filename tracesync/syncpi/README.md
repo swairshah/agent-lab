@@ -37,6 +37,14 @@ Not yet: tools from your pi extensions (planned to run on your machine for your 
 - `/tree` lists the messages and the thread's branches. `/tree <n>` (admins) branches just before message *n* and puts that message back in your editor, to edit and resend, as in pi. `/tree b<k>` switches back to another branch. A branch switch moves everyone, since there is one shared thread; the header shows which branch you are on.
 - People always see the whole thread, including what came before a `/new` or a summary. A client that connects gets the current context plus up to 500 earlier entries.
 
+## Side threads: /side
+
+`/side [question]` (editors) forks the thread, with its history, into your own side thread, where you can ask about it without the others seeing. It's yours alone: the others' clients receive none of it, the composer there isn't the shared draft, and someone following you is told only that you're in your side thread. Each person has their own. The side agent keeps the thread's model and instructions, plus a note that it's a side thread. It can read files and run commands, but it has no write, edit, milestone or VM tools, and it's told not to change anything, since the project is shared.
+
+- `/side` reopens yours if you have one; `/side new` (or Start over in the web view) forks it again from the thread as it is now.
+- Messages there interrupt its own run, as in the thread; `/queue`, `/steer` and `/stop` act on it while it's shown. Esc (terminal) or Back to the thread (web) returns.
+- Side threads aren't kept: the server remembers them until it restarts. How to keep them is in the commit that added them (`git log --grep "Side threads"`).
+
 ## Where the agent's tools run
 
 On the machine of whoever asked. A message you send from your terminal runs its tools on your computer, in your copy of the project, with your toolchains (Xcode, simulators, local databases). A message from Bob's terminal runs on Bob's computer. A message from a browser runs on the session VM. The changes sync to everyone either way. `/where vm` (or `/where here`) switches where your messages run.
@@ -46,7 +54,7 @@ On the machine of whoever asked. A message you send from your terminal runs its 
 - If the sender's machine is offline, the run waits up to a minute for it, then its tool calls fail with a message saying so.
 - The agent loop, the transcript and the model calls stay on the VM. Only file operations and commands travel. They use pi-env's daemon on your machine, reached through your client's WebSocket (`src/server/devices.ts`, `src/server/relay.ts`, `src/cli/device.ts`).
 
-Inside the terminal UI: Enter sends a message, which stops the agent's current run and starts a new one (if the run is someone else's and you aren't an admin, it waits instead). `/queue <msg>` sends it after the current run without stopping it, and `/steer <msg>` adds it to the current run. Esc stops the agent. The commands are `/session-share`, `/invite`, `/members`, `/web`, `/env`, `/queue <msg>`, `/steer <msg>`, `/stop`, `/compact`, `/new`, `/tree`, `/sync`, `/where here|vm`, `/name`, `/open`, `/ssh`, and `/quit`. Leaving does not stop the session.
+Inside the terminal UI: Enter sends a message, which stops the agent's current run and starts a new one (if the run is someone else's and you aren't an admin, it waits instead). `/queue <msg>` sends it after the current run without stopping it, and `/steer <msg>` adds it to the current run. Esc stops the agent. The commands are `/session-share`, `/invite`, `/members`, `/web`, `/env`, `/queue <msg>`, `/steer <msg>`, `/side [question]`, `/stop`, `/compact`, `/new`, `/tree`, `/sync`, `/where here|vm`, `/name`, `/open`, `/ssh`, and `/quit`. Leaving does not stop the session.
 
 ## Models
 
@@ -154,9 +162,10 @@ Whoever creates a session is its admin, and can't be removed or demoted. Roles:
 npm run typecheck
 npm run smoke      # local server + scripted model: owner and collaborator, chat, sharing, two-way sync, rejoin
 npm run test:search  # Find and the palette: unit tests, then Chrome on a scripted session and the app's host
+npm run test:side    # side threads: two people, a terminal, two tabs and the app; nothing reaches the other person
 ```
 
-`test:search` drives Google Chrome through Playwright (`channel: "chrome"`); set `PLAYWRIGHT_CHROMIUM` to a Chromium
+`test:search` and `test:side` drive Google Chrome through Playwright (`channel: "chrome"`); set `PLAYWRIGHT_CHROMIUM` to a Chromium
 binary to use that instead. It builds first, and needs nothing else running.
 
 Verified on 2026-10-27:
