@@ -103,7 +103,9 @@ export function parseCodexLine(line: string, lineNo: number, state: CodexState):
 export function findRollout(thread: string, home = process.env.CODEX_HOME ?? join(homedir(), ".codex")): string | undefined {
 	const root = join(home, "sessions");
 	if (!existsSync(root)) return undefined;
-	const desc = (dir: string) => readdirSync(dir).sort().reverse();
+	// Folders only, newest first: older Codex versions left flat rollout files at the top.
+	const desc = (dir: string) =>
+		readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? [e.name] : [])).sort().reverse();
 	for (const y of desc(root))
 		for (const m of desc(join(root, y)))
 			for (const d of desc(join(root, y, m))) {

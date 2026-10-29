@@ -13,6 +13,7 @@ type Row = {
 	isSidechain?: boolean;
 	isMeta?: boolean;
 	isCompactSummary?: boolean;
+	isApiErrorMessage?: boolean;
 	message?: { role?: string; model?: string; content?: unknown };
 };
 
@@ -43,7 +44,7 @@ export function parseClaudeLine(line: string, state: ClaudeState): Parsed[] {
 	} catch {
 		return [];
 	}
-	if ((row.type !== "user" && row.type !== "assistant") || row.isSidechain || row.isMeta || row.isCompactSummary) return [];
+	if ((row.type !== "user" && row.type !== "assistant") || row.isSidechain || row.isMeta || row.isCompactSummary || row.isApiErrorMessage) return [];
 	const id = row.uuid;
 	const content = row.message?.content;
 	if (id === undefined || content === undefined) return [];

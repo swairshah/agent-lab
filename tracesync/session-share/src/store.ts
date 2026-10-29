@@ -188,7 +188,8 @@ export class Store {
 		const info = (await this.#sessions())[session];
 		if (info === undefined || info.agent === "pi") return 0;
 		let path = info.transcript;
-		if (path === undefined && info.agent === "codex") path = findRollout(session);
+		// A Codex turn that has not started its thread yet has no rollout to look for.
+		if (path === undefined && info.agent === "codex" && !session.startsWith("codex-new:")) path = findRollout(session);
 		if (path === undefined || !existsSync(path)) return 0;
 		const size = statSync(path).size;
 		if (size <= info.offset) return 0;

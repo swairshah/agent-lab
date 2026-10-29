@@ -169,34 +169,37 @@ async function codex(project: string, member: string, args: string[]): Promise<n
 	const input = begun.context ? `${begun.context}\n\n${prompt}` : prompt;
 	const heartbeat = setInterval(() => void client.call("/turn/heartbeat", { session }).catch(() => {}), 60_000);
 	let started: string | undefined;
-	const code = await new Promise<number>((resolve, reject) => {
-		const child = spawn("codex", ["exec", "--json", "--skip-git-repo-check", "-C", project, ...(model ? ["-m", model] : []), ...(thread ? ["resume", thread] : []), "-"], {
-			cwd: project,
-			stdio: ["pipe", "pipe", "inherit"],
+	try {
+		return await new Promise<number>((resolve, reject) => {
+			const child = spawn("codex", ["exec", "--json", "--skip-git-repo-check", "-C", project, ...(model ? ["-m", model] : []), ...(thread ? ["resume", thread] : []), "-"], {
+				cwd: project,
+				stdio: ["pipe", "pipe", "inherit"],
+			});
+			child.on("error", reject);
+			child.stdin.end(input);
+			let pending = "";
+			child.stdout.on("data", (chunk: Buffer) => {
+				pending += chunk.toString("utf8");
+				for (let end = pending.indexOf("\n"); end >= 0; end = pending.indexOf("\n")) {
+					const line = pending.slice(0, end);
+					pending = pending.slice(end + 1);
+					try {
+						const event = JSON.parse(line);
+						if (event.type === "thread.started") started = event.thread_id;
+						showCodex(event);
+					} catch {}
+				}
+			});
+			child.on("exit", (code) => resolve(code ?? 1));
 		});
-		child.on("error", reject);
-		child.stdin.end(input);
-		let pending = "";
-		child.stdout.on("data", (chunk: Buffer) => {
-			pending += chunk.toString("utf8");
-			for (let end = pending.indexOf("\n"); end >= 0; end = pending.indexOf("\n")) {
-				const line = pending.slice(0, end);
-				pending = pending.slice(end + 1);
-				try {
-					const event = JSON.parse(line);
-					if (event.type === "thread.started") started = event.thread_id;
-					showCodex(event);
-				} catch {}
-			}
-		});
-		child.on("exit", (code) => resolve(code ?? 1));
-	});
-	clearInterval(heartbeat);
-	const id = started ?? thread;
-	if (id) writeFileSync(state, `${JSON.stringify({ thread: id }, null, 2)}\n`);
-	const rollout = id ? findRollout(id) : undefined;
-	await client.call("/turn/end", id && id !== session ? { session, adopt: id, transcript: rollout } : { session });
-	return code;
+	} finally {
+		// The turn is given back whatever happened, after its rollout is recorded.
+		clearInterval(heartbeat);
+		const id = started ?? thread;
+		if (id) writeFileSync(state, `${JSON.stringify({ thread: id }, null, 2)}\n`);
+		const rollout = id ? findRollout(id) : undefined;
+		await client.call("/turn/end", id && id !== session ? { session, adopt: id, transcript: rollout } : { session });
+	}
 }
 
 function showCodex(event: { type?: string; item?: Record<string, any> }): void {
