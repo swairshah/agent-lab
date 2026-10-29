@@ -159,9 +159,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 /* Under a person's avatar: where their message ran (a globe for the session VM, a computer for their machine). */
 /* A person's message is one line, as in Delta: their name where a photo would be, then what they wrote; a status and
    the actions at the end. */
-.msg-user { grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 12px; align-items: baseline; }
-.msg-who { display: inline-flex; align-items: center; gap: 5px; max-width: 160px; font-size: 13.5px; font-weight: 600; line-height: 1.6; color: var(--person, var(--ink-2)); }
-.msg-who .author { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.msg.msg-user { grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 12px; align-items: baseline; }
+.msg-who { display: inline-flex; align-items: center; gap: 5px; min-width: max-content; font-size: 13.5px; font-weight: 600; line-height: 1.6; white-space: nowrap; color: var(--person, var(--ink-2)); }
 .msg-user > .msg-content { grid-column: 2; }
 .msg-user > .msg-meta { grid-column: 3; margin: 0; }
 .msg-user > .msg-meta:empty { display: none; }
@@ -747,6 +746,8 @@ html[data-desktop="true"] .git { top: 32px; }
 html[data-desktop="true"] .scroller { padding: 14px 20px 40vh 16px; }
 html[data-desktop="true"] .thread > *, html[data-desktop="true"] .composer { max-width: 820px; margin-left: 0; margin-right: 0; }
 html[data-desktop="true"] .msg { grid-template-columns: 24px minmax(0, 1fr); column-gap: 14px; margin-top: 16px; }
+/* A person's message keeps its name's width (the rule above is for the agent's avatar). */
+html[data-desktop="true"] .msg.msg-user { grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 12px; }
 html[data-desktop="true"] .msg > .avatar { width: 24px; height: 24px; font-size: 9.5px; margin-top: 0; }
 html[data-desktop="true"] .msg > .avatar svg { width: 14px; height: 14px; }
 html[data-desktop="true"] .prose { line-height: 1.55; }
