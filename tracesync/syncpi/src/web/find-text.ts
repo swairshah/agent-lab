@@ -19,7 +19,7 @@ export function setSource(host: Element, code: string): void {
 
 /** Never searched, wherever they are. */
 const SKIP =
-	"button, .copy-code, .avatar, .msg-meta, .msg-where, .answer-to, .inline-comment, .artifact, .viewer, .comment-number, .comment-on, .tool-more, .recording, svg, img, video, iframe, script, style, textarea, input, select, [hidden], [aria-hidden='true']";
+	"button, .copy-code, .avatar, .msg-who, .msg-meta, .msg-where, .answer-to, .inline-comment, .artifact, .viewer, .comment-number, .comment-on, .tool-more, .recording, svg, img, video, iframe, script, style, textarea, input, select, [hidden], [aria-hidden='true']";
 const BLOCK = new Set(["P", "DIV", "LI", "UL", "OL", "PRE", "BLOCKQUOTE", "H1", "H2", "H3", "H4", "H5", "H6", "TABLE", "THEAD", "TBODY", "TR", "TD", "TH", "SECTION", "ARTICLE", "HEADER", "FOOTER", "DETAILS", "SUMMARY", "FIGURE", "FIGCAPTION", "HR", "DL", "DT", "DD"]);
 
 /** An element's searchable text, with the text nodes it came from (`start` is where each begins in `text`).

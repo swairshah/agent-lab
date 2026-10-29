@@ -461,11 +461,13 @@ export class ThreadView {
 	}
 
 	#user(name: string, text: string, attachments: NonNullable<UserItem["attachments"]>, status?: string, comments: LineComment[] = [], where?: UserItem["where"]): HTMLElement {
+		// One line, as in Delta: who wrote it (their name where a photo would be), then what they wrote. A status
+		// ("sending…", "typing…") and the actions sit at the end.
 		const node = el("article", "msg msg-user");
 		node.style.setProperty("--person", personColor(name));
-		node.innerHTML = `${avatarHtml(name)}${whereMark(where, name)}<div class="msg-content"><div class="msg-meta"><span class="author">${escapeHtml(name)}</span>${
-			status ? `<span>${escapeHtml(status)}</span>` : ""
-		}</div>${text ? `<div class="msg-body prose">${renderMarkdown(text, { breaks: true })}</div>` : ""}</div>`;
+		node.innerHTML = `<span class="msg-who"><span class="author" title="${escapeHtml(name)}">${escapeHtml(name)}</span>${whereMark(where, name)}</span><div class="msg-content">${
+			text ? `<div class="msg-body prose">${renderMarkdown(text, { breaks: true })}</div>` : ""
+		}</div><div class="msg-meta">${status ? `<span>${escapeHtml(status)}</span>` : ""}</div>`;
 		const body = node.querySelector<HTMLElement>(".msg-body");
 		if (body !== null) {
 			this.#linkFileNames(body);

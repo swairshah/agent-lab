@@ -15,10 +15,20 @@ export function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: st
 }
 
 /** A stable color per person, so names, avatars and presence dots match everywhere. */
-export function personColor(name: string): string {
+function personHue(name: string): number {
 	let h = 0;
 	for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-	return `hsl(${h % 360} 42% 48%)`;
+	return h % 360;
+}
+
+/** A person's color, for CSS: their hue (from their name), in the theme's saturation and lightness (style.css). */
+export function personColor(name: string): string {
+	return `hsl(${personHue(name)} var(--person-s) var(--person-l))`;
+}
+
+/** The same color as a plain value, the light theme's, for drawing (a canvas can't read the theme's variables). */
+export function personColorValue(name: string): string {
+	return `hsl(${personHue(name)} 42% 48%)`;
 }
 
 export function initials(name: string): string {

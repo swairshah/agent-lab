@@ -23,6 +23,9 @@
   --ok: #2f7a46;
   --focus: #c6432c40;
   --shadow: 0 1px 2px rgb(38 36 31 / 0.06), 0 10px 30px rgb(38 36 31 / 0.08);
+  /* People's colors: each a hue from their name (dom.ts personColor), at this saturation and lightness. */
+  --person-s: 42%;
+  --person-l: 44%;
 
   --serif: "Newsreader", "Iowan Old Style", "Charter", Georgia, serif;
   --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -42,6 +45,7 @@
     --muted: #a9afbb; --faint: #5d636e; --rule: #292c32; --rule-strong: #32363d; --accent: #76ade4; --accent-ink: #191c1f;
     --accent-soft: #2b3946; --added: #a2c186; --removed: #d07277; --warn: #dec184; --ok: #a2c186; --focus: #76ade466;
     --shadow: 0 1px 2px rgb(0 0 0 / 0.35), 0 10px 30px rgb(0 0 0 / 0.4);
+    --person-s: 50%; --person-l: 72%;
     color-scheme: dark;
   }
 }
@@ -50,6 +54,7 @@
   --muted: #a9afbb; --faint: #5d636e; --rule: #292c32; --rule-strong: #32363d; --accent: #76ade4; --accent-ink: #191c1f;
   --accent-soft: #2b3946; --added: #a2c186; --removed: #d07277; --warn: #dec184; --ok: #a2c186; --focus: #76ade466;
   --shadow: 0 1px 2px rgb(0 0 0 / 0.35), 0 10px 30px rgb(0 0 0 / 0.4);
+  --person-s: 50%; --person-l: 72%;
   color-scheme: dark;
 }
 
@@ -152,9 +157,15 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .msg { display: grid; grid-template-columns: 30px minmax(0, 1fr); column-gap: 14px; margin-top: 22px; }
 .msg > .avatar { margin-top: 1px; }
 /* Under a person's avatar: where their message ran (a globe for the session VM, a computer for their machine). */
-.msg-user { grid-template-rows: auto 1fr; }
-.msg-user > .msg-content { grid-column: 2; grid-row: 1 / span 2; }
-.msg-where { grid-column: 1; grid-row: 2; justify-self: center; margin-top: 5px; color: var(--muted); opacity: .75; line-height: 0; }
+/* A person's message is one line, as in Delta: their name where a photo would be, then what they wrote; a status and
+   the actions at the end. */
+.msg-user { grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 12px; align-items: baseline; }
+.msg-who { display: inline-flex; align-items: center; gap: 5px; max-width: 160px; font-size: 13.5px; font-weight: 600; line-height: 1.6; color: var(--person, var(--ink-2)); }
+.msg-who .author { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.msg-user > .msg-content { grid-column: 2; }
+.msg-user > .msg-meta { grid-column: 3; margin: 0; }
+.msg-user > .msg-meta:empty { display: none; }
+.msg-where { color: var(--muted); opacity: .75; line-height: 0; }
 .msg-where svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .msg-content { min-width: 0; }
 .msg-meta { display: flex; align-items: baseline; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 2px; }

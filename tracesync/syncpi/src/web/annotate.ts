@@ -10,7 +10,7 @@
 // every screen, and moves with a diagram as it's panned and zoomed. The server keeps them until they're sent; in
 // memory, like drafts.
 import { type Attachment, type Mark, PRIVATE_MARKS, type SharedMark } from "../shared/protocol.ts";
-import { el, escapeHtml, personColor } from "./dom.ts";
+import { el, escapeHtml, personColor, personColorValue } from "./dom.ts";
 import type { SessionClient } from "./session.ts";
 
 const ICON = '<svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
@@ -412,7 +412,7 @@ export function drawMarks(canvas: HTMLCanvasElement, marks: Mark[], names: strin
 	// Sized by the longer side, so a wide, short graphic's numbers are still easy to see.
 	const unit = Math.max(1, Math.max(width, height) / 700);
 	marks.forEach((m, i) => {
-		const color = personColor(names[i] ?? "");
+		const color = personColorValue(names[i] ?? "");
 		const x = m.x * width;
 		const y = m.y * height;
 		if (m.w !== undefined && m.h !== undefined) {
