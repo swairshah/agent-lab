@@ -46,7 +46,7 @@ On the machine of whoever asked. A message you send from your terminal runs its 
 - If the sender's machine is offline, the run waits up to a minute for it, then its tool calls fail with a message saying so.
 - The agent loop, the transcript and the model calls stay on the VM. Only file operations and commands travel. They use pi-env's daemon on your machine, reached through your client's WebSocket (`src/server/devices.ts`, `src/server/relay.ts`, `src/cli/device.ts`).
 
-Inside the terminal UI: Enter sends a message (queued while the agent is busy). Esc stops the agent. The commands are `/session-share`, `/invite`, `/members`, `/web`, `/env`, `/steer <msg>`, `/stop`, `/compact`, `/new`, `/tree`, `/sync`, `/where here|vm`, `/name`, `/open`, `/ssh`, and `/quit`. Leaving does not stop the session.
+Inside the terminal UI: Enter sends a message, which stops the agent's current run and starts a new one (if the run is someone else's and you aren't an admin, it waits instead). `/queue <msg>` sends it after the current run without stopping it, and `/steer <msg>` adds it to the current run. Esc stops the agent. The commands are `/session-share`, `/invite`, `/members`, `/web`, `/env`, `/queue <msg>`, `/steer <msg>`, `/stop`, `/compact`, `/new`, `/tree`, `/sync`, `/where here|vm`, `/name`, `/open`, `/ssh`, and `/quit`. Leaving does not stop the session.
 
 ## Models
 
