@@ -3,10 +3,11 @@
 // the thread and Ada's pi session hold the same conversation, that pi's own tools keep working, and that the two
 // agents take turns: steering, waiting, stopping.
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Connection, type Item, type ServerMessage, Thread } from "syncpi/client";
+import { WebSocketServer } from "ws";
 
 const here = import.meta.dirname;
 const root = mkdtempSync(join(tmpdir(), "syncpi-ext-test-"));
@@ -31,39 +32,47 @@ writeFileSync(join(project, "a.txt"), "hello\n");
 spawnSync("git", ["init", "-q"], { cwd: project });
 const env = { ...process.env, SYNCPI_HOME: join(root, "syncpi"), PI_CODING_AGENT_DIR: join(root, "pi-agent") };
 
-// Ada's pi.
 type Record = { type: string; [key: string]: unknown };
-const records: Record[] = [];
-const pi: ChildProcess = spawn(
-	"pi",
-	["--mode", "rpc", "-e", join(here, "../src/index.ts"), "-e", join(here, "faux-pi.ts"), "--provider", "pifaux", "--model", "faux-1", "--session-dir", join(root, "sessions")],
-	{ cwd: project, env, stdio: ["pipe", "pipe", "pipe"] },
-);
-let buffer = "";
-pi.stdout!.on("data", (chunk) => {
-	buffer += chunk;
-	for (let i = buffer.indexOf("\n"); i >= 0; i = buffer.indexOf("\n")) {
-		const line = buffer.slice(0, i).replace(/\r$/, "");
-		buffer = buffer.slice(i + 1);
-		if (line) records.push(JSON.parse(line) as Record);
-	}
-});
-let stderr = "";
-pi.stderr!.on("data", (d) => (stderr += d));
-let ids = 0;
-const send = (command: object) => pi.stdin!.write(`${JSON.stringify({ id: String(++ids), ...command })}\n`);
-const notes = () => records.filter((r) => r.type === "extension_ui_request" && r.method === "notify").map((r) => String(r.message));
-const answers = () => records.flatMap((r) => (r.type === "message_end" && (r.message as { role: string }).role === "assistant" ? [textOf((r.message as { content: unknown }).content)] : []));
-const settled = () => records.filter((r) => r.type === "agent_settled").length;
 const textOf = (content: unknown) => (typeof content === "string" ? content : (content as { type: string; text?: string }[]).map((b) => b.text ?? "").join(""));
 
-/** Sends a prompt to Ada's pi and waits until its run has settled. */
-async function prompt(message: string): Promise<string> {
-	const before = settled();
-	send({ type: "prompt", message });
-	await until(`pi to answer "${message}"`, () => settled() > before, 30_000);
-	return answers().at(-1) ?? "";
+/** A pi in RPC mode in `cwd`, with this extension and the scripted model. */
+function startPi(cwd: string) {
+	const records: Record[] = [];
+	const child: ChildProcess = spawn(
+		"pi",
+		["--mode", "rpc", "-e", join(here, "../src/index.ts"), "-e", join(here, "faux-pi.ts"), "--provider", "pifaux", "--model", "faux-1", "--session-dir", join(root, "sessions")],
+		{ cwd, env, stdio: ["pipe", "pipe", "pipe"] },
+	);
+	let buffer = "";
+	child.stdout!.on("data", (chunk) => {
+		buffer += chunk;
+		for (let i = buffer.indexOf("\n"); i >= 0; i = buffer.indexOf("\n")) {
+			const line = buffer.slice(0, i).replace(/\r$/, "");
+			buffer = buffer.slice(i + 1);
+			if (line) records.push(JSON.parse(line) as Record);
+		}
+	});
+	const out = { records, stderr: "", child };
+	child.stderr!.on("data", (d) => (out.stderr += d));
+	let ids = 0;
+	const send = (command: object) => child.stdin!.write(`${JSON.stringify({ id: String(++ids), ...command })}\n`);
+	const notes = () => records.filter((r) => r.type === "extension_ui_request" && r.method === "notify").map((r) => String(r.message));
+	const answers = () => records.flatMap((r) => (r.type === "message_end" && (r.message as { role: string }).role === "assistant" ? [textOf((r.message as { content: unknown }).content)] : []));
+	const settled = () => records.filter((r) => r.type === "agent_settled").length;
+	/** Sends a prompt and waits until its run has settled. */
+	async function prompt(message: string): Promise<string> {
+		const before = settled();
+		send({ type: "prompt", message });
+		await until(`pi to answer "${message}"`, () => settled() > before, 30_000);
+		return answers().at(-1) ?? "";
+	}
+	return { ...out, send, notes, prompt };
 }
+
+// Ada's pi.
+const ada = startPi(project);
+const { records, send, notes, prompt } = ada;
+const pi = ada.child;
 
 // Bob's terminal: a plain client of the server.
 const bob = { thread: new Thread(), messages: [] as ServerMessage[], busySeen: false, liveTools: new Set<string>() };
@@ -183,10 +192,37 @@ try {
 	check(asked() === askedBefore, "and nothing more reaches the thread");
 	ok("/sync stop: pi carries on locally with the whole shared conversation, and the thread hears no more");
 
+	// 10. A server from before /sync (it ignores the turn and recordings): pi says so and carries on, unsynced.
+	const oldServer = new WebSocketServer({ port: 0 });
+	await new Promise((r) => oldServer.once("listening", r));
+	oldServer.on("connection", (ws) => {
+		ws.send(JSON.stringify({ type: "welcome", me: { id: "m", name: "Ada", role: "admin" }, session: {}, members: [] }));
+		ws.send(JSON.stringify({ type: "events", conv: "main", events: [{ type: "snapshot", entries: [] }] }));
+	});
+	const oldProject = join(root, "old");
+	mkdirSync(oldProject);
+	const port = (oldServer.address() as { port: number }).port;
+	writeFileSync(join(root, "syncpi", "sessions", "oldsrv1.json"), JSON.stringify({ id: "oldsrv1", name: "old", url: `http://127.0.0.1:${port}`, token: "t", role: "editor", dir: realpathSync(oldProject), compute: "remote", createdAt: Date.now() }));
+	const old = startPi(oldProject);
+	try {
+		old.send({ type: "prompt", message: "/sync" });
+		await until("the old session to be synced", () => old.notes().find((n) => n.startsWith("Synced with")));
+		const started = Date.now();
+		check((await old.prompt("hello old")) === "(pi) hello old", "pi answers");
+		check(old.notes().some((n) => n.includes("may be older than /sync")), "pi says the server may need syncpi update");
+		check(Date.now() - started < 15_000, "after a short wait");
+		const again = Date.now();
+		check((await old.prompt("again")) === "(pi) again" && Date.now() - again < 3_000, "and doesn't wait again");
+	} finally {
+		old.child.kill();
+		oldServer.close();
+	}
+	ok("a server from before /sync: pi says it may need syncpi update, and carries on without waiting again");
+
 	console.log(`\nAll ${checks} /sync checks passed.`);
 } catch (error) {
 	console.error(error);
-	console.error(`--- pi stderr ---\n${stderr.slice(-3000)}`);
+	console.error(`--- pi stderr ---\n${ada.stderr.slice(-3000)}`);
 	console.error(`--- notes ---\n${notes().join("\n")}`);
 	console.error(`--- thread ---\n${items().map((i) => `${i.kind} ${"author" in i ? i.author : ""} ${text(i).slice(0, 100)}`).join("\n")}`);
 	process.exitCode = 1;

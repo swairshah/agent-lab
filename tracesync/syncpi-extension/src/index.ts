@@ -21,6 +21,11 @@ const MESSAGE = "syncpi";
 /** This pi session is synced with a syncpi session (`id`), or stopped being (`stopped`). */
 const LINK = "syncpi-link";
 const STATUS = "syncpi";
+/** How long the server has to say it heard a request for the turn. */
+const ANSWER_MS = 8_000;
+/** How long a recording (or an invite) may take before it counts as unanswered. */
+const REQUEST_MS = 60_000;
+const OLD_SERVER = "the session's server didn't answer. It may be older than /sync; its owner can run `syncpi update`, then /sync again. Until then, pi runs without syncing its turns.";
 
 type Block = { type: string; text?: string; name?: string; arguments?: Record<string, unknown> };
 type Message = { role: "user" | "assistant" | "toolResult"; content: string | Block[]; toolCallId?: string; toolName?: string; isError?: boolean; provider?: string; model?: string };
@@ -71,7 +76,9 @@ class Sync {
 	readonly #recorded = new Set<string>();
 	readonly #requests = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
 	#turn: "none" | "asking" | "held" = "none";
-	#grant: { requestId: string; resolve: (upTo: number) => void } | undefined;
+	/** The server didn't answer a request for the turn: it's from before /sync, and pi runs without the turn. */
+	#unanswered = false;
+	#grant: { requestId: string; resolve: (upTo: number) => void; asked?: boolean } | undefined;
 	/** Steers passed to this pi by others, by text: their ids, so the thread knows whose they are. */
 	readonly #steers = new Map<string, string>();
 	/** The thread's first snapshot and the history before it, taken in together. */
@@ -158,7 +165,9 @@ class Sync {
 				this.#target = this.#turn === "held" ? "" : message.label.endsWith(`${this.me}'s pi`) ? "" : message.label;
 				return this.#status();
 			case "turn":
-				if (this.#grant?.requestId === message.requestId) this.#grant.resolve(message.upTo);
+				if (this.#grant?.requestId !== message.requestId) return;
+				if (message.upTo === undefined) this.#grant.asked = true;
+				else this.#grant.resolve(message.upTo);
 				return;
 			case "piControl":
 				if (message.action === "stop") {
@@ -217,6 +226,10 @@ class Sync {
 		return new Promise((resolve, reject) => {
 			this.#requests.set(message.requestId, { resolve, reject });
 			this.live.conn.send(message as never);
+			setTimeout(() => {
+				if (!this.#requests.delete(message.requestId)) return;
+				reject(new Error(message.type === "record" ? OLD_SERVER : "the server didn't answer"));
+			}, REQUEST_MS);
 		});
 	}
 
@@ -257,15 +270,24 @@ class Sync {
 
 	/** Takes the turn on the thread before pi runs; resolves once pi may (or right away when offline). */
 	async takeTurn(): Promise<void> {
-		if (this.#turn !== "none" || this.live.conn.state !== "open") return;
+		if (this.#turn !== "none" || this.#unanswered || this.live.conn.state !== "open") return;
 		const requestId = randomUUID();
 		this.#turn = "asking";
 		this.#status();
 		try {
-			const upTo = await new Promise<number>((resolve) => {
+			const upTo = await new Promise<number | undefined>((resolve) => {
 				this.#grant = { requestId, resolve };
 				this.live.conn.send({ type: "turn", requestId, action: "start" });
+				// The server says at once that it heard; one from before /sync says nothing.
+				setTimeout(() => {
+					if (this.#grant?.requestId === requestId && !this.#grant.asked) resolve(undefined);
+				}, ANSWER_MS);
 			});
+			if (upTo === undefined) {
+				this.#unanswered = true;
+				this.#ctx.ui.notify(`syncpi: ${OLD_SERVER}`, "warning");
+				return;
+			}
 			// What other people's turns added before this one should be in this session first. (Not every entry
 			// reaches clients, so this waits at most a moment.)
 			await Promise.race([new Promise<void>((resolve) => (upTo <= this.#seen ? resolve() : this.#seenWaiters.push({ upTo, resolve }))), new Promise((r) => setTimeout(r, 2_000))]);

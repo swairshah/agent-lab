@@ -3,9 +3,13 @@
   "version": "0.2.0",
   "description": "/sync: make a pi session a syncpi session, shared with collaborators, while pi keeps running its own turns",
   "type": "module",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": [
+      "./src/index.ts"
+    ]
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -19,7 +23,9 @@
     "@earendil-works/pi-coding-agent": "1.4.0",
     "@earendil-works/pi-tui": "1.4.0",
     "@types/node": "^24",
+    "@types/ws": "^8.18.2",
     "tsx": "^4.23.15",
-    "typescript": "^5.9"
+    "typescript": "^5.9",
+    "ws": "^8.22.0"
   }
 }

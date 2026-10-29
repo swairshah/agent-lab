@@ -189,10 +189,11 @@ export type LiveEvent =
 export type ServerMessage =
     | { type: "accepted"; requestId: string }
 	/**
-	 * The turn is this pi's. `upTo` is the thread's last entry then: what other people's turns added up to there
-	 * should be in the pi's context before it runs.
+	 * Answers a pi asking for the turn: at once without `upTo` (it's asked, and may have to wait), then with `upTo`
+	 * once the turn is this pi's. `upTo` is the thread's last entry then: what other people's turns added up to
+	 * there should be in the pi's context before it runs.
 	 */
-	| { type: "turn"; requestId: string; upTo: number }
+	| { type: "turn"; requestId: string; upTo?: number }
 	/**
 	 * To the pi that has the turn: `by` stopped it, or steers it with `text` (as the model should see it), which the
 	 * pi records with `steer: id`.

@@ -19,6 +19,8 @@ In pi:
 
 A session that was synced when it was last open syncs again when you resume it.
 
+A session's server has to be from this version of syncpi or later. The shared host updates itself when a session is created on it. A session on its own VM needs `syncpi update` in its folder first. If you skip that, pi says so and runs without syncing its turns.
+
 ## How it works
 
 The syncpi session's thread (a pi-durable conversation on the syncpi server) and this pi session hold the same conversation.
@@ -39,7 +41,7 @@ The extension uses syncpi through its `syncpi/client` export. The server side is
 npm test    # builds ../syncpi, then runs test/sync.ts
 ```
 
-`test/sync.ts` runs a real pi in RPC mode with this extension and a scripted model (`test/faux-pi.ts`, which also adds two tools only that pi has), against a local syncpi server with its own scripted model. A collaborator joins over the protocol. Nine checks:
+`test/sync.ts` runs a real pi in RPC mode with this extension and a scripted model (`test/faux-pi.ts`, which also adds two tools only that pi has), against a local syncpi server with its own scripted model. A collaborator joins over the protocol. Ten checks:
 
 1. `/sync` shares what the pi session had.
 2. A pi turn with its own tool reaches the thread in order.
@@ -50,6 +52,7 @@ npm test    # builds ../syncpi, then runs test/sync.ts
 7. The owner stops their pi's run from another client.
 8. A pi message stops the server's run.
 9. `/sync stop` carries on locally with the whole conversation.
+10. Against a server from before `/sync`, pi says it may need `syncpi update` and carries on unsynced, without waiting again.
 
 ## Not done yet
 

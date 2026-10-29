@@ -64,6 +64,7 @@ export class PiTurns {
 
 	/** A pi asks for the turn; it's answered with "turn" once it has it. */
 	ask(client: TurnClient, requestId: string): void {
+		client.send({ type: "turn", requestId });
 		if (this.#holder?.client === client) {
 			void this.#grant(client, requestId);
 			return;
