@@ -212,6 +212,29 @@ try {
 	check(early === "early-needle", "the cut-short output was shown in full");
 	ok("matches in folded tool output count; going to one opens its fold, and shows all of an output cut short");
 
+	// The thread drawn again (the agent working, here a theme change) folds that output away again: Find opens it once
+	// more, and paints nothing in folds that are closed (WebKit, the app's engine, would paint it on the text beside).
+	await page.evaluate(() => (window as Window & { syncpiRun?: (id: string) => boolean }).syncpiRun!("app.theme"));
+	await until("the current match shown again", () =>
+		page.evaluate(() => {
+			const range = [...(CSS.highlights.get("syncpi-find-current") ?? [])][0] as Range | undefined;
+			const fold = range?.startContainer.parentElement?.closest("details");
+			const box = document.querySelector(".find-box.current")?.getBoundingClientRect();
+			const at = range?.getBoundingClientRect();
+			return range?.toString() === "early-needle" && fold?.open === true && box !== undefined && at !== undefined && Math.abs(box.top - at.top) < 2;
+		}),
+	);
+	const inClosed = await page.evaluate(() =>
+		[...(CSS.highlights.get("syncpi-find") ?? []), ...(CSS.highlights.get("syncpi-find-current") ?? [])].filter((r) => {
+			const element = (r as Range).startContainer.parentElement;
+			const fold = element?.closest("details");
+			return fold !== null && fold !== undefined && !fold.open && element?.closest("summary")?.parentElement !== fold;
+		}).length,
+	);
+	check(inClosed === 0, `no highlight in a closed fold (${inClosed})`);
+	await page.evaluate(() => (window as Window & { syncpiRun?: (id: string) => boolean }).syncpiRun!("app.theme"));
+	ok("when the thread is drawn again and folds the current match away, Find opens its fold again; nothing is painted in closed folds");
+
 	// Esc closes, folds go back, focus returns to the composer.
 	await page.keyboard.press("Escape");
 	await until("Find closed", async () => !(await page.locator("#find-bar").isVisible()));
@@ -267,6 +290,20 @@ try {
 	check((await painted(page)).current[0] === on, "the same match is current");
 	ok("while a reply arrives, the count grows (2 → 4), the current match stays current and the thread doesn't scroll away");
 	await until("reply done", () => page.evaluate(() => !document.querySelector(".streaming")));
+	// The reply was redrawn inside its row as it arrived: every highlight is still exactly the match, and the current
+	// match's box is on it.
+	await until("highlights on the finished reply", async () => {
+		const p = await painted(page);
+		return p.all.length + p.current.length === 4 && [...p.all, ...p.current].every((t) => t.toLowerCase() === "alpha omega");
+	}, 5_000);
+	const boxed = await page.evaluate(() => {
+		const range = [...(CSS.highlights.get("syncpi-find-current") ?? [])][0] as Range | undefined;
+		const box = document.querySelector(".find-box.current")?.getBoundingClientRect();
+		const at = range?.getBoundingClientRect();
+		return box !== undefined && at !== undefined && Math.abs(box.left - at.left) < 2 && Math.abs(box.top - at.top) < 2 && range!.startContainer.isConnected;
+	});
+	check(boxed, "the current match's box is on its text");
+	ok("once the reply has arrived (redrawn in place as it streamed), every highlight is exactly the match, the box on the current one");
 
 	// Esc while the agent works closes Find, and doesn't stop the agent.
 	await page.locator("#input").fill("run sleep 2; echo slept");

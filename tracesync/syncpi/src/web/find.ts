@@ -58,6 +58,16 @@ export type FindOptions = {
 	onOpen?: (open: boolean) => void;
 };
 
+/** Whether a range's text is shown: on the page, and not in a closed fold (<details>, outside its summary) or hidden. */
+function shown(range: Range): boolean {
+	const node = range.startContainer;
+	const element = node instanceof Element ? node : node.parentElement;
+	if (element === null || !node.isConnected) return false;
+	const fold = element.closest("details");
+	if (fold !== null && !fold.open && element.closest("summary")?.parentElement !== fold) return false;
+	return typeof element.checkVisibility === "function" ? element.checkVisibility() : element.getClientRects().length > 0;
+}
+
 export class Find {
 	readonly #options: FindOptions;
 	readonly #bar = $("find-bar");
@@ -296,7 +306,18 @@ export class Find {
 		if (reveal && this.#matches.length > 0) this.#active = this.#firstInView();
 		this.#done(query.length >= MAX_QUERY ? `Searches use the first ${MAX_QUERY} characters.` : this.#matches.length === 0 && query !== "" ? "No matches" : "");
 		if (reveal && this.#active >= 0) this.#show(this.#active);
-		else this.#paint();
+		else {
+			// The page was drawn again (the agent working) and folded the current match away (or cut its output short
+			// again), as it was before Find showed it: show it again, where it is, without moving the view.
+			const current = this.#matches[this.#active];
+			const range = current === undefined ? undefined : this.#range(current);
+			if (current !== undefined && (range === undefined || !shown(range)) && target.textarea === undefined) {
+				target.reveal(current);
+				this.#blocks = target.blocks();
+				this.#order = new Map(this.#blocks.map((b, n) => [b.id, n]));
+			}
+			this.#paint();
+		}
 	}
 
 	#done(note: string): void {
@@ -421,7 +442,8 @@ export class Find {
 		for (const match of this.#matches) {
 			if (near !== undefined && match !== current && !near.has(match.blockId)) continue;
 			const range = this.#range(match);
-			if (range === undefined) continue;
+			// Text that isn't shown (in a closed fold) isn't painted: WebKit would paint it on the text next to it.
+			if (range === undefined || !shown(range)) continue;
 			if (match === current) active = range;
 			else ranges.push(range);
 		}

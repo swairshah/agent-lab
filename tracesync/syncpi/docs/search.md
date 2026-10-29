@@ -81,6 +81,10 @@ binary search.
 - **Restoring folds.** Closing Find closes the folds it opened. If the person closed one meanwhile, it stays closed.
   If they closed and then reopened one, Find closes it anyway.
 - **Text areas.** A match in the file editor is selected and boxed, and other matches there aren't highlighted.
+- **Matches in closed folds** are counted but not painted until a fold is opened: WebKit painted a highlight on
+  hidden text onto the text beside the fold. (So the WebKit run above now paints 99 of the 190 matches for "cart
+  total"; the rest are in folded tool output.) When the thread is drawn again while Find is open (the agent working)
+  and the current match is folded away or cut short again, Find shows it again, without moving the view.
 - **Not tested:** Linux and Windows (Ctrl+K in a terminal there depends on how the menu accelerator is routed), a
   screen reader (only the accessibility tree is checked), the packaged app's own window (WebKit was tested through a
   WKWebView with the same page), and history arriving or a branch switching while Find is open. The latter two run
