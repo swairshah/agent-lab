@@ -31,6 +31,8 @@ type Thread = {
 	tags?: string[];
 	lastOpened?: number;
 	sync?: { pushed: number; pulled: number; conflicts: string[]; error: string };
+	/** Who else is in the thread, and whether they're there now (once the app follows it). */
+	people?: { name: string; online: boolean }[];
 };
 type Catalog = { sessions: Thread[]; identity: { name: string }; defaults: { model?: string; thinkingLevel?: string }; login?: { url: string; check: string } };
 
@@ -101,6 +103,8 @@ const ICONS = {
 	folder: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 14.5V6a1.5 1.5 0 0 1 1.5-1.5h3.2l1.6 1.8h5.2A1.5 1.5 0 0 1 16 7.8V9"/><path d="M3 14.5 5 9.5h12.5l-2 5.3a1.5 1.5 0 0 1-1.4 1H4.5A1.5 1.5 0 0 1 3 14.5z"/></svg>',
 	plus: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4.5v11M4.5 10h11"/></svg>',
 	pin: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8 3.5h4l-.5 4 3 3v1.5h-9V10.5l3-3z"/><path d="M10 12v4.5"/></svg>',
+	people: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="7.5" cy="7" r="2.5"/><path d="M3 15.5c.4-2.5 2.2-4 4.5-4s4.1 1.5 4.5 4"/><circle cx="13.5" cy="7.5" r="2"/><path d="M13 11.6c1.9 0 3.5 1.3 3.9 3.4"/></svg>',
+	newProject: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 14.5V6a1.5 1.5 0 0 1 1.5-1.5h3.2l1.6 1.8h5.2A1.5 1.5 0 0 1 16 7.8v2"/><path d="M3 14.5a1.5 1.5 0 0 0 1.5 1.5H10"/><path d="M14.5 12v5M12 14.5h5"/></svg>',
 	failed: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M10 6.5v4M10 13.5v.01"/></svg>',
 };
 
@@ -109,14 +113,16 @@ function renderSidebar(): void {
 	list.replaceChildren();
 	const groups = grouped();
 	const unreadThreads = new Set(inbox.unread(inboxItems).map((i) => i.thread));
-	list.append(el("div", "sidebar-label", archives ? "Archived" : "Projects"));
+	const label = el("div", "sidebar-label", archives ? "Archived" : "Projects");
+	if (!archives) label.insertAdjacentHTML("beforeend", `<button type="button" class="icon-button small sidebar-new-project" title="New project: open a folder (⌘O)" aria-label="New project">${ICONS.newProject}</button>`);
+	list.append(label);
 	if (groups.length === 0) list.append(el("p", "sidebar-empty muted", archives ? "No archived threads." : "No threads yet."));
 	for (const group of groups) {
 		const head = el("div", "sidebar-project");
 		head.dataset.dir = group.dir;
 		head.title = group.dir;
 		head.setAttribute("aria-current", String(project === group.dir));
-		head.innerHTML = `${ICONS.folder}<span class="sidebar-name">${escapeHtml(project_name(group.dir))}</span><button type="button" class="icon-button small sidebar-add" title="New thread in this project" aria-label="New thread in ${escapeHtml(project_name(group.dir))}">${ICONS.plus}</button>`;
+		head.innerHTML = `${ICONS.folder}<span class="sidebar-name">${escapeHtml(project_name(group.dir))}</span>${peopleHtml(group.threads)}<button type="button" class="icon-button small sidebar-add" title="New thread in this project" aria-label="New thread in ${escapeHtml(project_name(group.dir))}">${ICONS.plus}</button>`;
 		list.append(head);
 		for (const t of group.threads) {
 			const row = el("button", "sidebar-thread");
@@ -126,13 +132,34 @@ function renderSidebar(): void {
 			const state = t.status === "failed" ? `<span class="thread-state failed" title="${escapeHtml(t.error ?? "Setup failed")}">${ICONS.failed}</span>` : t.status === "provisioning" || busy.get(t.id) ? '<span class="thread-state spinner" aria-label="Working"></span>' : "";
 			const tags = (t.tags ?? []).map((tag) => `<span class="thread-tag">${escapeHtml(tag)}</span>`).join("");
 			const unread = unreadThreads.has(t.id) ? '<span class="thread-unread" title="Unread mentions"></span>' : "";
-			row.innerHTML = `<span class="sidebar-name">${escapeHtml(titleOf(t))}</span>${unread}${tags}${t.pinned ? `<span class="thread-pin" title="Pinned">${ICONS.pin}</span>` : ""}${state}`;
+			const others = t.people ?? [];
+			const shared = others.length > 0 ? `<span class="thread-shared${others.some((p) => p.online) ? " online" : ""}" title="${escapeHtml(sharedWith(others))}">${ICONS.people}</span>` : "";
+			row.innerHTML = `<span class="sidebar-name">${escapeHtml(titleOf(t))}</span>${unread}${tags}${shared}${t.pinned ? `<span class="thread-pin" title="Pinned">${ICONS.pin}</span>` : ""}${state}`;
 			list.append(row);
 		}
 	}
 	$("archive-toggle").setAttribute("aria-pressed", String(archives));
 	const name = catalog.identity.name;
 	$("me").innerHTML = `<span class="avatar" style="--person:${personColor(name)}">${escapeHtml(initials(name))}</span><span>${escapeHtml(name)}</span>`;
+}
+
+/** "Shared with Bob and Carol; Bob is here now." */
+function sharedWith(people: { name: string; online: boolean }[]): string {
+	const list = (names: string[]) => (names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`);
+	const here = people.filter((p) => p.online).map((p) => p.name);
+	return `Shared with ${list(people.map((p) => p.name))}${here.length > 0 ? `; ${list(here)} ${here.length === 1 ? "is" : "are"} here now` : ""}`;
+}
+
+/** A project's collaborators, from all its threads: their avatars (three at most), a dot for whoever is here now. */
+function peopleHtml(threads: Thread[]): string {
+	const people = new Map<string, boolean>();
+	for (const t of threads) for (const p of t.people ?? []) people.set(p.name, (people.get(p.name) ?? false) || p.online);
+	if (people.size === 0) return "";
+	// Whoever is here first.
+	const all = [...people].map(([name, online]) => ({ name, online })).sort((a, b) => Number(b.online) - Number(a.online));
+	const shown = all.slice(0, 3).map((p) => `<span class="avatar${p.online ? " online" : ""}" style="--person:${personColor(p.name)}">${escapeHtml(initials(p.name))}</span>`);
+	const more = all.length > 3 ? `<span class="sidebar-more">+${all.length - 3}</span>` : "";
+	return `<span class="sidebar-people" title="${escapeHtml(sharedWith(all))}">${shown.join("")}${more}</span>`;
 }
 
 /** Shows the thread: its page (loaded once, kept while recent), or how its setup is going. */
@@ -249,10 +276,11 @@ function inThread(id: string, from?: "sidebar"): boolean {
 async function refresh(): Promise<void> {
 	const next = await api<Catalog>("/api/sessions").catch(() => undefined);
 	if (next === undefined) return;
-	const before = JSON.stringify(catalog.sessions.map((t) => [t.id, t.status, t.step, t.title, t.pinned, t.archived, t.tags, t.dir, t.lastOpened]));
+	const shown = (t: Thread) => [t.id, t.status, t.step, t.title, t.pinned, t.archived, t.tags, t.dir, t.lastOpened, t.people];
+	const before = JSON.stringify(catalog.sessions.map(shown));
 	const status = selected()?.status;
 	catalog = next;
-	if (JSON.stringify(catalog.sessions.map((t) => [t.id, t.status, t.step, t.title, t.pinned, t.archived, t.tags, t.dir, t.lastOpened])) !== before) renderSidebar();
+	if (JSON.stringify(catalog.sessions.map(shown)) !== before) renderSidebar();
 	// A thread whose setup just finished (or failed) shows as it is now.
 	if (selected()?.status !== status || (active && !selected())) show(active);
 	if (catalog.login) showLogin(catalog.login);
@@ -266,13 +294,13 @@ function dialog(id: string): HTMLDialogElement {
 
 async function chooseFolder(): Promise<string | undefined> {
 	if (tauri?.dialog) {
-		const picked = await tauri.dialog.open({ directory: true, multiple: false, title: "Open a project" });
+		const picked = await tauri.dialog.open({ directory: true, multiple: false, title: "Choose the project's folder" });
 		return typeof picked === "string" ? picked : undefined;
 	}
 	return prompt("Project folder")?.trim() || undefined;
 }
 
-/** ⌘O: pick a folder, then say where the thread runs and with which model. */
+/** New project (⌘O, the palette, the sidebar): pick a folder, then say where its first thread runs and with which model. */
 async function openProject(dir?: string): Promise<void> {
 	const folder = dir ?? (await chooseFolder());
 	if (!folder) return;
@@ -514,6 +542,7 @@ function wire(): void {
 
 	$("sidebar-list").addEventListener("click", (event) => {
 		const target = event.target as HTMLElement;
+		if (target.closest(".sidebar-new-project")) return void openProject();
 		const add = target.closest(".sidebar-add");
 		const head = target.closest<HTMLElement>(".sidebar-project");
 		const row = target.closest<HTMLElement>(".sidebar-thread");

@@ -55,7 +55,7 @@
         <h1>Start a <em>thread</em></h1>
         <p class="muted">Open a project folder and talk to an agent about it, alone or with others. Or join a thread someone shared with you.</p>
         <div class="row">
-          <button id="empty-open" type="button" class="button primary">Open a project</button>
+          <button id="empty-open" type="button" class="button primary">New project</button>
           <button id="empty-join" type="button" class="button">Join a thread</button>
         </div>
       </div>
@@ -67,7 +67,7 @@
 
 <dialog id="create-dialog" class="form-dialog">
   <form id="create-form">
-    <h2>New thread</h2>
+    <h2>New project</h2>
     <label for="create-dir">Project folder</label>
     <div class="row"><input id="create-dir" required spellcheck="false" placeholder="/Users/you/project"><button id="create-choose" type="button" class="button">Choose…</button></div>
     <label for="create-compute">Runs on</label>
@@ -82,7 +82,7 @@
       <select id="create-thinking" aria-label="Thinking"><option>off</option><option>minimal</option><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option></select>
     </div>
     <p id="create-error" class="error" role="alert"></p>
-    <div class="dialog-actions"><button type="button" data-close class="button">Cancel</button><button type="submit" class="button primary">Start thread</button></div>
+    <div class="dialog-actions"><button type="button" data-close class="button">Cancel</button><button type="submit" class="button primary">Create project</button></div>
   </form>
 </dialog>
 

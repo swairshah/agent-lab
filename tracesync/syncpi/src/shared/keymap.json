@@ -15,7 +15,7 @@
 	{ "id": "app.theme", "title": "Switch light or dark", "group": "General", "keys": "cmd-shift-l", "apps": ["web", "desktop"] },
 
 	{ "id": "thread.new", "title": "New thread", "group": "Threads", "keys": "cmd-n", "apps": ["desktop"], "quick": true },
-	{ "id": "project.add", "title": "Open a project", "group": "Threads", "keys": "cmd-o", "apps": ["desktop"], "quick": true },
+	{ "id": "project.add", "title": "New project (open a folder)", "group": "Threads", "keys": "cmd-o", "apps": ["desktop"], "quick": true },
 	{ "id": "thread.share", "title": "Share thread", "group": "Threads", "keys": "cmd-shift-s", "apps": ["web", "desktop"], "quick": true },
 	{ "id": "thread.join", "title": "Join a shared thread", "group": "Threads", "apps": ["desktop"] },
 	{ "id": "thread.next", "title": "Next thread", "group": "Threads", "keys": "cmd-}", "apps": ["desktop"] },

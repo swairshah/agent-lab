@@ -24,7 +24,14 @@ export class DesktopRuntime {
     try { this.decorations = JSON.parse(readFileSync(join(home, 'desktop.json'), 'utf8')); } catch { this.decorations = {}; }
   }
   list() {
-    return sessions().map(({ token: _, setup: __, ...s }) => ({ ...s, ...this.decorations[s.id], connection: this.live.get(s.id)?.conn.state, sync: this.live.get(s.id)?.sync, login: this.live.get(s.id)?.login }));
+    return sessions().map(({ token: _, setup: __, ...s }) => ({ ...s, ...this.decorations[s.id], connection: this.live.get(s.id)?.conn.state, sync: this.live.get(s.id)?.sync, login: this.live.get(s.id)?.login, people: this.people(s.id) }));
+  }
+  /** Who else is in a thread, and whether they're there now; known once the thread is followed (for the inbox, every ready one is). */
+  people(id: string): { name: string; online: boolean }[] | undefined {
+    const live = this.live.get(id);
+    const me = live?.native.me;
+    if (!live || !me) return undefined;
+    return live.native.members.filter(m => m.id !== me.id).map(m => ({ name: m.name, online: live.native.online.some(p => p.memberId === m.id) }));
   }
   decorate(id: string, patch: Decoration) {
     if (!loadSession(id)) throw new Error('No such session');

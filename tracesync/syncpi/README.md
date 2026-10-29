@@ -145,9 +145,11 @@ runs the agent's tools here when a request runs on this machine, and serves the 
 of threads by project (`src/web/shell.ts`) beside the open thread, which is the same page a browser gets, loaded
 through the host so the page never holds the thread's token. Recent threads stay loaded, so switching is instant.
 
-The app adds what a browser can't do: new threads from a project folder (⌘N, ⌘O), joining a share link, terminals
+The app adds what a browser can't do: a new project from a folder on this Mac (⌘O, "New project" in ⇧⌘P, or the
+button by the sidebar's Projects heading), new threads in it (⌘N), joining a share link, terminals
 on this Mac (⌃\`, or `!cmd` in the composer), the project's uncommitted git changes (⇧⌘G), revealing the project in
-Finder or Zed, and text size (⌘+, ⌘−). The menu bar is built from `src/shared/keymap.json`, so menu items and
+Finder or Zed, and text size (⌘+, ⌘−). The sidebar shows who else is in each project: their avatars on the project,
+with a dot for whoever is there now, and a people icon on each shared thread (the names on hover). The menu bar is built from `src/shared/keymap.json`, so menu items and
 shortcuts run the same commands. The previous native (GPUI) app is at the tag `gpui-desktop-final`.
 
 The web view's code is in `src/web/`, one module per concern (see `main.ts`). Artifact detection is shared with the
@@ -187,6 +189,7 @@ npm run smoke      # local server + scripted model: owner and collaborator, chat
 npm run test:search  # Find and the palette: unit tests, then Chrome on a scripted session and the app's host
 npm run test:side    # side threads: two people, a terminal, two tabs and the app; nothing reaches the other person
 npm run test:annotate  # comments on part of a graphic: two people, an SVG, HTML, a diagram and an image file
+npm run test:projects  # the app: a new project from ⇧⌘P and the sidebar; collaborators shown in the sidebar
 npm --prefix ../syncpi-extension test   # /sync: a real pi (RPC mode, scripted model) and a collaborator take turns
 ```
 

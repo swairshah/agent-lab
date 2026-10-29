@@ -197,8 +197,8 @@ try {
 	app.on("pageerror", (e) => errors.push(e.message));
 	await app.goto(launch);
 	await app.evaluate((d) => (window.prompt = () => d), appDir);
-	await app.getByRole("button", { name: "Open a project" }).click();
-	await app.getByRole("button", { name: "Start thread" }).click();
+	await app.locator("#empty-open").click();
+	await app.getByRole("button", { name: "Create project" }).click();
 	const inApp = app.frameLocator("iframe.session-frame:not([hidden])");
 	await inApp.locator("#input").waitFor({ timeout: 60_000 });
 	await inApp.locator("#input").click();

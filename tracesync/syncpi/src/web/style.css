@@ -817,3 +817,18 @@ html[data-desktop="true"] .statusbar { height: 30px; padding: 0 6px 0 16px; }
 .mark-editor textarea { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 6px; background: var(--paper); resize: none; outline: none; }
 .mark-editor textarea:focus { border-color: var(--accent); }
 .mark-editor .mark-remove { justify-self: start; font-size: 12px; }
+
+/* The sidebar's New project button, and who else is in a project or thread. */
+.sidebar-label { display: flex; align-items: center; }
+.sidebar-label .sidebar-new-project { margin-left: auto; color: var(--muted); }
+.sidebar-label .sidebar-new-project:hover { color: var(--ink); }
+.sidebar-label .sidebar-new-project svg { width: 15px; height: 15px; }
+.sidebar-people { display: inline-flex; align-items: center; flex: none; }
+.sidebar-people .avatar { width: 18px; height: 18px; font-size: 8px; border: 1.5px solid var(--sunken); margin-left: -5px; }
+.sidebar-people .avatar:first-child { margin-left: 0; }
+.sidebar-people .avatar.online::after { width: 6px; height: 6px; border-width: 1.5px; border-color: var(--sunken); right: -2px; bottom: -2px; }
+.sidebar-more { margin-left: 3px; font-size: 11px; color: var(--muted); }
+.sidebar-project .sidebar-people + .sidebar-add { margin-left: 2px; }
+.thread-shared { display: inline-flex; flex: none; }
+.thread-shared svg { width: 14px; height: 14px; color: var(--muted); }
+.thread-shared.online svg { color: var(--ok); }
