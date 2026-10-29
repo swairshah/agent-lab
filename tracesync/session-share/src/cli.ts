@@ -17,6 +17,9 @@ const USAGE = `session-share: one shared session for Claude Code, Codex and pi, 
   session-share log                         the whole session as text
   session-share checkpoint <label>          tag the session and the files as they are now
   session-share checkpoints                 the tags so far
+  session-share fork <label>                go back to a checkpoint: the session and the files (what is there now
+                                            is tagged first, so it can be gone back to)
+  session-share branches                    the forks so far
   session-share status | view | stop
 
   SESSION_SHARE_MEMBER sets who you are (default: git user.name).`;
@@ -59,6 +62,25 @@ async function main(argv: string[]): Promise<number> {
 		case "checkpoints": {
 			const { checkpoints } = await (await connect(project)).call("/checkpoints");
 			for (const c of checkpoints) console.log(`${new Date(c.at).toLocaleString()}  ${c.label}  by ${c.by}  entry ${c.upTo}${c.git ? `  git ${c.git.slice(0, 10)}` : ""}`);
+			return 0;
+		}
+		case "fork": {
+			const label = rest.join(" ").trim();
+			if (!label) throw new Error("usage: session-share fork <label>");
+			const f = await (await connect(project)).call("/fork", { label, by: member }).catch((error) => {
+				if (error.status !== 409) throw error;
+				console.error(error.message);
+				process.exit(2);
+			});
+			console.log(`back at "${f.label}"${f.git ? `, files restored from ${f.git.slice(0, 10)}` : ""} (branch ${f.branch}).`);
+			console.log(`What was there before is tagged "${f.saved}". Claude Code and Codex sessions from before are retired here: start new ones.`);
+			return 0;
+		}
+		case "branches": {
+			const { active, branches } = await (await connect(project)).call("/branches");
+			if (branches.length === 0) console.log(`* ${active}  the session (no forks yet)`);
+			for (const b of branches)
+				console.log(`${b.id === active ? "*" : " "} ${b.id}  ${b.label ? `back to "${b.label}" from ${b.parent}, by ${b.by}, ${new Date(b.created).toLocaleString()}` : "the session as it began"}`);
 			return 0;
 		}
 		case "status": {

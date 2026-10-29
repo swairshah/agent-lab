@@ -1,4 +1,5 @@
-// The shared session: one pi-durable Harness whose root conversation holds every agent's work.
+// The shared session: one pi-durable Harness whose active conversation (the root, or the latest fork) holds every
+// agent's work.
 //
 //   - Claude Code and Codex messages are recorded from their native transcripts as `share.message` entries. Each
 //     carries the normalized message in `data` and, in `model`, the narration pi reads, so pi sees the others' work in
@@ -9,8 +10,11 @@
 //   - `share.sessions` (a document) remembers every native session: its transcript, how far it was read, and the
 //     last entry that session was told about.
 //   - `share.checkpoint` entries tag a point of the session with the files as they were then (a git commit).
+//   - `fork` goes back to a checkpoint: a pi-durable fork at the checkpoint becomes the active conversation and the
+//     files are restored. pi's history is the conversation, so it goes back too. A Claude Code or Codex session cannot
+//     be rewound, so its sessions from before are retired in the fork and new ones are told everything up to there.
 import { execFileSync } from "node:child_process";
-import { existsSync, openSync, readSync, closeSync, statSync, mkdirSync, appendFileSync, readFileSync } from "node:fs";
+import { existsSync, openSync, readSync, closeSync, statSync, mkdirSync, appendFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
@@ -39,6 +43,7 @@ import type {
 	Normalized,
 	Parsed,
 	ShareCheckpointData,
+	ShareForkData,
 	ShareMessageData,
 	SharePromptData,
 	ShareTurnData,
@@ -46,7 +51,20 @@ import type {
 
 export const context = BACKGROUND_CONTEXT;
 
-type SessionInfo = { agent: AgentKind; transcript?: string; offset: number; lines: number; seen: number; member?: string };
+type SessionInfo = {
+	agent: AgentKind;
+	transcript?: string;
+	offset: number;
+	lines: number;
+	seen: number;
+	member?: string;
+	/** Set in a fork for the sessions of before it: their native history goes past the fork point. */
+	retired?: string;
+};
+
+/** Every branch of the session, and which one is active; kept next to the storage. */
+export type Branch = { id: number; parent?: number; at?: number; label?: string; by?: string; created: number };
+type Branches = { active?: number; branches: Branch[] };
 
 const Lease = defineDoc<{ holder: Holder | null }>({
 	kind: "share.lease",
@@ -79,13 +97,23 @@ export class Busy extends Error {
 	}
 }
 
+/** A native session from before a fork cannot work in it: its own history has what the fork went back from. */
+export class Retired extends Error {
+	constructor(session: string, label: string) {
+		super(`this session went past the checkpoint "${label}" the session was forked back to; start a new one (Codex: session-share codex --new)`);
+		this.name = `Retired ${session}`;
+	}
+}
+
 export type StoreOptions = { dir: string; project: string; model?: string; faux?: boolean };
 
 export class Store {
 	readonly dir: string;
 	readonly project: string;
 	harness!: Harness;
-	root!: Conversation;
+	/** The branch everyone works on: the root conversation, or the latest fork. */
+	conv!: Conversation;
+	#rootId = 0;
 	readonly #parsers = new Map<string, ClaudeState | CodexState>();
 	/** One change at a time: recording, leases and cursors read and then write. */
 	#line: Promise<unknown> = Promise.resolve();
@@ -113,7 +141,10 @@ export class Store {
 			identity: { attribution: { name: "session-share", url: "https://github.com/swairshah" } },
 		}, context);
 		const model = this.options.faux ? { provider: "faux", modelId: "faux-1" } : parseModel(this.options.model ?? piDefaultModel());
-		this.root = await this.harness.root(context, { agent: { model, cwd: this.project } });
+		const root = await this.harness.root(context, { agent: { model, cwd: this.project } });
+		this.#rootId = root.id as unknown as number;
+		const active = readBranches(this.dir).active;
+		this.conv = (active === undefined ? undefined : await this.harness.conversation(active as never, context)) ?? root;
 		this.harness.resume();
 	}
 
@@ -128,38 +159,28 @@ export class Store {
 	}
 
 	async #sessions(): Promise<Record<string, SessionInfo>> {
-		return ((await this.harness.snapshot(Sessions, this.root.id, context))?.sessions ?? {}) as Record<string, SessionInfo>;
+		return ((await this.harness.snapshot(Sessions, this.conv.id, context))?.sessions ?? {}) as Record<string, SessionInfo>;
 	}
 
 	async lease(): Promise<Holder | null> {
-		return ((await this.harness.snapshot(Lease, this.root.id, context))?.holder ?? null) as Holder | null;
+		return ((await this.harness.snapshot(Lease, this.conv.id, context))?.holder ?? null) as Holder | null;
 	}
 
 	/** Every entry of the session that views and narration show, oldest first. */
-	async items(after = 0): Promise<Item[]> {
-		const out: Item[] = [];
-		let cursor;
-		do {
-			const page = await this.root.entries({ order: "ascending", minEntryId: (after + 1) as never }, 500, cursor, context);
-			for (const e of page.items) {
-				const item = toItem(e, this.root.id as unknown as number);
-				if (item) out.push(item);
-			}
-			cursor = page.next;
-		} while (cursor !== undefined);
-		return out;
+	items(after = 0): Promise<Item[]> {
+		return itemsOf(this.conv, after);
 	}
 
 	async lastEntry(): Promise<number> {
-		const page = await this.root.entries({ order: "descending" }, 1, undefined, context);
+		const page = await this.conv.entries({ order: "descending" }, 1, undefined, context);
 		return (page.items[0]?.id as unknown as number) ?? 0;
 	}
 
 	/** Remember a native session, so its transcript is recorded and it is told what it missed. */
 	register(agent: AgentKind, session: string, transcript: string | undefined, member: string | undefined): Promise<void> {
 		return this.#serial(async () => {
-			await this.root.commit(async (tx) => {
-				const doc = await tx.doc(Sessions, this.root.id);
+			await this.conv.commit(async (tx) => {
+				const doc = await tx.doc(Sessions, this.conv.id);
 				const known = doc.sessions[session];
 				if (known === undefined) doc.sessions[session] = { agent, offset: 0, lines: 0, seen: 0, ...(transcript ? { transcript } : {}), ...(member ? { member } : {}) };
 				else {
@@ -186,7 +207,7 @@ export class Store {
 	/** Append the complete lines a transcript gained since it was last read; returns how many messages were recorded. */
 	async #record(session: string): Promise<number> {
 		const info = (await this.#sessions())[session];
-		if (info === undefined || info.agent === "pi") return 0;
+		if (info === undefined || info.agent === "pi" || info.retired !== undefined) return 0;
 		let path = info.transcript;
 		// A Codex turn that has not started its thread yet has no rollout to look for.
 		if (path === undefined && info.agent === "codex" && !session.startsWith("codex-new:")) path = findRollout(session);
@@ -212,8 +233,8 @@ export class Store {
 		for (const p of parsed) last = await this.#write(info, session, p);
 		await last?.wait(context);
 		const offset = info.offset + Buffer.byteLength(text.slice(0, end + 1));
-		await this.root.commit(async (tx) => {
-			const s = (await tx.doc(Sessions, this.root.id)).sessions[session]!;
+		await this.conv.commit(async (tx) => {
+			const s = (await tx.doc(Sessions, this.conv.id)).sessions[session]!;
 			s.offset = offset;
 			s.lines = lineNo;
 			if (path !== s.transcript) s.transcript = path;
@@ -246,7 +267,7 @@ export class Store {
 		};
 		const item: Item = { id: 0, kind: "message", agent: info.agent, session, member: info.member, message: p.message };
 		const text = narrateItem(item);
-		return this.root.submit({
+		return this.conv.submit({
 			type: "write",
 			requestId: `record:${session}:${p.nativeId}`,
 			entry: { kind: "share.message", data: json(data), ...(text ? { model: [{ role: "user", content: text, timestamp: data.at }] } : {}) },
@@ -259,6 +280,8 @@ export class Store {
 	 */
 	begin(agent: AgentKind, session: string, member?: string): Promise<string | undefined> {
 		return this.#serial(async () => {
+			const retired = (await this.#sessions())[session]?.retired;
+			if (retired !== undefined) throw new Retired(session, retired);
 			for (const s of Object.keys(await this.#sessions())) if (s !== session) await this.#record(s);
 			await this.#record(session);
 			const now = Date.now();
@@ -267,11 +290,11 @@ export class Store {
 			const seen = (await this.#sessions())[session]?.seen ?? 0;
 			const told = narrate(await this.items(seen), session);
 			const turn: ShareTurnData = { phase: "start", agent, session, at: now, ...(member ? { member } : {}) };
-			const last = await this.root.commit(async (tx) => {
-				(await tx.doc(Lease, this.root.id)).holder = { agent, session, since: held?.session === session ? held.since : now, heartbeat: now, ...(member ? { member } : {}) };
-				const doc = await tx.doc(Sessions, this.root.id);
+			const last = await this.conv.commit(async (tx) => {
+				(await tx.doc(Lease, this.conv.id)).holder = { agent, session, since: held?.session === session ? held.since : now, heartbeat: now, ...(member ? { member } : {}) };
+				const doc = await tx.doc(Sessions, this.conv.id);
 				doc.sessions[session] ??= { agent, offset: 0, lines: 0, seen: 0, ...(member ? { member } : {}) };
-				return held?.session === session ? undefined : tx.appendEntry(this.root.id, { kind: "share.turn", data: json(turn) });
+				return held?.session === session ? undefined : tx.appendEntry(this.conv.id, { kind: "share.turn", data: json(turn) });
 			}, context);
 			await this.#see(session, (last?.id as unknown as number) ?? (await this.lastEntry()));
 			return told;
@@ -284,8 +307,8 @@ export class Store {
 	 */
 	adopt(placeholder: string, session: string, transcript?: string): Promise<void> {
 		return this.#serial(async () => {
-			await this.root.commit(async (tx) => {
-				const doc = await tx.doc(Sessions, this.root.id);
+			await this.conv.commit(async (tx) => {
+				const doc = await tx.doc(Sessions, this.conv.id);
 				const from = doc.sessions[placeholder];
 				const into = doc.sessions[session];
 				if (from !== undefined) {
@@ -295,7 +318,7 @@ export class Store {
 				}
 				const target = doc.sessions[session];
 				if (target && transcript && target.transcript !== transcript) target.transcript = transcript;
-				const lease = await tx.doc(Lease, this.root.id);
+				const lease = await tx.doc(Lease, this.conv.id);
 				if (lease.holder?.session === placeholder) lease.holder.session = session;
 			}, context);
 		});
@@ -304,8 +327,8 @@ export class Store {
 	/** The turn's agent is still working. */
 	heartbeat(session: string): Promise<void> {
 		return this.#serial(async () => {
-			await this.root.commit(async (tx) => {
-				const lease = await tx.doc(Lease, this.root.id);
+			await this.conv.commit(async (tx) => {
+				const lease = await tx.doc(Lease, this.conv.id);
 				if (lease.holder?.session === session) lease.holder.heartbeat = Date.now();
 			}, context);
 		});
@@ -317,26 +340,26 @@ export class Store {
 			await this.#record(session);
 			const info = (await this.#sessions())[session];
 			const turn: ShareTurnData = { phase: "end", agent: info?.agent ?? "pi", session, at: Date.now(), ...(info?.member ? { member: info.member } : {}) };
-			const entry = await this.root.commit(async (tx) => {
-				const lease = await tx.doc(Lease, this.root.id);
+			const entry = await this.conv.commit(async (tx) => {
+				const lease = await tx.doc(Lease, this.conv.id);
 				if (lease.holder?.session !== session) return undefined;
 				lease.holder = null;
-				return tx.appendEntry(this.root.id, { kind: "share.turn", data: json(turn) });
+				return tx.appendEntry(this.conv.id, { kind: "share.turn", data: json(turn) });
 			}, context);
 			if (entry) await this.#see(session, entry.id as unknown as number);
 		});
 	}
 
 	async #see(session: string, entry: number): Promise<void> {
-		await this.root.commit(async (tx) => {
-			const s = (await tx.doc(Sessions, this.root.id)).sessions[session];
+		await this.conv.commit(async (tx) => {
+			const s = (await tx.doc(Sessions, this.conv.id)).sessions[session];
 			if (s && s.seen < entry) s.seen = entry;
 		}, context);
 	}
 
-	/** pi's own native session is the root conversation. */
+	/** pi's own native session is the active conversation. */
 	get piSession(): string {
-		return `pi:${this.root.id as unknown as number}`;
+		return `pi:${this.conv.id as unknown as number}`;
 	}
 
 	/** Run one pi turn on the shared conversation; `onItem` sees each entry as it lands. Returns the answer's text. */
@@ -354,7 +377,7 @@ export class Store {
 		const timer = setInterval(() => void poll().catch(() => {}), 500);
 		try {
 			const data: SharePromptData = { member, text: prompt, at: Date.now() };
-			const submission = await this.root.submit({ type: "input", content: prompt, entry: { kind: "share.prompt", data: json(data) } }, context);
+			const submission = await this.conv.submit({ type: "input", content: prompt, entry: { kind: "share.prompt", data: json(data) } }, context);
 			const settled = await submission.wait(context);
 			await poll();
 			if (settled.status !== "done" || settled.type !== "input") return `(pi did not answer: ${(settled as { reason?: string }).reason ?? settled.status})`;
@@ -368,17 +391,108 @@ export class Store {
 
 	/** Tag the session as it is now, with the files as they are (a commit under refs/session-share/, when in git). */
 	checkpoint(label: string, by: string): Promise<ShareCheckpointData> {
-		return this.#serial(async () => {
-			for (const s of Object.keys(await this.#sessions())) await this.#record(s);
-			const data: ShareCheckpointData = { label, by, at: Date.now(), upTo: await this.lastEntry(), ...gitSnapshot(this.project, this.dir, label) };
-			await this.root.commit((tx) => tx.appendEntry(this.root.id, { kind: "share.checkpoint", data: json(data) }), context);
-			return data;
-		});
+		return this.#serial(() => this.#checkpoint(label, by));
+	}
+
+	async #checkpoint(label: string, by: string): Promise<ShareCheckpointData & { id: number }> {
+		for (const s of Object.keys(await this.#sessions())) await this.#record(s);
+		const data: ShareCheckpointData = { label, by, at: Date.now(), upTo: await this.lastEntry(), ...gitSnapshot(this.project, this.dir, label) };
+		const entry = await this.conv.commit((tx) => tx.appendEntry(this.conv.id, { kind: "share.checkpoint", data: json(data) }), context);
+		return { ...data, id: entry.id as unknown as number };
 	}
 
 	async checkpoints(): Promise<(ShareCheckpointData & { id: number })[]> {
 		return (await this.items()).flatMap((i) => (i.checkpoint ? [{ ...i.checkpoint, id: i.id }] : []));
 	}
+
+	branches(): Branches & { active: number } {
+		return { ...readBranches(this.dir), active: this.conv.id as unknown as number };
+	}
+
+	/**
+	 * Go back to the newest checkpoint called `label`, on any branch. What is there now is tagged first ("before going
+	 * back to …"), so nothing is lost: it stays on its branch, with its files in git. Then a fork at the checkpoint
+	 * becomes the active conversation, the files are put back as they were at the checkpoint, and the native sessions
+	 * of before are retired in the fork.
+	 */
+	fork(label: string, by: string): Promise<ShareForkData & { branch: number }> {
+		return this.#serial(async () => {
+			const held = await this.lease();
+			if (held && Date.now() - held.heartbeat < STALE_MS) throw new Busy(held);
+			const target = await this.#findCheckpoint(label);
+			if (target === undefined) throw new Error(`no checkpoint called "${label}"`);
+			const from = this.conv.id as unknown as number;
+			const saved = await this.#checkpoint(`before going back to ${label}`, by);
+			// Every native session of every branch, so one that only worked on another branch is not recorded into this one.
+			const natives: Record<string, SessionInfo> = {};
+			for (const id of new Set([this.#rootId, ...readBranches(this.dir).branches.map((b) => b.id), from])) {
+				const doc = await this.harness.snapshot(Sessions, id as never, context);
+				for (const [s, info] of Object.entries((doc?.sessions ?? {}) as Record<string, SessionInfo>)) if (info.agent !== "pi") natives[s] ??= info;
+			}
+			const source = (await this.harness.conversation(target.conversation as never, context))!;
+			const fork = await source.fork(target.id as never, {
+				ownership: { kind: "ownerless" },
+				init: async (tx, id) => {
+					const doc = await tx.doc(Sessions, id);
+					for (const [s, info] of Object.entries(natives)) doc.sessions[s] ??= { ...info };
+					for (const s of Object.values(doc.sessions)) if (s.agent !== "pi") s.retired ??= label;
+				},
+			}, context);
+			const data: ShareForkData = { label, by, at: Date.now(), from, saved: saved.label, ...(target.git ? { git: target.git } : {}) };
+			if (target.git && saved.git) gitRestore(this.project, this.dir, target.git, saved.git);
+			await fork.commit((tx) => tx.appendEntry(fork.id, { kind: "share.fork", data: json(data) }), context);
+			const known = readBranches(this.dir);
+			if (known.branches.length === 0) known.branches.push({ id: this.#rootId, created: 0 });
+			const branch = fork.id as unknown as number;
+			known.branches.push({ id: branch, parent: target.conversation, at: target.id, label, by, created: data.at });
+			known.active = branch;
+			writeBranches(this.dir, known);
+			// A Codex thread of before is retired with the rest; the next Codex turn starts a new one.
+			rmSync(join(this.dir, "codex.json"), { force: true });
+			this.conv = fork;
+			this.#parsers.clear();
+			return { ...data, branch };
+		});
+	}
+
+	/** The newest checkpoint with this label: on the active branch first, then on the others, newest branch first. */
+	async #findCheckpoint(label: string): Promise<(ShareCheckpointData & { id: number; conversation: number }) | undefined> {
+		const active = this.conv.id as unknown as number;
+		const others = readBranches(this.dir).branches.map((b) => b.id).filter((id) => id !== active).reverse();
+		for (const id of [active, ...others]) {
+			const conv = await this.harness.conversation(id as never, context);
+			if (!conv) continue;
+			const hit = (await itemsOf(conv)).findLast((i) => i.checkpoint?.label === label);
+			if (hit?.checkpoint) return { ...hit.checkpoint, id: hit.id, conversation: id };
+		}
+		return undefined;
+	}
+}
+
+async function itemsOf(conv: Conversation, after = 0): Promise<Item[]> {
+	const out: Item[] = [];
+	let cursor;
+	do {
+		const page = await conv.entries({ order: "ascending", minEntryId: (after + 1) as never }, 500, cursor, context);
+		for (const e of page.items) {
+			const item = toItem(e, conv.id as unknown as number);
+			if (item) out.push(item);
+		}
+		cursor = page.next;
+	} while (cursor !== undefined);
+	return out;
+}
+
+function readBranches(dir: string): Branches {
+	try {
+		return JSON.parse(readFileSync(join(dir, "branches.json"), "utf8"));
+	} catch {
+		return { branches: [] };
+	}
+}
+
+function writeBranches(dir: string, branches: Branches): void {
+	writeFileSync(join(dir, "branches.json"), `${JSON.stringify(branches, null, 2)}\n`);
 }
 
 /** What pi is told about the session it works in, as a system prompt section. */
@@ -439,6 +553,10 @@ export function toItem(e: EntryRecord, root: number): Item | undefined {
 			const d = e.data as unknown as ShareCheckpointData;
 			return { id, kind: "checkpoint", member: d.by, at: d.at, checkpoint: d };
 		}
+		case "share.fork": {
+			const d = e.data as unknown as ShareForkData;
+			return { id, kind: "fork", member: d.by, at: d.at, fork: d };
+		}
 		default:
 			return undefined;
 	}
@@ -469,6 +587,23 @@ function gitSnapshot(project: string, dir: string, label: string): { git?: strin
 	const ref = label.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "") || "checkpoint";
 	git(["update-ref", `refs/session-share/checkpoints/${ref}`, commit]);
 	return { git: commit };
+}
+
+/**
+ * Put the files back as they were in commit `to`, from `from` (a snapshot of them now): files `to` has are written,
+ * files only `from` has are removed. HEAD and the index are not touched; ignored files are left alone.
+ */
+function gitRestore(project: string, dir: string, to: string, from: string): void {
+	const top = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: project }).toString().trim();
+	const git = (args: string[], env: Record<string, string> = {}) =>
+		execFileSync("git", args, { cwd: top, env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] }).toString();
+	const index = { GIT_INDEX_FILE: join(dir, "restore.index") };
+	git(["read-tree", to], index);
+	git(["checkout-index", "--all", "--force"], index);
+	rmSync(index.GIT_INDEX_FILE, { force: true });
+	for (const path of git(["diff", "--name-only", "--no-renames", "-z", "--diff-filter=A", to, from]).split("\0")) {
+		if (path) rmSync(join(top, path), { force: true });
+	}
 }
 
 /** Keep the session's own folder out of the project's git status, without editing its .gitignore. */

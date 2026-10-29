@@ -8,13 +8,14 @@ import {
 	CONTEXT_TAG,
 	type Normalized,
 	type ShareCheckpointData,
+	type ShareForkData,
 	type ShareTurnData,
 } from "./protocol.ts";
 
 /** One shared-session entry, as views and narration read it. */
 export type Item = {
 	id: number;
-	kind: "message" | "turn" | "checkpoint";
+	kind: "message" | "turn" | "checkpoint" | "fork";
 	agent?: AgentKind;
 	session?: string;
 	member?: string;
@@ -22,6 +23,7 @@ export type Item = {
 	message?: Normalized;
 	turn?: ShareTurnData;
 	checkpoint?: ShareCheckpointData;
+	fork?: ShareForkData;
 };
 
 /** Each tool input and result keeps at most this much. */
@@ -43,6 +45,10 @@ export function narrateItem(item: Item): string | undefined {
 	if (item.kind === "checkpoint" && item.checkpoint) {
 		const c = item.checkpoint;
 		return `— checkpoint "${c.label}" tagged by ${c.by}${c.git ? ` (files at git ${c.git.slice(0, 10)})` : ""}`;
+	}
+	if (item.kind === "fork" && item.fork) {
+		const f = item.fork;
+		return `— ${f.by} went back to checkpoint "${f.label}"${f.git ? " and its files" : ""}; what came after is set aside (tagged "${f.saved}")`;
 	}
 	if (item.kind === "turn" && item.turn) {
 		return item.turn.phase === "start" ? `— ${who(item)} took the turn` : undefined;
@@ -73,7 +79,7 @@ export function narrate(items: Item[], session: string, budget = NARRATION_BUDGE
 	let omitted = 0;
 	for (let i = items.length - 1; i >= 0; i--) {
 		const item = items[i]!;
-		if (item.session === session && item.kind !== "checkpoint") continue;
+		if (item.session === session && item.kind !== "checkpoint" && item.kind !== "fork") continue;
 		const text = narrateItem(item);
 		if (text === undefined) continue;
 		if (used + text.length > budget) {

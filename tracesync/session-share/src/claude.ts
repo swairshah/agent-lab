@@ -2,8 +2,8 @@
 //
 // Each line is a row; an assistant response is split over several rows that share `message.id`, one per content
 // block. Only what the person and Claude said and did is kept: subagent (sidechain) rows, meta rows, compaction
-// summaries, slash-command echoes, attachments and the engine's bookkeeping rows are left out, as delta-claude's
-// capturedMessage does.
+// summaries, API error rows, slash-command echoes, attachments and the engine's bookkeeping rows are left out, as
+// delta-claude's capturedMessage does.
 import { type Block, clip, type Parsed, RESULT_LIMIT, stripContext } from "./protocol.ts";
 
 type Row = {

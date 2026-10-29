@@ -47,6 +47,9 @@ export type ShareTurnData = { phase: "start" | "end"; agent: AgentKind; session:
 /** `share.checkpoint`: a tag on the session up to an entry, with the files as they were (a git commit). */
 export type ShareCheckpointData = { label: string; by: string; at: number; upTo: number; git?: string };
 
+/** `share.fork`: the first entry of a fork, made by going back to the checkpoint `label` from conversation `from`. */
+export type ShareForkData = { label: string; by: string; at: number; from: number; saved: string; git?: string };
+
 /** Who holds the turn. Only one agent works in the session at a time. */
 export type Holder = { agent: AgentKind; session: string; member?: string; since: number; heartbeat: number };
 

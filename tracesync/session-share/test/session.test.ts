@@ -2,7 +2,7 @@
 // against a transcript file), a stand-in `codex` on PATH that writes a rollout file the way Codex does, and pi.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
@@ -40,16 +40,17 @@ function claudeSays(session: string, type: "user" | "assistant", content: unknow
 	appendFileSync(join(transcripts, `${session}.jsonl`), `${JSON.stringify(row)}\n`);
 }
 
-// A stand-in for `codex exec --json [resume <id>] -`: it records the prompt it got, runs `wc -l` "as a tool",
+// A stand-in for `codex exec --json [resume <id>] -`: each new thread gets the next id; it records the prompt it got, runs `wc -l` "as a tool",
 // answers, and writes all of it to a rollout file under $CODEX_HOME/sessions as Codex does.
 const FAKE_CODEX = `#!/usr/bin/env node
 const fs = require("node:fs"), path = require("node:path");
 const args = process.argv.slice(2);
 const r = args.indexOf("resume");
-const thread = r >= 0 ? args[r + 1] : "019a0000-0000-7000-8000-00000000c0de";
+const dir = path.join(process.env.CODEX_HOME, "sessions", "2026", "10", "28");
+const threads = fs.existsSync(dir) ? fs.readdirSync(dir).length : 0;
+const thread = r >= 0 ? args[r + 1] : "019a0000-0000-7000-8000-00000000c0d" + threads;
 const prompt = fs.readFileSync(0, "utf8");
 fs.writeFileSync(path.join(process.env.CODEX_HOME, "last-prompt.txt"), prompt);
-const dir = path.join(process.env.CODEX_HOME, "sessions", "2026", "10", "28");
 fs.mkdirSync(dir, { recursive: true });
 const file = path.join(dir, "rollout-2026-10-28T20-00-00-" + thread + ".jsonl");
 const at = new Date().toISOString();
@@ -123,7 +124,7 @@ test("Codex's second turn resumes its thread and is told only what is new", () =
 	const prompt = readFileSync(join(codexHome, "last-prompt.txt"), "utf8");
 	assert.equal(prompt, "again", "nothing new since Codex's last turn");
 	const thread = JSON.parse(readFileSync(join(project, ".session-share", "codex.json"), "utf8")).thread;
-	assert.equal(thread, "019a0000-0000-7000-8000-00000000c0de");
+	assert.equal(thread, "019a0000-0000-7000-8000-00000000c0d0");
 });
 
 test("pi works natively on the shared conversation and sees the others' work", () => {
@@ -164,4 +165,56 @@ test("a checkpoint tags the session and the files, and survives a restart", () =
 	const again = cli(["log"]).out;
 	assert.equal(again, before, "the same session after reopening, nothing recorded twice");
 	assert.match(cli(["checkpoints"]).out, /four lines {2}by Ada/);
+});
+
+test("going back to a checkpoint forks the session and puts the files back", () => {
+	writeFileSync(join(project, "notes.txt"), "changed\n");
+	writeFileSync(join(project, "extra.txt"), "new\n");
+	assert.equal(cli(["pi", "after the checkpoint"]).code, 0);
+	const r = cli(["fork", "four lines"]);
+	assert.equal(r.code, 0, r.err);
+	assert.match(r.out, /back at "four lines", files restored from [0-9a-f]{10}/);
+	assert.equal(readFileSync(join(project, "notes.txt"), "utf8"), "a\nb\nc\nd\n");
+	assert.equal(existsSync(join(project, "extra.txt")), false);
+	const saved = execFileSync("git", ["rev-parse", "refs/session-share/checkpoints/before-going-back-to-four-lines"], { cwd: project }).toString().trim();
+	assert.equal(execFileSync("git", ["show", `${saved}:extra.txt`], { cwd: project }).toString(), "new\n", "what was there is kept");
+
+	const log = cli(["log"]).out;
+	assert.match(log, /\[Claude Code · Ada\] Added a line\./);
+	assert.match(log, /— Ada went back to checkpoint "four lines" and its files/);
+	assert.doesNotMatch(log, /after the checkpoint/, "the fork ends at the checkpoint");
+
+	const old = hook("claude-1", "UserPromptSubmit");
+	assert.equal(old.decision, "block");
+	assert.match(old.reason, /went past the checkpoint "four lines"/);
+
+	const fresh = hook("claude-4", "UserPromptSubmit").hookSpecificOutput.additionalContext;
+	assert.match(fresh, /\[Codex · Ada\] notes.txt has 3 lines\./);
+	assert.match(fresh, /went back to checkpoint "four lines"/);
+	assert.doesNotMatch(fresh, /after the checkpoint/);
+	hook("claude-4", "Stop");
+
+	const codex = cli(["codex", "where are we?"]);
+	assert.equal(codex.code, 0, codex.err);
+	assert.match(readFileSync(join(codexHome, "last-prompt.txt"), "utf8"), /went back to checkpoint "four lines"/, "a new Codex thread is told everything");
+	assert.equal(JSON.parse(readFileSync(join(project, ".session-share", "codex.json"), "utf8")).thread, "019a0000-0000-7000-8000-00000000c0d1");
+
+	const pi = cli(["pi", "what happened so far?"]).out;
+	assert.match(pi, /Last: \[Codex · Ada\] notes.txt has 3 lines\./);
+	assert.doesNotMatch(cli(["log"]).out, /after the checkpoint/);
+});
+
+test("the active branch survives a restart, and a checkpoint on another branch can be gone back to", () => {
+	const before = cli(["log"]).out;
+	cli(["stop"]);
+	assert.equal(cli(["log"]).out, before);
+	assert.match(cli(["branches"]).out, /\* \d+ {2}back to "four lines" from \d+, by Ada/);
+	const r = cli(["fork", "before going back to four lines"]);
+	assert.equal(r.code, 0, r.err);
+	assert.equal(readFileSync(join(project, "extra.txt"), "utf8"), "new\n");
+	assert.equal(readFileSync(join(project, "notes.txt"), "utf8"), "changed\n");
+	assert.match(cli(["log"]).out, /\[pi · Ada\] user: after the checkpoint/, "the first branch's work is back");
+	assert.equal(cli(["branches"]).out.trim().split("\n").length, 3);
+	assert.equal(hook("claude-4", "UserPromptSubmit").decision, "block", "a session of the branch left behind is retired too");
+	assert.doesNotMatch(cli(["log"]).out, /\[Codex · Ada\] user: where are we\?/);
 });

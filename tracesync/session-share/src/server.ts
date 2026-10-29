@@ -5,7 +5,7 @@ import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { join } from "node:path";
 import type { AgentKind } from "./protocol.ts";
-import { Busy, excludeFromGit, Store } from "./store.ts";
+import { Busy, excludeFromGit, Retired, Store } from "./store.ts";
 
 export type ServerInfo = { port: number; token: string; pid: number; project: string };
 
@@ -37,7 +37,7 @@ export async function serve(project: string, options: { model?: string; faux?: b
 					if (!told) return {};
 					return { stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: told } }) };
 				} catch (error) {
-					if (error instanceof Busy) return { stdout: JSON.stringify({ decision: "block", reason: error.message }) };
+					if (error instanceof Busy || error instanceof Retired) return { stdout: JSON.stringify({ decision: "block", reason: error.message }) };
 					throw error;
 				}
 			}
@@ -82,6 +82,7 @@ export async function serve(project: string, options: { model?: string; faux?: b
 					return send(res, 200, { context: (await store.begin(body.agent, body.session, body.member)) ?? null });
 				} catch (error) {
 					if (error instanceof Busy) return send(res, 409, { error: error.message, holder: error.holder });
+					if (error instanceof Retired) return send(res, 409, { error: error.message });
 					throw error;
 				}
 			case "POST /turn/heartbeat":
@@ -105,9 +106,21 @@ export async function serve(project: string, options: { model?: string; faux?: b
 				return send(res, 200, await store.checkpoint(String(body.label), body.by ?? "someone"));
 			case "GET /checkpoints":
 				return send(res, 200, { checkpoints: await store.checkpoints() });
+			case "POST /fork":
+				try {
+					const fork = await store.fork(String(body.label), body.by ?? "someone");
+					log(`went back to "${fork.label}" (branch ${fork.branch})`);
+					return send(res, 200, fork);
+				} catch (error) {
+					if (error instanceof Busy) return send(res, 409, { error: error.message, holder: error.holder });
+					throw error;
+				}
+			case "GET /branches":
+				return send(res, 200, store.branches());
 			case "GET /items": {
 				await store.recordAll();
-				return send(res, 200, { items: await store.items(Number(url.searchParams.get("after") ?? 0)), lease: await store.lease() });
+				const after = Number(url.searchParams.get("after") ?? 0);
+				return send(res, 200, { items: await store.items(after), lease: await store.lease(), branch: store.conv.id });
 			}
 			case "POST /stop":
 				send(res, 200, {});
