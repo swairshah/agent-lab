@@ -179,6 +179,16 @@ impl PanelView {
         text.split('\n').enumerate().filter(|(_, l)| l.to_lowercase().contains(&query)).map(|(n, _)| n + 1).collect()
     }
 
+    /// Tests: Edit on the open file, as a click on it would; false until it's read.
+    pub fn edit_for_test(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Tab::File(path) = self.active.clone() else { return false };
+        if self.find_text().is_none() {
+            return false;
+        }
+        self.start_editing(path, window, cx);
+        true
+    }
+
     /// Tests: Find `query` in the open file, once it's read; false until then.
     pub fn find_for_test(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.find_text().is_none() {

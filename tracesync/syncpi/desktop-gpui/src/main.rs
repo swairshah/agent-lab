@@ -494,6 +494,15 @@ impl Desktop {
                 self.run(&RunCommand { id: id.trim().to_owned().into() }, window, cx);
             }
         }
+        // Tests edit the panel's open file once it's read (SYNCPI_GPUI_TEST_EDIT=1).
+        if std::env::var_os("SYNCPI_GPUI_TEST_EDIT").is_some()
+            && TEST_FILE.get()
+            && !TEST_EDIT.get()
+            && let Some(panel) = self.active.as_ref().and_then(|id| self.panels.get(id)).cloned()
+            && panel.update(cx, |panel, cx| panel.edit_for_test(window, cx))
+        {
+            TEST_EDIT.set(true);
+        }
         // Tests find in the panel's open file once it's read (SYNCPI_GPUI_TEST_FILE_FIND=text).
         if let Ok(query) = std::env::var("SYNCPI_GPUI_TEST_FILE_FIND")
             && TEST_FILE.get()
@@ -1442,6 +1451,7 @@ thread_local! {
     static TEST_COMMAND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static TEST_FILE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static TEST_FILE_FIND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static TEST_EDIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// A query string's value, escaped.
