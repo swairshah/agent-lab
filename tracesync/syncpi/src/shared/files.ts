@@ -1,6 +1,6 @@
 // Which files of a project are synced, and their content hashes. Used on both ends: the server scans the VM's
 // workspace, and each client scans its local copy. A git repository syncs what git would see (tracked plus untracked
-// files that are not ignored); any other directory is walked with a fixed ignore list.
+// files that are not ignored); any other directory is walked with a fixed ignore list and its .gitignore files.
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, readdir, readFile } from "node:fs/promises";
@@ -38,20 +38,79 @@ async function gitFiles(dir: string): Promise<string[] | undefined> {
 	}
 }
 
-async function walk(dir: string, root: string, out: string[]): Promise<void> {
+/** A .gitignore pattern: where its file is (relative to the root, "" or ending in "/"), and what it matches. */
+type IgnoreRule = { base: string; regex: RegExp; dirOnly: boolean; anchored: boolean; negated: boolean };
+
+/** A glob of .gitignore's (*, ?, **) as a regular expression over a path relative to the rule's folder. */
+function globRegex(glob: string): RegExp {
+	let out = "";
+	for (let i = 0; i < glob.length; i++) {
+		const c = glob[i]!;
+		if (c === "*" && glob[i + 1] === "*") {
+			// "**/" is any number of folders; a trailing "**" is everything inside.
+			out += glob[i + 2] === "/" ? "(?:.*/)?" : ".*";
+			i += glob[i + 2] === "/" ? 2 : 1;
+		} else if (c === "*") out += "[^/]*";
+		else if (c === "?") out += "[^/]";
+		else out += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+	}
+	return new RegExp(`^${out}$`);
+}
+
+/** The rules of a .gitignore file in folder `base`. */
+export function parseIgnore(text: string, base: string): IgnoreRule[] {
+	const rules: IgnoreRule[] = [];
+	for (const raw of text.split("\n")) {
+		let line = raw.replace(/\s+$/, "");
+		if (line === "" || line.startsWith("#")) continue;
+		const negated = line.startsWith("!");
+		if (negated) line = line.slice(1);
+		const dirOnly = line.endsWith("/");
+		if (dirOnly) line = line.slice(0, -1);
+		// A slash anywhere but the end ties the pattern to the .gitignore's folder; without one it matches a name at
+		// any depth below it.
+		const anchored = line.includes("/");
+		if (line.startsWith("/")) line = line.slice(1);
+		if (line === "") continue;
+		rules.push({ base, regex: globRegex(line), dirOnly, anchored, negated });
+	}
+	return rules;
+}
+
+/** Whether `path` (relative to the root) is ignored by `rules`; the last rule that matches decides, as in git. */
+export function ignored(path: string, isDir: boolean, rules: IgnoreRule[]): boolean {
+	let out = false;
+	for (const rule of rules) {
+		if (rule.dirOnly && !isDir) continue;
+		if (!path.startsWith(rule.base)) continue;
+		const inside = path.slice(rule.base.length);
+		const subject = rule.anchored ? inside : inside.slice(inside.lastIndexOf("/") + 1);
+		if (rule.regex.test(subject)) out = !rule.negated;
+	}
+	return out;
+}
+
+async function walk(dir: string, root: string, out: string[], rules: IgnoreRule[] = []): Promise<void> {
 	let names: string[];
 	try {
 		names = await readdir(dir);
 	} catch {
 		return;
 	}
+	const base = relative(root, dir).split(sep).join("/");
+	const prefix = base === "" ? "" : `${base}/`;
+	// This folder's .gitignore applies below it, as git applies it (a model's weights in out/, say, aren't copied).
+	const here = names.includes(".gitignore") ? await readFile(join(dir, ".gitignore"), "utf8").catch(() => "") : "";
+	const active = here === "" ? rules : [...rules, ...parseIgnore(here, prefix)];
 	for (const name of names) {
 		if (WALK_SKIP.has(name)) continue;
 		const full = join(dir, name);
 		const info = await lstat(full).catch(() => undefined);
 		if (info === undefined) continue;
-		if (info.isDirectory()) await walk(full, root, out);
-		else if (info.isFile()) out.push(relative(root, full).split(sep).join("/"));
+		const path = `${prefix}${name}`;
+		if (ignored(path, info.isDirectory(), active)) continue;
+		if (info.isDirectory()) await walk(full, root, out, active);
+		else if (info.isFile()) out.push(path);
 	}
 }
 

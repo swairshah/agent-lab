@@ -17,7 +17,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { listFiles } from "../shared/files.ts";
+import { listFiles, MAX_FILE_BYTES } from "../shared/files.ts";
 import { home, type Identity } from "./store.ts";
 
 const run = promisify(execFile);
@@ -105,11 +105,22 @@ export function gatewayModel(model: string, fallback: string): { model: string; 
 	return { model: fallback, changed: true };
 }
 
-/** A tar.gz of the project's synced files plus .git, streamed from `dir`. */
-async function projectTar(dir: string): Promise<ChildProcess> {
-	const files = await listFiles(dir);
+/**
+ * A tar.gz of the project's synced files plus .git, streamed from `dir`. Files over the sync limit are left out, as
+ * sync leaves them out (a model's weights, a dataset): `progress` says how many. No extended attributes (macOS
+ * tags every file with some; GNU tar on the VM warns about each).
+ */
+async function projectTar(dir: string, progress?: Progress): Promise<ChildProcess> {
+	const listed = await listFiles(dir);
+	const files: string[] = [];
+	const large: string[] = [];
+	for (const path of listed) {
+		const size = statSync(join(dir, path), { throwIfNoEntry: false })?.size ?? 0;
+		(size > MAX_FILE_BYTES ? large : files).push(path);
+	}
+	if (large.length > 0) progress?.(`copying the project, without ${large.length} file${large.length === 1 ? "" : "s"} over ${MAX_FILE_BYTES / 1024 / 1024} MB (${large.slice(0, 3).join(", ")}${large.length > 3 ? ", …" : ""})`);
 	if (existsSync(join(dir, ".git"))) files.push(".git");
-	const tar = spawn("tar", ["-czf", "-", "--null", "-T", "-"], { cwd: dir, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, COPYFILE_DISABLE: "1" } });
+	const tar = spawn("tar", ["-czf", "-", "--no-xattrs", "--null", "-T", "-"], { cwd: dir, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, COPYFILE_DISABLE: "1" } });
 	tar.stdin!.end(files.join("\0"));
 	return tar;
 }
@@ -123,7 +134,13 @@ function pipeInto(command: string, args: string[], input: string | ChildProcess)
 		child.stdout.on("data", (d) => (out += d));
 		child.stderr.on("data", (d) => (err += d));
 		child.on("error", reject);
-		child.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(`${command} ${args.join(" ").slice(0, 80)}: ${err.trim().slice(-500) || `exit ${code}`}`))));
+		// What went wrong, in whole lines (the last few, without tar's warnings about headers it skips).
+		child.on("close", (code) => {
+			if (code === 0) return resolve(out);
+			const lines = err.trim().split("\n").filter((l) => !/Ignoring unknown extended header keyword/.test(l));
+			const where = command === "ssh" ? (args.find((a) => a.endsWith(".exe.xyz")) ?? "the VM") : command;
+			reject(new Error(`${where}: ${lines.slice(-8).join("\n") || `exit ${code}`}`));
+		});
 		if (typeof input === "string") child.stdin.end(input);
 		else input.stdout!.pipe(child.stdin);
 	});
@@ -325,7 +342,7 @@ export async function provisionOnHost(dir: string, config: SessionConfig, vm: st
 	const url = `https://${vm}.exe.xyz/${config.id}`;
 	const paths = hostPaths(config.id, config.name);
 	progress("copying the project");
-	await projectTar(dir).then((tar) => vmSsh(vm, `mkdir -p ${paths.workdir} && tar -xzf - -C ${paths.workdir}`, tar));
+	await projectTar(dir, progress).then((tar) => vmSsh(vm, `mkdir -p ${paths.workdir} && tar -xzf - -C ${paths.workdir}`, tar));
 	await vmSsh(
 		vm,
 		`umask 077 && mkdir -p ${paths.state} && cat > ${paths.state}/server.json.tmp && mv ${paths.state}/server.json.tmp ${paths.state}/server.json`,
@@ -360,7 +377,7 @@ export async function provisionExe(dir: string, config: SessionConfig, vm: strin
 	progress("copying the project");
 	await Promise.all([
 		vmSsh(vm, NODE_SETUP),
-		projectTar(dir).then((tar) => vmSsh(vm, `mkdir -p ${workdir} && tar -xzf - -C ${workdir}`, tar)),
+		projectTar(dir, progress).then((tar) => vmSsh(vm, `mkdir -p ${workdir} && tar -xzf - -C ${workdir}`, tar)),
 		pipeInto("ssh", [...SSH_OPTS, "--", `${vm}.exe.xyz`, `mkdir -p ${EXE_HOME}/.syncpi-app && tar -xzf - -C ${EXE_HOME}/.syncpi-app`], serverBundle()),
 	]);
 
@@ -412,7 +429,7 @@ export async function provisionLocal(dir: string, config: SessionConfig, port: n
 	mkdirSync(workdir, { recursive: true });
 	mkdirSync(stateDir, { recursive: true, mode: 0o700 });
 	progress("copying the project");
-	await pipeInto("tar", ["-xzf", "-", "-C", workdir], await projectTar(dir));
+	await pipeInto("tar", ["-xzf", "-", "-C", workdir], await projectTar(dir, progress));
 	const url = `http://127.0.0.1:${port}`;
 	writeFileSync(join(stateDir, "server.json"), serverJson({ ...config, url, workdir, auth: "pi" }), { mode: 0o600 });
 	writeFileSync(join(localRoot, "port"), String(port));
