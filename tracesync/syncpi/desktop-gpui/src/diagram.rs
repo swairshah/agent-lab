@@ -62,6 +62,26 @@ fn view_box(svg: &str) -> Option<(f32, f32)> {
     (numbers.len() == 4 && numbers[2] > 0. && numbers[3] > 0.).then(|| (numbers[2], numbers[3]))
 }
 
+/// The diagram as SVG and its size, for commenting on it (annotate.rs): drawn with SVG text, as the viewer draws it.
+pub fn svg(source: &str, cx: &App) -> Option<(String, f32, f32)> {
+    type Svgs = HashMap<u64, Option<(String, f32, f32)>>;
+    static SVGS: OnceLock<Mutex<Svgs>> = OnceLock::new();
+    let p = theme::palette(cx);
+    let mut hasher = DefaultHasher::new();
+    (source, hex(p.paper)).hash(&mut hasher);
+    SVGS.get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .entry(hasher.finish())
+        .or_insert_with(|| {
+            let svg = HeadlessRenderer::new().with_vendored_text_measurer().render_svg_resvg_safe_sync(source).ok()??;
+            let svg = recolor(&svg, &p);
+            let (width, height) = view_box(&svg)?;
+            Some((svg, width, height))
+        })
+        .clone()
+}
+
 fn render(source: &str, p: &Palette) -> Rendered {
     // GPUI draws SVG with resvg, which can't show Mermaid's HTML labels; the resvg-safe output uses SVG text.
     let svg = HeadlessRenderer::new()

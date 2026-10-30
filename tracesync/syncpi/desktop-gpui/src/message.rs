@@ -156,6 +156,7 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
         .gap(px(8.))
         .flex_shrink_0();
     let mut fences = 0;
+    let mut diagrams = 0;
     for (index, block) in blocks(source).into_iter().enumerate() {
         let block_id = format!("{id}-block-{index}");
         match block {
@@ -232,12 +233,27 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
                 container = container.child(element);
             }
             Block::Code { language, content } if language == "mermaid" => {
-                container = container.child(crate::diagram::view(
-                    &block_id,
-                    &content,
-                    crate::thread::content_width(),
-                    cx,
-                ));
+                // The web view's key for a diagram in a reply (thread-view.ts): the message's, and its place among
+                // the message's diagrams. While it's commented on, it's shown still, with the comments on it.
+                let graphic_key = id.strip_prefix("assistant-").map(|message| format!("{message}:diagram{diagrams}"));
+                diagrams += 1;
+                let p = crate::theme::palette(cx);
+                let still = graphic_key.as_ref().filter(|key| crate::annotate::active(key)).and_then(|key| Some((key.clone(), crate::diagram::svg(&content, cx)?)));
+                match (still, graphic_key) {
+                    (Some((key, (svg, width, height))), _) => {
+                        let (image, _) = crate::artifact::svg_image(&svg);
+                        let shown = crate::annotate::fit((width, height), crate::thread::content_width() - 26., 520.);
+                        container = container.child(
+                            div().w_full().rounded(px(8.)).border_1().border_color(p.rule).overflow_hidden().child(crate::annotate::graphic(&key, "the diagram in a reply", crate::annotate::Source::Svg(svg.clone()), crate::annotate::picture(image), shown, &p)),
+                        );
+                    }
+                    (None, key) => {
+                        container = container.child(crate::diagram::view(&block_id, &content, crate::thread::content_width(), cx));
+                        if let Some(key) = key {
+                            container = container.child(crate::annotate::comment_bar(&key, &p));
+                        }
+                    }
+                }
             }
             Block::Alert { kind, body } => {
                 let p = crate::theme::palette(cx);

@@ -58,6 +58,42 @@ pub fn set(marks: &Value, me_id: String, me_name: String) {
     });
 }
 
+/// Whether a graphic is being commented on here, or has comments waiting on it (a diagram is then shown still).
+pub fn active(key: &str) -> bool {
+    STATE.with_borrow(|s| s.commenting.contains(key) || s.marks.get(key).is_some_and(|m| !m.is_empty()) || s.editing.as_ref().is_some_and(|e| e.key == key))
+}
+
+/// Just the Comment button, under a graphic shown some other way (a diagram's viewer): it turns on comment mode.
+pub fn comment_bar(key: &str, p: &Palette) -> AnyElement {
+    let toggle = key.to_owned();
+    div()
+        .w_full()
+        .flex()
+        .px_3()
+        .py(px(5.))
+        .text_size(sz(12.5))
+        .child(
+            div()
+                .id(SharedString::from(format!("comment-mode-{key}")))
+                .flex()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .py(px(2.))
+                .rounded(px(5.))
+                .cursor_pointer()
+                .text_color(p.muted)
+                .hover(|s| s.bg(p.sunken).text_color(p.ink))
+                .child(gpui_component::Icon::default().path("syncpi/message-square.svg").size(px(13.)))
+                .child("Comment")
+                .on_click(move |_, window, _| {
+                    STATE.with_borrow_mut(|s| _ = s.commenting.insert(toggle.clone()));
+                    window.refresh();
+                }),
+        )
+        .into_any_element()
+}
+
 /// Messages for the thread (marks made and changed, comments sent), in order.
 pub fn take_outbox() -> Vec<Value> {
     STATE.with_borrow_mut(|s| std::mem::take(&mut s.outbox))
