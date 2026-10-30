@@ -325,6 +325,22 @@ impl Desktop {
         .detach();
     }
 
+    /// Sets a thread up again after its setup failed.
+    fn thread_verb_for(&mut self, id: &str, verb: &'static str, cx: &mut Context<Self>) {
+        let (host, id) = (self.host.clone(), id.to_owned());
+        cx.spawn(async move |this, cx| {
+            let done = cx.background_executor().spawn(async move { host.post(&format!("/api/sessions/{id}/{verb}"), &json!({})).and_then(|_| host.catalog()) }).await;
+            let _ = this.update(cx, |this, cx| match done {
+                Ok(catalog) => {
+                    this.catalog = catalog;
+                    cx.notify();
+                }
+                Err(e) => this.toast(e.to_string(), true, cx),
+            });
+        })
+        .detach();
+    }
+
     /// A request to the open thread's host route, with a note before and after.
     fn thread_verb(&mut self, verb: &'static str, body: Value, before: Option<&'static str>, after: Option<&'static str>, cx: &mut Context<Self>) {
         let Some(id) = self.active.clone() else { return self.toast("Open a thread first.", true, cx) };
@@ -1327,7 +1343,52 @@ impl Desktop {
                 )
                 .into_any_element(),
             None => div().size_full().into_any_element(),
-            Some(t) if t.status.as_deref() == Some("failed") => state("Setup failed".into(), t.error.clone().unwrap_or_default()),
+            // Why setup failed, in a box that keeps its lines, and Try again for whoever created the thread.
+            Some(t) if t.status.as_deref() == Some("failed") => {
+                let id = t.id.clone();
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap_3()
+                    .p_6()
+                    .child(div().text_size(sz(22.)).text_color(p.ink).child("Setup failed"))
+                    .child(
+                        div()
+                            .id("setup-error")
+                            .max_w(px(720.))
+                            .max_h(px(320.))
+                            .overflow_y_scroll()
+                            .px_3()
+                            .py_2()
+                            .rounded(px(8.))
+                            .bg(p.code)
+                            .font_family(theme::MONO)
+                            .text_size(sz(12.))
+                            .line_height(sz(18.))
+                            .text_color(p.ink_2)
+                            .whitespace_normal()
+                            .children(t.error.clone().unwrap_or_default().lines().map(|l| div().child(l.to_owned()))),
+                    )
+                    .when(t.role == "owner", |d| {
+                        d.child(
+                            div()
+                                .id("setup-retry")
+                                .px_4()
+                                .py_2()
+                                .rounded_md()
+                                .bg(p.accent)
+                                .text_color(p.accent_ink)
+                                .text_size(sz(13.5))
+                                .cursor_pointer()
+                                .child("Try again")
+                                .on_click(cx.listener(move |this, _, _, cx| this.thread_verb_for(&id, "retry", cx))),
+                        )
+                    })
+                    .into_any_element()
+            }
             Some(t) if !t.ready() => state("Preparing the thread".into(), t.step.clone().unwrap_or_else(|| "Starting".into())),
             Some(_) if self.native => match self.shown_view() {
                 Some(view) => {
