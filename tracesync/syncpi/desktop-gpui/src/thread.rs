@@ -22,12 +22,18 @@ use std::{
     time::Duration,
 };
 
-const MEASURE: f32 = 760.;
-const AVATAR: f32 = 30.;
+// The web view's desktop layout (src/web/style.css, html[data-desktop]): a column up to 820px, left-aligned 16px in,
+// a 24px mark beside the agent's rows, 15px text on a 23px line.
+const MEASURE: f32 = 820.;
+const AVATAR: f32 = 24.;
+const GAP: f32 = 14.;
+const LEFT: f32 = 16.;
+const RIGHT: f32 = 20.;
+const LINE: f32 = 23.;
 
 /// The content column's width for this frame (message.rs sizes diagrams by it). Rows get explicit widths: with only
 /// percentages and a max width, GPUI measured wrapped text at one width and drew it at another.
-static CONTENT: AtomicU32 = AtomicU32::new(716);
+static CONTENT: AtomicU32 = AtomicU32::new(782);
 
 pub(crate) fn content_width() -> f32 {
     CONTENT.load(Ordering::Relaxed) as f32
@@ -44,8 +50,11 @@ fn eid(s: String) -> ElementId {
 pub struct ThreadView {
     id: String,
     host: Host,
-    /// The host's snapshot: { main: ThreadState, me, members, online, target, … }.
-    state: Value,
+    /// The thread's state (ThreadState without its items), its items in order, and who's here ({ me, members,
+    /// online, target }), kept up to date from the host's stream (/api/sessions/<id>/stream).
+    main: Value,
+    items: Vec<Value>,
+    meta: Value,
     list: ListState,
     composer: Entity<InputState>,
     /// Thinking opened, tool calls opened or closed against their default, groups of quiet calls opened.
@@ -54,8 +63,6 @@ pub struct ThreadView {
     groups: HashSet<String>,
     /// The thread's width last frame, measured, for the column.
     width: Rc<Cell<f32>>,
-    /// Set while the thread is on screen: only then is it polled often.
-    pub shown: Rc<Cell<bool>>,
     loaded: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -74,50 +81,52 @@ impl ThreadView {
                 this.submit(window, cx);
             }
         })];
-        let shown = Rc::new(Cell::new(true));
-        let polled = shown.clone();
-        let poll_host = host.clone();
-        let poll_id = id.clone();
+        // The host's stream, read on a thread of its own; each event reaches the view on the main thread. It ends
+        // when the view goes (its receiver with it), and starts again when the host's connection drops.
+        let (events, mut received) = futures::channel::mpsc::unbounded::<Value>();
+        let stream_host = host.clone();
+        let path = format!("/api/sessions/{id}/stream");
+        std::thread::spawn(move || {
+            while !events.is_closed() {
+                let _ = stream_host.events(&path, |event| events.unbounded_send(event).is_ok());
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        });
         cx.spawn(async move |this, cx| {
-            let mut last = String::new();
-            loop {
-                if polled.get() {
-                    let host = poll_host.clone();
-                    let path = format!("/api/sessions/{poll_id}/native");
-                    let snapshot = cx.background_executor().spawn(async move { host.get(&path) }).await;
-                    if let Ok(snapshot) = snapshot {
-                        // Only a change is drawn again (the thread's rev, who's here, where it runs).
-                        let key = format!("{}|{}|{}|{}", snapshot["main"]["rev"], snapshot["online"], snapshot["members"], snapshot["target"]);
-                        if key != last {
-                            last = key;
-                            if this.update(cx, |this, cx| this.loaded(snapshot, cx)).is_err() {
-                                break;
-                            }
-                        }
-                    }
+            use futures::StreamExt;
+            while let Some(event) = received.next().await {
+                if this.update(cx, |this, cx| this.apply(event, cx)).is_err() {
+                    break;
                 }
-                cx.background_executor().timer(Duration::from_millis(if polled.get() { 250 } else { 1500 })).await;
             }
         })
         .detach();
         Self {
             id,
             host,
-            state: Value::Null,
+            main: Value::Null,
+            items: Vec::new(),
+            meta: Value::Null,
             list: ListState::new(0, ListAlignment::Bottom, px(1200.)),
             composer,
             thinking: HashSet::new(),
             toggled: HashSet::new(),
             groups: HashSet::new(),
             width: Rc::new(Cell::new(900.)),
-            shown,
             loaded: false,
             _subscriptions: subscriptions,
         }
     }
 
-    fn loaded(&mut self, snapshot: Value, cx: &mut Context<Self>) {
-        self.state = snapshot;
+    /// One event of the stream: the changed items replace theirs, then the items take the order of `keys`.
+    fn apply(&mut self, event: Value, cx: &mut Context<Self>) {
+        let mut by_key: std::collections::HashMap<String, Value> = self.items.drain(..).map(|i| (text(&i, "key"), i)).collect();
+        for item in event["changed"].as_array().into_iter().flatten() {
+            by_key.insert(text(item, "key"), item.clone());
+        }
+        self.items = event["keys"].as_array().into_iter().flatten().filter_map(|k| by_key.remove(k.as_str()?)).collect();
+        self.main = event["state"].clone();
+        self.meta = json!({ "me": event["me"], "members": event["members"], "online": event["online"], "target": event["target"] });
         self.loaded = true;
         cx.notify();
     }
@@ -151,7 +160,7 @@ impl ThreadView {
     }
 
     fn name_of(&self, member: &str, fallback: String) -> String {
-        self.state["members"]
+        self.meta["members"]
             .as_array()
             .and_then(|m| m.iter().find(|m| text(m, "id") == member))
             .map(|m| text(m, "name"))
@@ -163,17 +172,17 @@ impl ThreadView {
         let color = theme::person_color(&name, p.dark);
         let body = text(item, "text");
         div()
-            .w(px(content_width() + AVATAR + 14.))
+            .w(px(content_width() + AVATAR + GAP))
             .flex()
             .items_start()
             .gap(px(12.))
-            .child(div().flex_none().text_size(sz(13.5)).line_height(sz(25.)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(name))
+            .child(div().flex_none().text_size(sz(13.5)).line_height(sz(LINE)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(name))
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .text_size(sz(15.))
-                    .line_height(sz(25.))
+                    .line_height(sz(LINE))
                     .child(message::render(&format!("user-{key}"), &keep_breaks(&body), window, cx)),
             )
             .into_any_element()
@@ -212,11 +221,11 @@ impl ThreadView {
                     })),
             );
             if open {
-                content = content.child(div().my_1().pl_3().border_l_2().border_color(p.rule_strong).text_size(sz(13.5)).text_color(p.ink_2).child(thinking.clone()));
+                content = content.child(div().mt(px(6.)).mb(px(4.)).pl(px(12.)).border_l_2().border_color(p.rule_strong).text_size(sz(13.5)).line_height(sz(21.)).text_color(p.ink_2).child(thinking.clone()));
             }
         }
         if !body.is_empty() {
-            content = content.child(div().text_size(sz(15.)).line_height(sz(25.)).child(message::render(&format!("assistant-{key}"), &body, window, cx)));
+            content = content.child(div().text_size(sz(15.)).line_height(sz(LINE)).child(message::render(&format!("assistant-{key}"), &body, window, cx)));
         } else if streaming && thinking.is_empty() {
             content = content.child(div().text_size(sz(15.)).text_color(p.muted).child("…"));
         }
@@ -243,8 +252,8 @@ impl ThreadView {
             .min_w_0()
             .flex()
             .items_center()
-            .gap_2()
-            .min_h(sz(24.))
+            .gap(px(8.))
+            .min_h(sz(LINE))
             .text_size(sz(15.))
             .cursor_pointer()
             .child(div().flex_shrink_0().text_color(if status == "error" { p.removed } else { p.ink_2 }).child(verb(&tool).to_owned()))
@@ -276,16 +285,16 @@ impl ThreadView {
             let body = if !patch.is_empty() {
                 Some(diff_view(format!("diff-{key}"), &patch, p).into_any_element())
             } else if let Some(source) = written {
-                Some(code_box(format!("write-{key}"), source.to_owned(), p.raised, p).into_any_element())
+                Some(code_box(format!("write-{key}"), source.to_owned(), p).into_any_element())
             } else if !output.trim().is_empty() {
                 // The end of a long output, as the web view shows it.
                 let tail: String = output.chars().rev().take(20_000).collect::<Vec<_>>().into_iter().rev().collect();
-                Some(code_box(format!("output-{key}"), tail.trim_end().to_owned(), p.sunken, p).into_any_element())
+                Some(code_box(format!("output-{key}"), tail.trim_end().to_owned(), p).into_any_element())
             } else {
                 None
             };
             if let Some(body) = body {
-                content = content.child(div().pt_1().pb_1().child(body));
+                content = content.child(div().pt(px(6.)).pb(px(4.)).child(body));
             }
         }
         content
@@ -303,10 +312,11 @@ impl ThreadView {
                 .id(eid(key.clone()))
                 .flex()
                 .items_center()
-                .gap_2()
-                .min_h(sz(24.))
+                .gap(px(8.))
+                .min_h(sz(LINE))
                 .text_size(sz(15.))
-                .text_color(p.ink_2)
+                .text_color(p.muted)
+                .hover(|s| s.text_color(p.ink_2))
                 .cursor_pointer()
                 .child(group_summary(&names))
                 .when(running, |d| d.child(Icon::new(IconName::LoaderCircle).size_3().text_color(p.warn)))
@@ -320,7 +330,7 @@ impl ThreadView {
         );
         if open {
             for tool in tools {
-                content = content.child(div().pl_3().child(self.tool_content(tool, &text(tool, "key"), p, cx)));
+                content = content.child(div().pt(px(2.)).child(self.tool_content(tool, &text(tool, "key"), p, cx)));
             }
         }
         row(avatar.then(|| avatar_model(model, p)), content).into_any_element()
@@ -330,14 +340,15 @@ impl ThreadView {
         let busy = main["busy"].as_bool().unwrap_or(false);
         let retry = text(main, "retry");
         let model = text(main, "model");
-        let target = text(&self.state, "target");
+        let target = text(&self.meta, "target");
         div()
             .h(px(30.))
             .flex_none()
             .flex()
             .items_center()
             .gap_3()
-            .px_4()
+            .pl(px(LEFT))
+            .pr(px(6.))
             .border_t_1()
             .border_color(p.rule)
             .bg(p.paper)
@@ -367,13 +378,13 @@ impl ThreadView {
 impl Render for ThreadView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette(cx);
-        let column = (self.width.get() - 56.).clamp(320., MEASURE);
-        CONTENT.store((column - AVATAR - 14.) as u32, Ordering::Relaxed);
+        let column = (self.width.get() - LEFT - RIGHT).clamp(320., MEASURE);
+        CONTENT.store((column - AVATAR - GAP) as u32, Ordering::Relaxed);
         if !self.loaded {
             return div().size_full().flex().items_center().justify_center().text_color(p.muted).child("Loading the thread…").into_any_element();
         }
-        let main = self.state["main"].clone();
-        let items: Vec<Value> = main["items"].as_array().cloned().unwrap_or_default();
+        let main = self.main.clone();
+        let items = std::mem::take(&mut self.items);
         // The text cursor in messages (cursor.rs, prose.rs): not focused here; no comments on messages yet.
         crate::cursor::set_marks(Default::default(), p.removed);
         crate::cursor::begin(p.accent.opacity(0.22), p.accent, false, None, &self.list);
@@ -384,7 +395,7 @@ impl Render for ThreadView {
             let item = match unit {
                 Unit::Group(tools) if tools.len() > 1 => {
                     crate::cursor::row(rows.len());
-                    let gap = if previous_agent { 10. } else { 22. };
+                    let gap = if previous_agent { 10. } else { 16. };
                     rows.push(div().mt(px(gap)).child(self.group_row(&tools, !previous_agent, &model, &p, cx)).into_any_element());
                     previous_agent = true;
                     continue;
@@ -406,11 +417,12 @@ impl Render for ThreadView {
                 "notice" => Some(
                     div()
                         .w(px(column))
+                        .mt(px(6.))
                         .flex()
                         .items_center()
-                        .gap_3()
+                        .gap(px(12.))
                         .text_color(p.muted)
-                        .text_size(sz(13.))
+                        .text_size(sz(13.5))
                         .italic()
                         .child(div().flex_1().h(px(1.)).bg(p.rule))
                         .child(text(item, "text"))
@@ -421,20 +433,22 @@ impl Render for ThreadView {
             };
             if let Some(element) = element {
                 // Consecutive agent rows sit closer together under one mark.
-                let gap = if agent && previous_agent { 10. } else { 22. };
+                let gap = if agent && previous_agent { 10. } else { 16. };
                 rows.push(div().mt(px(gap)).child(element).into_any_element());
                 previous_agent = agent;
             }
         }
-        let viewer = self.state["me"]["role"] == "viewer";
+        // The items were taken for this frame's rows (not copied): back where they were.
+        self.items = items;
+        let viewer = self.meta["me"]["role"] == "viewer";
         rows.push(
             div()
-                .mt(px(26.))
+                .mt(px(18.))
                 .child(if viewer {
                     div().text_size(sz(13.)).text_color(p.muted).child("You can read this thread. Ask an admin to make you an editor to talk to the agent.").into_any_element()
                 } else {
                     row(
-                        Some(avatar_person(&text(&self.state["me"], "name"), p.dark)),
+                        Some(avatar_person(&text(&self.meta["me"], "name"), p.dark)),
                         div().w_full().child(Input::new(&self.composer).appearance(false).px_0().py(px(2.)).w_full().text_size(sz(15.))),
                     )
                     .into_any_element()
@@ -456,12 +470,13 @@ impl Render for ThreadView {
                 Some(
                     div()
                         .w_full()
-                        .px(px(28.))
-                        .when(n == 0, |d| d.pt(px(28.)))
+                        .pl(px(LEFT))
+                        .pr(px(RIGHT))
+                        .when(n == 0, |d| d.pt(px(14.)))
                         .when(n == last, |d| d.pb(px(120.)))
                         .flex()
                         .flex_col()
-                        .items_center()
+                        .items_start()
                         .child(row)
                         .into_any_element(),
                 )
@@ -474,6 +489,8 @@ impl Render for ThreadView {
             .flex()
             .flex_col()
             .bg(p.paper)
+            .text_color(p.ink)
+            .font_family(theme::SANS)
             .child(
                 div()
                     .relative()
@@ -491,11 +508,11 @@ impl Render for ThreadView {
 fn row(avatar: Option<Div>, content: impl IntoElement) -> Div {
     let width = content_width();
     div()
-        .w(px(width + AVATAR + 14.))
+        .w(px(width + AVATAR + GAP))
         .flex_shrink_0()
         .flex()
         .items_start()
-        .gap(px(14.))
+        .gap(px(GAP))
         .child(avatar.unwrap_or_else(|| div().w(px(AVATAR)).flex_shrink_0()))
         .child(div().w(px(width)).flex_shrink_0().flex().flex_col().child(content))
 }
@@ -511,7 +528,7 @@ fn avatar_person(name: &str, dark: bool) -> Div {
         .justify_center()
         .bg(color.opacity(0.16))
         .text_color(color)
-        .text_size(sz(11.))
+        .text_size(sz(9.5))
         .font_weight(FontWeight::SEMIBOLD)
         .child(theme::initials(name))
 }
@@ -519,27 +536,27 @@ fn avatar_person(name: &str, dark: bool) -> Div {
 fn avatar_model(model: &str, p: &Palette) -> Div {
     let base = div().size(px(AVATAR)).flex_shrink_0().rounded_full().flex().items_center().justify_center().bg(p.raised).border_1().border_color(p.rule).text_color(p.ink);
     match icons::model_vendor(model) {
-        Some((_, path)) => base.child(svg().path(path).size(px(16.)).text_color(p.ink)),
+        Some((_, path)) => base.child(svg().path(path).size(px(14.)).text_color(p.ink)),
         None => {
             let id = model.split_once('/').map_or(model, |(_, id)| id);
-            base.font_family(MONO).text_size(sz(11.)).child(id.chars().next().unwrap_or('?').to_uppercase().to_string())
+            base.font_family(MONO).text_size(sz(9.5)).child(id.chars().next().unwrap_or('?').to_uppercase().to_string())
         }
     }
 }
 
-fn code_box(id: String, body: String, bg: Hsla, p: &Palette) -> Stateful<Div> {
+/// A tool's output or a written file, as the web view's .tool-output: the code background, 12px mono.
+fn code_box(id: String, body: String, p: &Palette) -> Stateful<Div> {
     div()
         .id(eid(id))
-        .max_h(px(320.))
+        .max_h(px(300.))
         .overflow_scroll()
         .rounded(px(8.))
-        .border_1()
-        .border_color(p.rule)
-        .bg(bg)
-        .px_3()
-        .py_2()
+        .bg(p.code)
+        .px(px(12.))
+        .py(px(9.))
         .font_family(MONO)
         .text_size(sz(12.))
+        .line_height(sz(18.))
         .text_color(p.ink_2)
         .child(body)
 }

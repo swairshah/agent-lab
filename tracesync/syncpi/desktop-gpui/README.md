@@ -26,9 +26,12 @@ system's (the folder picker, "Where should this project run?").
 
 ## Step 2, in progress: the thread, native
 
-View → Native thread (preview) draws threads natively (`src/thread.rs`), from the host's snapshot of a thread
-(`/api/sessions/<id>/native`, polled while it's on screen) and its `send` route, as the earlier native app did (tag
-`gpui-desktop-final`, whose Markdown, code, Mermaid and text-cursor modules it reuses):
+View → Native thread (preview) draws threads natively (`src/thread.rs`), followed live through the host's stream of a
+thread (`/api/sessions/<id>/stream`: server-sent events, at most one every 33 ms, carrying only the items that changed)
+and sending through its `send` route. It reuses the earlier native app's Markdown, code, Mermaid and text-cursor
+modules (tag `gpui-desktop-final`). It looks like the web view in the app (src/web/style.css, html[data-desktop]): a
+left-aligned column up to 820px, a 24px mark, 15px text on a 23px line, rows 16px apart, code on the code
+background.
 
 - a person's message on one line, their name in their color, then what they wrote;
 - the agent's replies as Markdown (lists, code highlighted with tree-sitter, Mermaid) under the model's mark, with
@@ -44,5 +47,6 @@ together, the inbox, settings. Switch back to the web view for those. `SYNCPI_GP
 
 `SYNCPI_GPUI_WINDOW=x,y,w,h` places the window and opens it without focus, as a floating panel: macOS keeps a corner
 of it on screen, and GPUI stops drawing a window macOS reports as covered, so the corner stays above other windows.
-`SYNCPI_FAUX=1` runs the host with the scripted model; `SYNCPI_HOME` points at a test home. Capture the window with
+`SYNCPI_FAUX=1` runs the host with the scripted model; `SYNCPI_HOME` points at a test home; `SYNCPI_GPUI_THEME=dark`
+(or `light`) overrides the system's appearance. Capture the window with
 `screencapture -x -o -l <window id>`.

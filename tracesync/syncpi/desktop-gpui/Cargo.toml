@@ -6,6 +6,7 @@ description = "SyncPi as a native GPUI app: native window, sidebar and menus; ea
 
 [dependencies]
 anyhow = "1"
+futures = "0.3"
 gpui = { version = "=0.2.2", default-features = false, features = ["runtime_shaders"] }
 gpui-component = { version = "=0.5.1", features = ["webview", "tree-sitter-languages"] }
 gpui-component-assets = "=0.5.1"

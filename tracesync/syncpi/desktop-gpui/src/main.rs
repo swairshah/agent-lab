@@ -208,11 +208,8 @@ impl Desktop {
         cx.notify();
     }
 
-    /// The native view of a thread, when threads are drawn natively; only the one shown is polled often.
+    /// The native view of a thread, when threads are drawn natively (it follows the thread live from then on).
     fn ensure_thread(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        for (thread_id, view) in &self.threads {
-            view.read(cx).shown.set(self.native && thread_id == id);
-        }
         if !self.native || self.threads.contains_key(id) || !self.thread(id).is_some_and(|t| t.ready()) {
             return;
         }
@@ -411,8 +408,13 @@ impl Desktop {
     }
 }
 
+/// Dark when the system is (SYNCPI_GPUI_THEME=dark or light overrides it, for tests).
 fn dark(window: &Window) -> bool {
-    matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark)
+    match std::env::var("SYNCPI_GPUI_THEME").as_deref() {
+        Ok("dark") => true,
+        Ok("light") => false,
+        _ => matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark),
+    }
 }
 
 impl Render for Desktop {

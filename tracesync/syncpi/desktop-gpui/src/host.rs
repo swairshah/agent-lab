@@ -86,6 +86,8 @@ pub struct Host {
     pub launch: String,
     secret: String,
     http: Client,
+    /// For streams, which stay open: no timeout.
+    streams: Client,
     process: Arc<Mutex<Child>>,
 }
 
@@ -138,6 +140,7 @@ impl Host {
             launch,
             secret,
             http: Client::builder().timeout(Duration::from_secs(60)).build()?,
+            streams: Client::builder().build()?,
             process: Arc::new(Mutex::new(process)),
         })
     }
@@ -166,6 +169,29 @@ impl Host {
             bail!("{}", value["error"].as_str().unwrap_or(status.as_str()));
         }
         Ok(value)
+    }
+
+    /// Reads a server-sent event stream until it ends, or `each` returns false: each event's data, as JSON.
+    pub fn events(&self, path: &str, mut each: impl FnMut(Value) -> bool) -> Result<()> {
+        let response = self.streams.get(format!("{}{path}", self.origin)).bearer_auth(&self.secret).send()?;
+        if !response.status().is_success() {
+            bail!("{}", response.status());
+        }
+        let mut data = String::new();
+        for line in BufReader::new(response).lines() {
+            let line = line?;
+            if let Some(rest) = line.strip_prefix("data: ") {
+                data.push_str(rest);
+            } else if line.is_empty() && !data.is_empty() {
+                let event = serde_json::from_str(&std::mem::take(&mut data));
+                if let Ok(event) = event
+                    && !each(event)
+                {
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn catalog(&self) -> Result<Catalog> {

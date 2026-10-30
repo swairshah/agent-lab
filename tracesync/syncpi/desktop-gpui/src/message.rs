@@ -145,13 +145,15 @@ fn parse_blocks(source: &str) -> Vec<Block> {
 pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyElement {
     let border = cx.theme().border;
     let muted = cx.theme().muted_foreground;
+    let code_bg = crate::theme::palette(cx).code;
+    // Blocks as far apart as the web view's paragraphs (.55em of 15px).
     let mut container = div()
         .w_full()
         .h_auto()
         .min_w_0()
         .flex()
         .flex_col()
-        .gap_3()
+        .gap(px(8.))
         .flex_shrink_0();
     for (index, block) in blocks(source).into_iter().enumerate() {
         let block_id = format!("{id}-block-{index}");
@@ -165,7 +167,7 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .gap_2()
+                    .gap(px(2.))
                     .flex_shrink_0();
                 for (item_index, (checked, source)) in items.into_iter().enumerate() {
                     let marker = match checked {
@@ -191,9 +193,9 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
                             .min_w_0()
                             .flex()
                             .items_start()
-                            .gap_2()
+                            .gap(px(4.))
                             .flex_shrink_0()
-                            .child(div().w(px(18.)).flex_shrink_0().child(marker))
+                            .child(div().w(px(18.)).flex_shrink_0().text_color(crate::theme::palette(cx).muted).child(marker))
                             .child(div().flex_1().min_w_0().child(render(
                                 &format!("{block_id}-item-{item_index}"),
                                 &source,
@@ -256,40 +258,29 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
                         .w_full()
                         .min_w_0()
                         .flex_shrink_0()
-                        .rounded_md()
+                        .rounded(px(8.))
                         .border_1()
                         .border_color(border)
+                        .bg(code_bg)
                         .overflow_hidden()
                         .child(
                             div()
-                                .h(px(28.))
+                                .h(px(26.))
                                 .flex()
                                 .items_center()
                                 .justify_between()
-                                .px_3()
-                                .bg(cx.theme().muted)
-                                .text_xs()
+                                .pl(px(12.))
+                                .pr_1()
+                                .text_size(crate::theme::sz(11.5))
                                 .text_color(muted)
-                                .child(if language.is_empty() {
-                                    "Code".into()
-                                } else {
-                                    language.clone()
-                                })
+                                .child(if language.is_empty() { "Code".into() } else { language.clone() })
                                 .child(
-                                    gpui_component::button::Button::new(SharedString::from(
-                                        format!("copy-{block_id}"),
-                                    ))
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(gpui_component::IconName::Copy)
-                                    .tooltip("Copy code")
-                                    .on_click(
-                                        move |_, _, cx| {
-                                            cx.write_to_clipboard(ClipboardItem::new_string(
-                                                copy.clone(),
-                                            ))
-                                        },
-                                    ),
+                                    gpui_component::button::Button::new(SharedString::from(format!("copy-{block_id}")))
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(gpui_component::IconName::Copy)
+                                        .tooltip("Copy code")
+                                        .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))),
                                 ),
                         )
                         .child(
@@ -298,18 +289,12 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
                                 .w_full()
                                 .min_w_0()
                                 .overflow_x_scroll()
-                                .px_3()
-                                .py_3()
+                                .px(px(12.))
+                                .pb(px(10.))
                                 .font_family(crate::theme::MONO)
                                 .text_size(crate::theme::sz(12.5))
-                                .line_height(relative(1.6))
-                                .child(
-                                    div()
-                                        .min_w_full()
-                                        .flex_shrink_0()
-                                        .whitespace_nowrap()
-                                        .child(highlighted(&language, content, cx)),
-                                ),
+                                .line_height(relative(1.5))
+                                .child(div().min_w_full().flex_shrink_0().whitespace_nowrap().child(highlighted(&language, content, cx))),
                         )
                         .into_any_element(),
                 ));

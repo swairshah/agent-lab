@@ -99,6 +99,34 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     if (verb === 'retry' && req.method === 'POST') { await runtime.retry(id!); return json(res, { ok: true }); }
     const live = await runtime.open(id!);
     if (verb === 'native' && req.method === 'GET') return json(res, live.snapshot());
+    // The native app's live thread (desktop-gpui): server-sent events, at most one every 33 ms, each with the thread's
+    // state, the order of its items and only the items changed since the last (every item has a rev), and who's here.
+    if (verb === 'stream' && req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
+      // By object, not key: a reconnect draws the thread again from scratch (new items, revs from 0), all resent.
+      const sent = new WeakMap<object, number>();
+      let rev = -1;
+      let people = '';
+      let timer: NodeJS.Timeout | undefined;
+      const push = () => {
+        timer = undefined;
+        const { items, ...state } = live.native.main.state;
+        const meta = { me: live.native.me, members: live.native.members, online: live.native.online, target: live.native.target };
+        const who = JSON.stringify(meta);
+        if (state.rev === rev && who === people) return;
+        rev = state.rev;
+        people = who;
+        const changed = items.filter((i) => sent.get(i) !== i.rev);
+        for (const i of changed) sent.set(i, i.rev);
+        res.write(`data: ${JSON.stringify({ state, keys: items.map((i) => i.key), changed, ...meta })}\n\n`);
+      };
+      const listener = () => { timer ??= setTimeout(push, 33); };
+      live.onMessage.add(listener);
+      push();
+      const ping = setInterval(() => res.write(': ping\n\n'), 15_000);
+      req.on('close', () => { live.onMessage.delete(listener); clearInterval(ping); clearTimeout(timer); });
+      return;
+    }
     if (verb === 'send' && req.method === 'POST') {
       const message = await input(req);
       if (!['submit', 'abort', 'invite', 'invites', 'revoke', 'setRole', 'remove', 'rename', 'compact', 'new', 'branches', 'fork', 'switchBranch', 'configure'].includes(message.type)) throw new Error('Unknown session command');
