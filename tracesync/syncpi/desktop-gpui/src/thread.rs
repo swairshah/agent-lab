@@ -56,6 +56,8 @@ thread_local! {
     static TEST_FIND: Cell<bool> = const { Cell::new(false) };
     static TEST_SEND: Cell<bool> = const { Cell::new(false) };
     static TEST_COMMENT: Cell<bool> = const { Cell::new(false) };
+    static TEST_TYPE: Cell<bool> = const { Cell::new(false) };
+    static TEST_JOIN: Cell<bool> = const { Cell::new(false) };
 }
 
 /// What a thread view asks of the app: show this person's side thread, or go back to the thread.
@@ -93,7 +95,23 @@ pub struct ThreadView {
     /// A comment being written on a message's text: the message's key, the quoted text, the block its box goes under.
     comment: Option<(String, String, String)>,
     comment_input: Entity<InputState>,
+    /// The host requests, in order (a message, then its draft cleared; draft changes as they were typed).
+    worker: std::sync::mpsc::Sender<Job>,
+    /// Drafts being written (the host keeps their Yjs documents; runtime.ts draftsNow): owner, name, text, writers.
+    drafts: Vec<Value>,
+    /// Whose draft the composer writes: someone's it joined (Write together), or this person's (None).
+    joined: Option<String>,
+    /// The text last written to that draft from here, and how many writes were posted (the host echoes the count it
+    /// has, so a stream event from before a write doesn't take back what was just typed).
+    written: String,
+    writes: u64,
     _subscriptions: Vec<Subscription>,
+}
+
+/// A request to the host, made in order on the thread view's worker.
+enum Job {
+    Send(Value),
+    Draft { owner: Option<String>, text: String, caret: usize, seq: u64 },
 }
 
 struct FindBar {
@@ -113,11 +131,11 @@ impl ThreadView {
         let composer = cx.new(|cx| InputState::new(window, cx).multi_line(true).auto_grow(1, 14).placeholder(placeholder));
         let comment_input = cx.new(|cx| InputState::new(window, cx).multi_line(true).auto_grow(1, 8).placeholder("Comment on this. ⌘↩ to send"));
         let subscriptions = vec![
-            cx.subscribe_in(&composer, window, |this, _, event, window, cx| {
+            cx.subscribe_in(&composer, window, |this, _, event, window, cx| match event {
                 // Enter starts a new line; ⌘↩ sends, as in the web view.
-                if let InputEvent::PressEnter { secondary: true } = event {
-                    this.submit(window, cx);
-                }
+                InputEvent::PressEnter { secondary: true } => this.submit(window, cx),
+                InputEvent::Change => this.typed(cx),
+                _ => {}
             }),
             cx.subscribe_in(&comment_input, window, |this, _, event, window, cx| {
                 if let InputEvent::PressEnter { secondary: true } = event {
@@ -125,6 +143,25 @@ impl ThreadView {
                 }
             }),
         ];
+        let (worker, jobs) = std::sync::mpsc::channel::<Job>();
+        let worker_host = host.clone();
+        let thread_id = id.clone();
+        std::thread::spawn(move || {
+            while let Ok(mut job) = jobs.recv() {
+                // Draft changes typed faster than they're posted: only the last of a run is needed.
+                while let Job::Draft { .. } = job {
+                    match jobs.try_recv() {
+                        Ok(next @ Job::Draft { .. }) => job = next,
+                        Ok(next) => {
+                            post(&worker_host, &thread_id, job);
+                            job = next;
+                        }
+                        Err(_) => break,
+                    }
+                }
+                post(&worker_host, &thread_id, job);
+            }
+        });
         // The host's stream, read on a thread of its own; each event reaches the view on the main thread. It ends
         // when the view goes (its receiver with it), and starts again when the host's connection drops.
         let (events, mut received) = futures::channel::mpsc::unbounded::<Value>();
@@ -165,6 +202,11 @@ impl ThreadView {
             focus: cx.focus_handle(),
             comment: None,
             comment_input,
+            worker,
+            drafts: vec![],
+            joined: None,
+            written: String::new(),
+            writes: 0,
             _subscriptions: subscriptions,
         }
     }
@@ -177,7 +219,8 @@ impl ThreadView {
         }
         self.items = event["keys"].as_array().into_iter().flatten().filter_map(|k| by_key.remove(k.as_str()?)).collect();
         self.main = event["state"].clone();
-        self.meta = json!({ "me": event["me"], "members": event["members"], "online": event["online"], "target": event["target"] });
+        self.meta = json!({ "me": event["me"], "members": event["members"], "online": event["online"], "target": event["target"], "role": event["role"] });
+        self.drafts = event["drafts"].as_array().cloned().unwrap_or_default();
         self.loaded = true;
         if self.find.is_some() {
             self.recount(false, cx);
@@ -438,16 +481,213 @@ impl ThreadView {
             .into_any_element()
     }
 
-    fn send(&self, message: Value, cx: &mut Context<Self>) {
-        let host = self.host.clone();
-        let path = format!("/api/sessions/{}/send", self.id);
-        cx.background_executor()
-            .spawn(async move {
-                if let Err(e) = host.post(&path, &message) {
-                    eprintln!("syncpi: sending to the thread: {e}");
+    fn send(&self, message: Value, _cx: &mut Context<Self>) {
+        let _ = self.worker.send(Job::Send(message));
+    }
+
+    fn me(&self) -> String {
+        text(&self.meta["me"], "id")
+    }
+
+    /// The draft the composer writes: one it joined, or this person's.
+    fn draft_owner(&self) -> String {
+        self.joined.clone().unwrap_or_else(|| self.me())
+    }
+
+    /// The composer changed: the same text goes into the shared draft, for everyone (not in a side thread, which is
+    /// private; and a question for it stops at "/side" for the others, as in the web view).
+    fn typed(&mut self, cx: &mut Context<Self>) {
+        if self.conv != "main" || self.meta["role"] == "viewer" {
+            return;
+        }
+        let state = self.composer.read(cx);
+        let value = state.value().to_string();
+        let caret = utf16_len(&value[..state.cursor().min(value.len())]);
+        let shared = if value.trim_start().starts_with("/side") { "/side".to_owned() } else { value };
+        self.put_draft(shared, caret);
+    }
+
+    fn put_draft(&mut self, text: String, caret: usize) {
+        if text == self.written {
+            return;
+        }
+        self.written = text.clone();
+        self.writes += 1;
+        let _ = self.worker.send(Job::Draft { owner: self.joined.clone(), text, caret, seq: self.writes });
+    }
+
+    /// The draft as the others changed it (someone writing it with you, or sending it): into the composer, keeping
+    /// the cursor where it was in the text around it. Only once the host has had every write from here.
+    fn adopt_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.conv != "main" || !self.loaded || self.meta["me"].is_null() {
+            return;
+        }
+        let owner = self.draft_owner();
+        let draft = self.drafts.iter().find(|d| text(d, "owner") == owner).cloned();
+        // A draft you joined was sent or cleared: back to yours.
+        if self.joined.is_some() && draft.as_ref().is_none_or(|d| text(d, "text").is_empty()) {
+            self.joined = None;
+            self.written = String::new();
+            self.composer.update(cx, |state, cx| state.set_value("", window, cx));
+            return self.adopt_draft(window, cx);
+        }
+        let Some(draft) = draft else { return };
+        if draft["seq"].as_u64().unwrap_or(0) < self.writes {
+            return;
+        }
+        let remote = text(&draft, "text");
+        let current = self.composer.read(cx).value().to_string();
+        if remote == self.written || current != self.written && !self.written.is_empty() || remote == current {
+            return;
+        }
+        let cursor = self.composer.read(cx).cursor().min(current.len());
+        // Where the cursor goes: same place if the change was after it, moved by its size if before.
+        let common = current.bytes().zip(remote.bytes()).take_while(|(a, b)| a == b).count();
+        let mut at = if cursor <= common { cursor } else { (cursor as isize + remote.len() as isize - current.len() as isize).max(0) as usize };
+        at = at.min(remote.len());
+        while !remote.is_char_boundary(at) {
+            at -= 1;
+        }
+        self.written = remote.clone();
+        let focused = self.composer.read(cx).focus_handle(cx).is_focused(window);
+        self.composer.update(cx, |state, cx| {
+            state.set_value(remote.clone(), window, cx);
+            if focused {
+                let before = &remote[..at];
+                let line = before.matches('\n').count() as u32;
+                let character = before.rsplit('\n').next().unwrap_or("").chars().count() as u32;
+                state.set_cursor_position(gpui_component::input::Position { line, character }, window, cx);
+            }
+        });
+    }
+
+    /// Write together: the composer writes `owner`'s draft with them; yours waits as you left it.
+    fn join_draft(&mut self, owner: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(draft) = self.drafts.iter().find(|d| text(d, "owner") == owner) else { return };
+        let body = text(draft, "text");
+        self.joined = Some(owner);
+        self.written = body.clone();
+        self.composer.update(cx, |state, cx| {
+            state.set_value(body, window, cx);
+            state.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn leave_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.joined = None;
+        self.written = String::new();
+        self.composer.update(cx, |state, cx| state.set_value("", window, cx));
+        self.adopt_draft(window, cx);
+        cx.notify();
+    }
+
+    /// Above the composer: whose draft it's writing when it isn't yours, or who's writing yours with you.
+    fn draft_with(&self, p: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.conv != "main" {
+            return None;
+        }
+        let owner = self.draft_owner();
+        let draft = self.drafts.iter().find(|d| text(d, "owner") == owner)?;
+        let others: Vec<String> = draft["writers"].as_array().into_iter().flatten().map(|w| text(w, "name")).filter(|n| !n.is_empty()).collect();
+        let label = match &self.joined {
+            Some(_) => format!("Writing {}'s draft{}", text(draft, "name"), if others.len() > 1 { format!(" with {}", others.join(", ")) } else { String::new() }),
+            None if !others.is_empty() => format!("Writing with {}", others.join(", ")),
+            None => return None,
+        };
+        Some(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .mb_1()
+                .text_size(sz(12.5))
+                .text_color(p.muted)
+                .child(label)
+                .when(self.joined.is_some(), |d| {
+                    d.child(
+                        div()
+                            .id("draft-back")
+                            .px_1()
+                            .rounded(px(4.))
+                            .text_color(p.accent)
+                            .cursor_pointer()
+                            .hover(|s| s.bg(p.sunken))
+                            .child("Back to yours")
+                            .on_click(cx.listener(|this, _, window, cx| this.leave_draft(window, cx))),
+                    )
+                })
+                .into_any_element(),
+        )
+    }
+
+    /// Others' drafts as they write them, at the end of the thread, as in Delta: who, "typing…" (or who they're
+    /// writing with), the text with the others' cursors in it, and Write together for editors. Not commands.
+    fn typing_rows(&self, p: &Palette, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        if self.conv != "main" {
+            return vec![];
+        }
+        let (me, mine) = (self.me(), self.draft_owner());
+        let can_write = matches!(self.meta["role"].as_str(), Some("editor" | "admin"));
+        let mut rows = vec![];
+        for draft in &self.drafts {
+            let owner = text(draft, "owner");
+            let body = text(draft, "text");
+            if owner == me || owner == mine || body.trim().is_empty() || body.trim_start().starts_with(['/', '!']) {
+                continue;
+            }
+            let name = self.name_of(&owner, text(draft, "name"));
+            let others: Vec<String> = draft["writers"].as_array().into_iter().flatten().filter(|w| text(w, "id") != owner).map(|w| text(w, "name")).collect();
+            let status = if others.is_empty() { "typing…".to_owned() } else { format!("writing with {}…", others.join(", ")) };
+            // The others' cursors, as a bar in their color where each is.
+            let mut carets: Vec<(usize, String)> = draft["writers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|w| text(w, "id") != me)
+                .map(|w| (byte_of_utf16(&body, w["caret"].as_u64().unwrap_or(0) as usize), text(w, "name")))
+                .collect();
+            carets.sort();
+            let mut line = div().flex().flex_wrap().items_baseline().whitespace_normal();
+            let mut from = 0;
+            for (at, who) in carets {
+                if at < from {
+                    continue;
                 }
-            })
-            .detach();
+                line = line.child(body[from..at].to_owned()).child(div().w(px(2.)).h(px(17.)).bg(theme::person_color(&who, p.dark)));
+                from = at;
+            }
+            line = line.child(body[from..].to_owned());
+            let joining = owner.clone();
+            rows.push(
+                div()
+                    .w(px(content_width() + AVATAR + GAP))
+                    .flex()
+                    .items_start()
+                    .gap(px(12.))
+                    .child(div().flex_none().text_size(sz(13.5)).line_height(sz(LINE)).font_weight(FontWeight::SEMIBOLD).text_color(theme::person_color(&name, p.dark)).child(name.clone()))
+                    .child(div().flex_1().min_w_0().text_size(sz(15.)).line_height(sz(LINE)).text_color(p.ink_2).child(line))
+                    .child(div().flex_none().text_size(sz(12.5)).line_height(sz(LINE)).text_color(p.faint).child(status))
+                    .when(can_write, |d| {
+                        d.child(
+                            div()
+                                .id(eid(format!("join-{owner}")))
+                                .flex_none()
+                                .px_2()
+                                .rounded(px(5.))
+                                .text_size(sz(12.5))
+                                .line_height(sz(LINE))
+                                .text_color(p.accent)
+                                .cursor_pointer()
+                                .hover(|s| s.bg(p.sunken))
+                                .child("Write together")
+                                .on_click(cx.listener(move |this, _, window, cx| this.join_draft(joining.clone(), window, cx))),
+                        )
+                    })
+                    .into_any_element(),
+            );
+        }
+        rows
     }
 
     /// ⌘↩: the composer's text to the agent. As in the web view, it stops the run in progress (when this person may)
@@ -458,6 +698,9 @@ impl ThreadView {
         if text.is_empty() {
             return;
         }
+        // What was written together goes out for everyone who wrote it (the server reads the draft's writers), and
+        // the draft is emptied after it.
+        let draft = (self.conv == "main" && !text.starts_with('/')).then(|| self.draft_owner());
         let (command, rest) = match text.strip_prefix('/') {
             Some(after) => {
                 let (word, rest) = after.split_once(char::is_whitespace).unwrap_or((after, ""));
@@ -494,12 +737,22 @@ impl ThreadView {
                 if !conv.is_null() {
                     message["conv"] = conv.take();
                 }
+                if let Some(owner) = &draft {
+                    message["draft"] = json!(owner);
+                }
                 self.send(message, cx);
             }
             // Anything else goes as written (a message that starts with a slash).
             _ => self.send(json!({ "type": "submit", "requestId": request_id(), "text": text, "mode": "interrupt", "where": "device", "conv": conv }), cx),
         }
         self.composer.update(cx, |state, cx| state.set_value("", window, cx));
+        if self.conv == "main" {
+            self.put_draft(String::new(), 0);
+            if self.joined.is_some() {
+                self.joined = None;
+                self.written = String::new();
+            }
+        }
     }
 
     fn stop(&mut self, cx: &mut Context<Self>) {
@@ -893,6 +1146,26 @@ impl Render for ThreadView {
             self.comment_input.update(cx, |state, cx| state.set_value(note.to_owned(), window, cx));
             self.send_comment(window, cx);
         }
+        self.adopt_draft(window, cx);
+        // Tests type into the composer once the thread has loaded (SYNCPI_GPUI_TEST_TYPE), and join someone's draft
+        // once there is one, adding to it (SYNCPI_GPUI_TEST_JOIN=<text>), as a person would.
+        if let Ok(typed) = std::env::var("SYNCPI_GPUI_TEST_TYPE")
+            && self.conv == "main"
+            && !self.meta["me"].is_null()
+            && !TEST_TYPE.replace(true)
+        {
+            self.composer.update(cx, |state, cx| state.set_value(typed, window, cx));
+        }
+        if let Ok(more) = std::env::var("SYNCPI_GPUI_TEST_JOIN")
+            && self.conv == "main"
+            && !TEST_JOIN.get()
+            && let Some(owner) = self.drafts.iter().map(|d| text(d, "owner")).find(|o| *o != self.me() && self.drafts.iter().any(|d| text(d, "owner") == *o && !text(d, "text").is_empty()))
+        {
+            TEST_JOIN.set(true);
+            self.join_draft(owner, window, cx);
+            let body = format!("{}{more}", self.written);
+            self.composer.update(cx, |state, cx| state.set_value(body, window, cx));
+        }
         let main = self.main.clone();
         let items = std::mem::take(&mut self.items);
         // Comments people made on messages' text, shown there, inline (cursor.rs, prose.rs), as in Delta.
@@ -975,7 +1248,11 @@ impl Render for ThreadView {
         // The items were taken for this frame's rows (not copied): back where they were.
         self.items = items;
         self.row_of = row_of;
+        for typing in self.typing_rows(&p, cx) {
+            rows.push(div().mt(px(16.)).child(typing).into_any_element());
+        }
         let viewer = self.meta["me"]["role"] == "viewer";
+        let with = self.draft_with(&p, cx);
         rows.push(
             div()
                 .mt(px(18.))
@@ -984,7 +1261,7 @@ impl Render for ThreadView {
                 } else {
                     row(
                         Some(avatar_person(&text(&self.meta["me"], "name"), p.dark)),
-                        div().w_full().child(Input::new(&self.composer).appearance(false).px_0().py(px(2.)).w_full().text_size(sz(15.))),
+                        div().w_full().children(with).child(Input::new(&self.composer).appearance(false).px_0().py(px(2.)).w_full().text_size(sz(15.))),
                     )
                     .into_any_element()
                 })
@@ -1062,6 +1339,39 @@ impl Render for ThreadView {
 }
 
 impl EventEmitter<ThreadEvent> for ThreadView {}
+
+fn post(host: &Host, id: &str, job: Job) {
+    let result = match job {
+        Job::Send(message) => host.post(&format!("/api/sessions/{id}/send"), &message),
+        Job::Draft { owner, text, caret, seq } => {
+            let mut body = json!({ "text": text, "caret": caret, "seq": seq });
+            if let Some(owner) = owner {
+                body["owner"] = json!(owner);
+            }
+            host.post(&format!("/api/sessions/{id}/draft"), &body)
+        }
+    };
+    if let Err(e) = result {
+        eprintln!("syncpi: sending to the thread: {e}");
+    }
+}
+
+/// The length of `text` in UTF-16 units, as the drafts (JavaScript strings, Yjs) count.
+fn utf16_len(text: &str) -> usize {
+    text.encode_utf16().count()
+}
+
+/// The byte offset in `text` of UTF-16 offset `units`.
+fn byte_of_utf16(text: &str, units: usize) -> usize {
+    let mut count = 0;
+    for (at, c) in text.char_indices() {
+        if count >= units {
+            return at;
+        }
+        count += c.len_utf16();
+    }
+    text.len()
+}
 
 /// A comment someone sent (thread-view.ts #comment): on part of a message, its quote and the note; on lines of a
 /// file, where, the first lines and the note.

@@ -113,7 +113,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       const push = () => {
         timer = undefined;
         const { items, ...state } = live.native[conv].state;
-        const meta = { me: live.native.me, members: live.native.members, online: live.native.online, target: live.native.target };
+        const meta = { me: live.native.me, members: live.native.members, online: live.native.online, target: live.native.target, role: live.role, drafts: conv === 'main' ? live.draftsNow() : [], sent: live.sentDrafts.length };
         const who = JSON.stringify(meta);
         if (state.rev === rev && who === people) return;
         rev = state.rev;
@@ -129,6 +129,17 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       req.on('close', () => { live.onMessage.delete(listener); clearInterval(ping); clearTimeout(timer); });
       return;
     }
+    // The native composer's text, as a draft written together (runtime.ts writeDraft): `owner` is whose (default: this
+    // person's); `caret`, where the cursor is in it.
+    if (verb === 'draft' && req.method === 'POST') {
+      const data = await input(req);
+      const owner = typeof data.owner === 'string' ? data.owner : live.native.me?.id;
+      if (owner === undefined || typeof data.text !== 'string') throw new Error('A draft needs its text');
+      if (live.role === 'viewer') throw new Error("Viewers can't write in drafts");
+      live.writeDraft(owner, data.text, typeof data.caret === 'number' ? data.caret : undefined, typeof data.seq === 'number' ? data.seq : undefined);
+      return json(res, { ok: true });
+    }
+    if (verb === 'drafts-sent' && req.method === 'GET') return json(res, { sent: live.sentDrafts });
     if (verb === 'send' && req.method === 'POST') {
       const message = await input(req);
       if (!['submit', 'abort', 'side', 'invite', 'invites', 'revoke', 'setRole', 'remove', 'rename', 'compact', 'new', 'branches', 'fork', 'switchBranch', 'configure'].includes(message.type)) throw new Error('Unknown session command');

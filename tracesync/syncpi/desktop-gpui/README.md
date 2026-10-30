@@ -57,7 +57,13 @@ background.
   Enter opens a comment box under the selection, ⌘↩ sends it at once with what's in the composer. Comments people
   made show where they were made (the text marked, the note under it) and as cards on the message that sent them.
 
-Not native yet: drafts written together, the inbox, settings. Switch back to the web view for those. `SYNCPI_GPUI_NATIVE=1` starts in native mode.
+- drafts written together: what's typed in the composer is this person's shared draft, live for everyone (with
+  their cursor); others' drafts show at the end of the thread as they're written ("typing…", their cursors), with
+  Write together to join one (Back to yours to leave it); sending sends it for everyone who wrote it; @names tag.
+  The host keeps the drafts' Yjs documents (runtime.ts) and takes the composer's plain text (`POST …/draft`), so
+  the app has no CRDT of its own.
+
+Not native yet: the inbox, settings. Switch back to the web view for those. `SYNCPI_GPUI_NATIVE=1` starts in native mode.
 
 ## Testing without taking the screen
 
@@ -65,7 +71,9 @@ Not native yet: drafts written together, the inbox, settings. Switch back to the
 of it on screen, and GPUI stops drawing a window macOS reports as covered, so the corner stays above other windows.
 `SYNCPI_GPUI_TEST_OPEN=html|svg|image|markdown` opens the first artifact of that kind, as a click on its Open would.
 `SYNCPI_GPUI_TEST_FIND=<text>` searches for it once the thread has loaded, and `SYNCPI_GPUI_TEST_SEND=<text>` sends
-it from the composer; `SYNCPI_GPUI_TEST_COMMENT=<quoted>|<comment>` comments on the first reply with that text. `SYNCPI_FAUX=1` runs the host with the
+it from the composer; `SYNCPI_GPUI_TEST_COMMENT=<quoted>|<comment>` comments on the first reply with that text;
+`SYNCPI_GPUI_TEST_TYPE=<text>` types it in the composer, and `SYNCPI_GPUI_TEST_JOIN=<text>` joins someone's draft and
+adds the text to it. `SYNCPI_FAUX=1` runs the host with the
 scripted model; `SYNCPI_HOME` points at a test home; `SYNCPI_GPUI_THEME=dark`
 (or `light`) overrides the system's appearance. Capture the window with
 `screencapture -x -o -l <window id>`.

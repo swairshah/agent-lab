@@ -10,6 +10,8 @@ import { home, identity, loadSession, projectsDir, saveSession, sessions, type S
 import { extractSnapshot, safeName, safeVm } from '../cli/snapshot.ts';
 import { Mirror } from '../cli/sync.ts';
 import { Thread } from '../shared/thread.ts';
+import { draftText, fromBase64, isCommand, replaceText, toBase64, Y } from '../shared/drafts.ts';
+import { mentioned } from '../shared/mentions.ts';
 import type { ClientMessage, ServerMessage } from '../shared/protocol.ts';
 
 export type Decoration = { title?: string; pinned?: boolean; bookmarked?: boolean; archived?: boolean; tags?: string[]; lastOpened?: number };
@@ -166,12 +168,69 @@ export class LiveSession {
   native = { main: new Thread(), setup: new Thread(), land: new Thread(), side: new Thread(), me: undefined as import('../shared/protocol.ts').Member | undefined, members: [] as import('../shared/protocol.ts').Member[], online: [] as import('../shared/protocol.ts').Presence[], env: { status: 'pending' } as import('../shared/protocol.ts').EnvStatus, branches: [] as import('../shared/protocol.ts').BranchInfo[], currentBranch: 0, target: '', error: '', lastInvite: undefined as { url: string; invite: import('../shared/protocol.ts').InviteInfo } | undefined, invites: [] as import('../shared/protocol.ts').InviteInfo[] };
   snapshot() { return { main: this.native.main.state, setup: this.native.setup.state, me: this.native.me, members: this.native.members, online: this.native.online, env: this.native.env, branches: this.native.branches, currentBranch: this.native.currentBranch, target: this.native.target, error: this.native.error, lastInvite: this.native.lastInvite, invites: this.native.invites, sync: this.sync, connection: this.conn.state, context: { skillCount: this.context.skillCount, prompts: this.context.prompts.map(p => ({ name: p.name, description: p.description })) } }; }
   onMessage = new Set<(m: ServerMessage) => void>();
+  /**
+   * Unsent drafts, everyone's, by owner (shared/drafts.ts), for the native app (desktop-gpui), which writes them through
+   * the host with plain text (writeDraft) rather than keeping Yjs documents of its own; and where people's cursors are.
+   */
+  drafts = new Map<string, { name: string; doc: Y.Doc; tagged: Set<string> }>();
+  /** How many draft writes the native app has made that were taken here (it counts them; writes come in order). */
+  draftSeq = 0;
+  carets = new Map<string, { name: string; owner: string; anchor?: unknown; head?: unknown }>();
+  /** Drafts sent to the agent since the native app last looked: owner, and who sent it. */
+  sentDrafts: { owner: string; by: string }[] = [];
+  draft(owner: string) {
+    let entry = this.drafts.get(owner);
+    if (entry === undefined) {
+      const doc = new Y.Doc();
+      doc.on('update', (update: Uint8Array, origin: unknown) => { if (origin !== 'remote') this.conn.send({ type: 'draft', owner, update: toBase64(update) }); });
+      this.drafts.set(owner, (entry = { name: this.native.members.find(m => m.id === owner)?.name ?? 'someone', doc, tagged: new Set() }));
+    }
+    return entry;
+  }
+  /**
+   * The native composer's text, as `owner`'s draft (this person's, or one they joined): the change goes to everyone,
+   * with this person's cursor at `caret`. People named in it (@name) are tagged once, as the web composer does.
+   * `seq` counts the app's writes; drafts carry the last one taken, so the app knows when what it has is current.
+   */
+  writeDraft(owner: string, text: string, caret = text.length, seq?: number) {
+    const entry = this.draft(owner);
+    if (seq !== undefined) this.draftSeq = Math.max(this.draftSeq, seq);
+    const shared = draftText(entry.doc);
+    replaceText(shared, text, 'local', Math.min(caret, text.length));
+    const at = (index: number) => Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(shared, Math.min(index, shared.length)));
+    this.conn.send({ type: 'caret', owner, anchor: at(caret), head: at(caret) });
+    if (text.trim() === '') { entry.tagged.clear(); return; }
+    if (isCommand(text) || this.role === 'viewer') return;
+    const others = this.native.members.filter(m => m.id !== this.native.me?.id);
+    const named = new Set(mentioned(text, others.map(m => m.name)));
+    const fresh = others.filter(m => named.has(m.name) && !entry.tagged.has(m.id)).map(m => m.id);
+    if (fresh.length === 0) return;
+    for (const id of fresh) entry.tagged.add(id);
+    this.conn.send({ type: 'tag', owner, memberIds: fresh });
+  }
+  /** The drafts with something in them, for the native app: whose, the text, and who else has a cursor in each. */
+  draftsNow() {
+    const seq = this.draftSeq;
+    return [...this.drafts].flatMap(([owner, { name, doc }]) => {
+      const text = draftText(doc).toString();
+      if (text === '' && owner !== this.native.me?.id) return [];
+      const writers = [...this.carets].filter(([id, c]) => c.owner === owner && id !== this.native.me?.id).map(([id, c]) => {
+        const index = (json: unknown) => { try { return json === undefined ? undefined : Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(json), doc)?.index; } catch { return undefined; } };
+        return { id, name: this.native.members.find(m => m.id === id)?.name ?? c.name, caret: index(c.head) ?? index(c.anchor) ?? text.length };
+      });
+      return [{ owner, name: this.native.members.find(m => m.id === owner)?.name ?? name, text, writers, seq }];
+    });
+  }
   constructor(record: SessionRecord, helper: string) {
     this.record = record;
     this.conn = new Connection(record.url, record.token);
     this.mirror = new Mirror(record.id, record.dir, this.conn);
     this.device = new LocalDevice(this.conn, this.mirror);
-    this.conn.onOpen = () => { if (this.full) this.device.register(); };
+    this.conn.onOpen = () => {
+      if (this.full) this.device.register();
+      // The server may have restarted: it merges each draft whole.
+      for (const [owner, { doc }] of this.drafts) if (draftText(doc).length > 0) this.conn.send({ type: 'draft', owner, update: toBase64(Y.encodeStateAsUpdate(doc)) });
+    };
     this.conn.onBinary = d => this.device.binary(d);
     this.conn.onState = state => { if (state === 'closed') this.device.disconnected(); };
     this.conn.onMessage = m => {
@@ -192,6 +251,16 @@ export class LiveSession {
       }
       if (m.type === 'removed') { this.close(); }
       if (m.type === 'files') this.mirror.remoteChanged(m.full === true, m.changed, m.version);
+      if (m.type === 'draft') {
+        const entry = this.draft(m.owner);
+        entry.name = m.name;
+        if (m.update !== undefined) Y.applyUpdate(entry.doc, fromBase64(m.update), 'remote');
+        if (m.sent !== undefined) { entry.tagged.clear(); this.sentDrafts.push({ owner: m.owner, by: m.sent }); this.sentDrafts = this.sentDrafts.slice(-20); }
+      }
+      if (m.type === 'caret' && m.memberId !== this.native.me?.id) {
+        if (m.owner === undefined) this.carets.delete(m.memberId);
+        else this.carets.set(m.memberId, { name: m.name, owner: m.owner, anchor: m.anchor, head: m.head });
+      }
       for (const listener of this.onMessage) listener(m);
     };
     this.mirror.onEvent = e => {
