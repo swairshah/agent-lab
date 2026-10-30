@@ -379,6 +379,14 @@ impl ThreadView {
         true
     }
 
+    /// The comments of the message a reply answers, and who wrote them (thread-view.ts #askedBefore).
+    fn asked_before(&self, key: &str) -> Option<(Vec<Value>, String)> {
+        let at = self.items.iter().position(|i| text(i, "key") == key)?;
+        let user = self.items[..at].iter().rev().find(|i| i["kind"] == "user")?;
+        let comments = user["comments"].as_array().filter(|c| !c.is_empty())?.clone();
+        Some((comments, self.name_of(&text(user, "memberId"), user["author"].as_str().unwrap_or("someone").to_owned())))
+    }
+
     /// What the thread produced, for the panel (edits, files written, HTML and SVG in replies).
     pub fn artifacts(&self) -> Vec<artifact::Art> {
         artifact::thread_artifacts(&self.items)
@@ -1419,7 +1427,33 @@ impl ThreadView {
             }
         }
         if !body.is_empty() {
-            content = content.child(div().text_size(sz(15.)).line_height(sz(LINE)).child(message::render(&format!("assistant-{key}"), &body, window, cx)));
+            // A reply to several comments answers each under it (<reply to="n">…</reply>), as in the web view; the
+            // comments are the ones the message before it sent.
+            let asked = self.asked_before(key);
+            let sections = reply_sections(&body);
+            if asked.is_some() && sections.iter().any(|(to, _)| to.is_some()) {
+                let (comments, name) = asked.unwrap();
+                for (n, (to, part)) in sections.into_iter().enumerate() {
+                    let id = if n == 0 { format!("assistant-{key}") } else { format!("assistant-{key}~{n}") };
+                    let rendered = message::render(&id, &part, window, cx);
+                    content = content.child(match to.and_then(|to| comments.get(to.wrapping_sub(1))) {
+                        Some(comment) => div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .p_3()
+                            .rounded(px(8.))
+                            .border_1()
+                            .border_color(p.rule)
+                            .child(comment_card(comment, &name, p))
+                            .child(div().text_size(sz(15.)).line_height(sz(LINE)).child(rendered))
+                            .into_any_element(),
+                        None => div().text_size(sz(15.)).line_height(sz(LINE)).child(rendered).into_any_element(),
+                    });
+                }
+            } else {
+                content = content.child(div().text_size(sz(15.)).line_height(sz(LINE)).child(message::render(&format!("assistant-{key}"), &body, window, cx)));
+            }
         } else if streaming && thinking.is_empty() {
             content = content.child(div().text_size(sz(15.)).text_color(p.muted).child("…"));
         }
@@ -2094,6 +2128,37 @@ fn where_to() -> &'static str {
     if WHERE_VM.load(std::sync::atomic::Ordering::Relaxed) { "vm" } else { "device" }
 }
 
+/// A reply split where it answers comments one by one: (the comment's number, the text), in order; text outside
+/// any <reply to="n"> has none. One still being written runs to the end.
+fn reply_sections(text: &str) -> Vec<(Option<usize>, String)> {
+    let mut out = vec![];
+    let mut rest = text;
+    while let Some(start) = rest.find("<reply to=\"") {
+        let before = rest[..start].trim();
+        if !before.is_empty() {
+            out.push((None, before.to_owned()));
+        }
+        let after = &rest[start + 11..];
+        let Some(quote) = after.find('"') else { break };
+        let to = after[..quote].parse().ok();
+        let body = after[quote + 1..].trim_start_matches('>');
+        match body.find("</reply>") {
+            Some(end) => {
+                out.push((to, body[..end].trim().to_owned()));
+                rest = &body[end + 8..];
+            }
+            None => {
+                out.push((to, body.trim().to_owned()));
+                rest = "";
+            }
+        }
+    }
+    if !rest.trim().is_empty() {
+        out.push((None, rest.trim().to_owned()));
+    }
+    out
+}
+
 /// /invite's words (src/shared/commands.ts parseInvite): an email, a role, an expiry (7d, 12h, never), --uses N.
 fn parse_invite(arg: &str) -> Result<Value, String> {
     let mut out = json!({});
@@ -2371,7 +2436,13 @@ fn keep_breaks(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     // Not a glob: gpui's `test` attribute would shadow the standard one.
-    use super::{base64, parse_invite};
+    use super::{base64, parse_invite, reply_sections};
+
+    #[test]
+    fn replies_split_by_the_comments_they_answer() {
+        let sections = reply_sections("On the whole: fine.\n<reply to=\"1\">First answer</reply>\n<reply to=\"2\">Still writ");
+        assert_eq!(sections, vec![(None, "On the whole: fine.".to_owned()), (Some(1), "First answer".to_owned()), (Some(2), "Still writ".to_owned())]);
+    }
 
     #[test]
     fn invites_read_as_the_web_view_reads_them() {

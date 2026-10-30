@@ -488,6 +488,17 @@ impl Desktop {
                 panel.update(cx, |panel, cx| panel.select_lines(&path, range, cx));
             }
         }
+        // A cited file clicked in a message: in the panel, at the lines cited.
+        for (path, lines) in citations::take() {
+            self.open_file(path.clone(), window, cx);
+            if let (Some(lines), Some(panel)) = (lines, self.panel(window, cx)) {
+                panel.update(cx, |panel, cx| panel.select_lines(&path, lines, cx));
+            }
+        }
+        // The open thread's files, for linking their names in messages (citations.rs).
+        if self.ticks % 80 == 3 {
+            self.load_citable_files(cx);
+        }
         // Native threads say whether they're working, for the sidebar.
         for (id, view) in &self.threads {
             let busy = view.read(cx).busy();
@@ -586,6 +597,7 @@ impl Desktop {
         }
         self.ensure_page(id, window, cx);
         self.ensure_thread(id, window, cx);
+        self.load_citable_files(cx);
         let host = self.host.clone();
         let id = id.to_owned();
         cx.background_executor()
@@ -781,6 +793,18 @@ impl Desktop {
             panel.update(cx, |panel, cx| panel.set_artifacts(artifacts, cx));
         }
         Some(panel)
+    }
+
+    fn load_citable_files(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.active.clone().filter(|id| self.thread(id).is_some_and(|t| t.ready())) else { return };
+        let host = self.host.clone();
+        cx.spawn(async move |_, cx| {
+            let listed = cx.background_executor().spawn(async move { host.get(&format!("/api/sessions/{id}/files")) }).await;
+            if let Some(files) = listed.ok().and_then(|v| serde_json::from_value::<Vec<String>>(v["files"].clone()).ok()) {
+                citations::set_files(&files);
+            }
+        })
+        .detach();
     }
 
     /// Where this person is (follow.ts View): which conversation, the message at the top, the file in the panel;
