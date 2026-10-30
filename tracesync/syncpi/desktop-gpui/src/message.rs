@@ -342,9 +342,13 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
             }
             Block::Table(rows) => {
                 let columns = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
+                // Each column's width, in pixels: a share of the room by its longest cell (a percentage of a box that
+                // scrolls sideways has nothing to resolve against, and cells collapsed to a letter wide), at least
+                // 90; wider than the room, the table scrolls.
+                let widths = column_widths(&rows, columns, crate::thread::content_width());
+                let total: f32 = widths.iter().sum();
                 let mut table = div()
-                    .w_full()
-                    .min_w(px((columns as f32 * 170.).min(1000.)))
+                    .w(px(total))
                     .h_auto()
                     .flex_shrink_0()
                     .flex()
@@ -356,8 +360,7 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
                 let row_count = rows.len();
                 for (row_index, row) in rows.into_iter().enumerate() {
                     let mut line = div()
-                        .w_full()
-                        .min_w_0()
+                        .w(px(total))
                         .h_auto()
                         .flex()
                         .flex_shrink_0()
@@ -369,9 +372,8 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
                         let content = row.get(column).cloned().unwrap_or_default();
                         line = line.child(
                             div()
-                                .flex_1()
-                                .flex_basis(px(0.))
-                                .min_w_0()
+                                .w(px(widths[column]))
+                                .flex_none()
                                 .h_auto()
                                 .px_3()
                                 .py_2()
@@ -406,6 +408,21 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
 }
 use gpui_component::Sizable;
 use gpui_component::button::ButtonVariants;
+
+/// A table's column widths within `room`: shares by each column's longest cell (as text shows it, roughly), each at
+/// least 90 and its share at most 48 characters' worth, so a long cell wraps rather than squeezing the rest.
+fn column_widths(rows: &[Vec<String>], columns: usize, room: f32) -> Vec<f32> {
+    const MIN: f32 = 90.;
+    let weights: Vec<f32> = (0..columns)
+        .map(|c| {
+            let longest = rows.iter().filter_map(|r| r.get(c)).map(|cell| cell.chars().filter(|ch| !matches!(ch, '*' | '`' | '_')).count()).max().unwrap_or(0);
+            (longest as f32).clamp(4., 48.)
+        })
+        .collect();
+    let sum: f32 = weights.iter().sum();
+    let room = room.max(MIN * columns as f32);
+    weights.iter().map(|w| (room * w / sum).max(MIN).floor()).collect()
+}
 
 #[cfg(test)]
 mod tests {
