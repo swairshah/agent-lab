@@ -80,6 +80,11 @@ pub struct PanelView {
     /// A webview for the HTML artifact or page shown, by what it shows.
     webview: Option<(String, Entity<WebView>)>,
     worker: std::sync::mpsc::Sender<Job>,
+    /// Find in the open file (⌘F while the panel has focus): its field, the current match, and a line to scroll to.
+    find: Option<(Entity<InputState>, usize, Subscription)>,
+    scroll_to: Option<usize>,
+    code_scroll: ScrollHandle,
+    focus: FocusHandle,
     /// Text that arrived for an editor (path, text), set on the next frame.
     pending_text: HashMap<String, String>,
     _subscriptions: Vec<Subscription>,
@@ -148,8 +153,130 @@ impl PanelView {
             webview: None,
             worker,
             pending_text: HashMap::new(),
+            find: None,
+            scroll_to: None,
+            code_scroll: ScrollHandle::new(),
+            focus: cx.focus_handle(),
             _subscriptions: subscriptions,
         }
+    }
+
+    /// The text Find searches: the open file as shown (its earlier version when that's shown).
+    fn find_text(&self) -> Option<String> {
+        let Tab::File(path) = &self.active else { return None };
+        let tab = self.tabs.iter().find(|t| t.path == *path)?;
+        let text = if tab.before { tab.earlier.as_ref()?.as_ref().ok()? } else { tab.text.as_ref()?.as_ref().ok()? };
+        Some(text.clone())
+    }
+
+    /// The lines (1-based) where the query is, ignoring case.
+    fn find_lines(&self, cx: &App) -> Vec<usize> {
+        let (Some((input, _, _)), Some(text)) = (&self.find, self.find_text()) else { return vec![] };
+        let query = input.read(cx).value().trim().to_lowercase();
+        if query.is_empty() {
+            return vec![];
+        }
+        text.split('\n').enumerate().filter(|(_, l)| l.to_lowercase().contains(&query)).map(|(n, _)| n + 1).collect()
+    }
+
+    /// Tests: Find `query` in the open file, once it's read; false until then.
+    pub fn find_for_test(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.find_text().is_none() {
+            return false;
+        }
+        self.open_find(window, cx);
+        if let Some((input, _, _)) = &self.find {
+            input.update(cx, |state, cx| state.set_value(query.to_owned(), window, cx));
+        }
+        self.step_find(1, window, cx);
+        true
+    }
+
+    fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.find_text().is_none() {
+            return;
+        }
+        if let Some((input, _, _)) = &self.find {
+            input.update(cx, |state, cx| state.focus(window, cx));
+            return;
+        }
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in the file"));
+        input.update(cx, |state, cx| state.focus(window, cx));
+        let subscription = cx.subscribe_in(&input, window, |this, _, event, window, cx| match event {
+            InputEvent::Change => {
+                if let Some(find) = &mut this.find {
+                    find.1 = 0;
+                }
+                this.reveal_found(cx);
+            }
+            InputEvent::PressEnter { .. } => this.step_find(1, window, cx),
+            _ => {}
+        });
+        self.find = Some((input, 0, subscription));
+        cx.notify();
+    }
+
+    fn step_find(&mut self, by: isize, _window: &mut Window, cx: &mut Context<Self>) {
+        let count = self.find_lines(cx).len();
+        let Some(find) = &mut self.find else { return };
+        if count > 0 {
+            find.1 = (find.1 as isize + by).rem_euclid(count as isize) as usize;
+        }
+        self.reveal_found(cx);
+    }
+
+    fn reveal_found(&mut self, cx: &mut Context<Self>) {
+        let lines = self.find_lines(cx);
+        self.scroll_to = self.find.as_ref().and_then(|f| lines.get(f.1).copied());
+        cx.notify();
+    }
+
+    fn command(&mut self, action: &crate::keymap::RunCommand, window: &mut Window, cx: &mut Context<Self>) {
+        match action.id.as_ref() {
+            "find.open" => self.open_find(window, cx),
+            "find.next" if self.find.is_some() => self.step_find(1, window, cx),
+            "find.previous" if self.find.is_some() => self.step_find(-1, window, cx),
+            _ => cx.propagate(),
+        }
+    }
+
+    fn find_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (input, current, _) = self.find.as_ref()?;
+        let p = palette(cx);
+        let count = self.find_lines(cx).len();
+        let label = if count == 0 { "0/0".to_owned() } else { format!("{}/{count}", current + 1) };
+        let button = |id: &'static str, icon: IconName| div().id(id).p(px(4.)).rounded(px(5.)).text_color(p.muted).cursor_pointer().hover(|s| s.bg(p.sunken).text_color(p.ink)).child(Icon::new(icon).size(px(13.)));
+        Some(
+            div()
+                .h(px(38.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .border_b_1()
+                .border_color(p.rule)
+                .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "escape" {
+                        this.find = None;
+                        this.scroll_to = None;
+                        window.focus(&this.focus);
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
+                }))
+                .child(div().flex_1().child(Input::new(input).appearance(true).text_size(sz(13.))))
+                .child(div().w(px(48.)).text_right().font_family(MONO).text_size(sz(12.)).text_color(p.muted).child(label))
+                .child(button("file-find-previous", IconName::ChevronUp).on_click(cx.listener(|this, _, window, cx| this.step_find(-1, window, cx))))
+                .child(button("file-find-next", IconName::ChevronDown).on_click(cx.listener(|this, _, window, cx| this.step_find(1, window, cx))))
+                .child(button("file-find-close", IconName::Close).on_click(cx.listener(|this, _, window, cx| {
+                    this.find = None;
+                    this.scroll_to = None;
+                    window.focus(&this.focus);
+                    cx.notify();
+                })))
+                .into_any_element(),
+        )
     }
 
     /// What the panel shows, as follow.ts names it for others following this person: "changes", a file's path, or
@@ -659,6 +786,9 @@ impl PanelView {
         let Some(tab) = self.tabs.iter().find(|t| t.path == path) else { return empty("", &p) };
         let markdown = artifact::kind_of_path(path) == artifact::Kind::Markdown;
         let (editing, rendered, lines, before) = (tab.editing.is_some(), tab.rendered, tab.lines, tab.before);
+        let found = self.find_lines(cx);
+        let current = self.find.as_ref().and_then(|f| found.get(f.1).copied());
+        let scroll = self.code_scroll.clone();
         let others = tab.editing.as_ref().map(|e| e.others.clone()).unwrap_or_default();
         let ready = tab.editing.as_ref().is_some_and(|e| e.ready);
         let (edit_path, toggle_path, reload_path) = (path.to_owned(), path.to_owned(), path.to_owned());
@@ -733,7 +863,7 @@ impl PanelView {
                 None => empty("Loading…", &p),
                 Some(Err(e)) => empty(e, &p),
                 Some(Ok(text)) if markdown && rendered => div().id("file-md-before").size_full().overflow_y_scroll().px_5().py_4().text_size(sz(14.5)).line_height(sz(23.)).child(message::render(&format!("before-{path}"), text, window, cx)).into_any_element(),
-                Some(Ok(text)) => code_lines(&format!("before-{path}"), path.rsplit('.').next().unwrap_or(""), text, None, &p, cx, None),
+                Some(Ok(text)) => code_lines_found(&format!("before-{path}"), path.rsplit('.').next().unwrap_or(""), text, None, (&found, current), Some(&scroll), &p, cx, None),
             }
         } else {
             match &tab.text {
@@ -744,7 +874,7 @@ impl PanelView {
                     let lang = path.rsplit('.').next().unwrap_or("").to_owned();
                     let picking = path.to_owned();
                     let pick: std::rc::Rc<dyn Fn(&mut Self, usize, bool, &mut Window, &mut Context<Self>)> = std::rc::Rc::new(move |this, line, shift, window, cx| this.pick_line(&picking, line, shift, window, cx));
-                    code_lines(&format!("file-{path}"), &lang, text, lines, &p, cx, Some(pick))
+                    code_lines_found(&format!("file-{path}"), &lang, text, lines, (&found, current), Some(&scroll), &p, cx, Some(pick))
                 }
             }
         };
@@ -969,12 +1099,28 @@ impl Render for PanelView {
             view.update(cx, |w, _| if showing_page { w.show() } else { w.hide() });
         }
         let tree = self.tree_open.then(|| self.tree(cx));
+        // Find's current line, a few lines from the top.
+        if let Some(line) = self.scroll_to.take() {
+            let height = sz(19.).to_pixels(window.rem_size());
+            let x = self.code_scroll.offset().x;
+            self.code_scroll.set_offset(point(x, -(height * (line.saturating_sub(4)) as f32)));
+        }
+        let find = self.find_bar(cx);
         div()
             .size_full()
             .flex()
             .flex_col()
             .bg(p.surface)
+            .key_context("Panel")
+            .track_focus(&self.focus)
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, _| {
+                if this.find.is_none() {
+                    window.focus(&this.focus);
+                }
+            }))
+            .on_action(cx.listener(|this, action: &crate::keymap::RunCommand, window, cx| this.command(action, window, cx)))
             .child(self.tab_bar(&p, cx))
+            .children(find)
             .child(div().flex_1().min_h_0().flex().child(div().flex_1().min_w_0().h_full().bg(p.raised).child(body)).children(tree))
     }
 }
@@ -989,6 +1135,12 @@ impl PanelView {
 /// Code with line numbers and syntax colors. With `pick`, the numbers select lines (shift extends) to comment on;
 /// `selected` lines are tinted.
 fn code_lines(id: &str, lang: &str, text: &str, selected: Option<(usize, usize)>, p: &Palette, cx: &mut Context<PanelView>, pick: Option<std::rc::Rc<dyn Fn(&mut PanelView, usize, bool, &mut Window, &mut Context<PanelView>)>>) -> AnyElement {
+    code_lines_found(id, lang, text, selected, (&[], None), None, p, cx, pick)
+}
+
+/// Code with line numbers, with Find's lines tinted (the current one more) and its scroll followed.
+#[allow(clippy::too_many_arguments)]
+fn code_lines_found(id: &str, lang: &str, text: &str, selected: Option<(usize, usize)>, found: (&[usize], Option<usize>), scroll: Option<&ScrollHandle>, p: &Palette, cx: &mut Context<PanelView>, pick: Option<std::rc::Rc<dyn Fn(&mut PanelView, usize, bool, &mut Window, &mut Context<PanelView>)>>) -> AnyElement {
     let shown: String = text.split('\n').take(5000).collect::<Vec<_>>().join("\n");
     let lines = message::highlighted_lines(lang, &shown, cx);
     let width = (lines.len().to_string().len() as f32 * 8. + 18.).max(34.);
@@ -996,10 +1148,13 @@ fn code_lines(id: &str, lang: &str, text: &str, selected: Option<(usize, usize)>
     for (n, line) in lines.into_iter().enumerate() {
         let number = n + 1;
         let on = selected.is_some_and(|(a, b)| a <= number && number <= b);
+        let hit = found.0.contains(&number);
+        let current = found.1 == Some(number);
         let pick = pick.clone();
         column = column.child(
             div()
                 .flex()
+                .when(hit, |d| d.bg(hsla(43. / 360., 1., 0.62, if current { 0.38 } else { 0.16 })))
                 .when(on, |d| d.bg(p.accent.opacity(0.12)))
                 .child(
                     div()
@@ -1016,7 +1171,11 @@ fn code_lines(id: &str, lang: &str, text: &str, selected: Option<(usize, usize)>
                 .child(div().whitespace_nowrap().pr_4().child(line)),
         );
     }
-    div().id(SharedString::from(id.to_owned())).size_full().overflow_scroll().font_family(MONO).text_size(sz(12.)).line_height(sz(19.)).child(column).into_any_element()
+    let mut view = div().id(SharedString::from(id.to_owned())).size_full().overflow_scroll().font_family(MONO).text_size(sz(12.)).line_height(sz(19.));
+    if let Some(scroll) = scroll {
+        view = view.track_scroll(scroll);
+    }
+    view.child(column).into_any_element()
 }
 
 fn empty(text: &str, p: &Palette) -> AnyElement {

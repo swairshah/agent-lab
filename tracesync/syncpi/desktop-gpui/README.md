@@ -48,7 +48,7 @@ background.
 
 - Find (⌘F) in people's and the agent's messages: the count, ⌘G / ⇧⌘G or Enter to move, the matches tinted in the
   text (the current one more strongly; prose.rs paints them from cursor.rs), Esc to close. Tool output isn't searched
-  yet.
+  yet. In the panel, ⌘F finds in the open file (its lines tinted, the current one scrolled to).
 
 - the top bar over a native thread: its title, who's here (click a face to follow them: your view goes where
   theirs does, the message at their top and the file in their panel; scrolling, clicking or Esc stops), land, share,
@@ -111,7 +111,8 @@ of it on screen, and GPUI stops drawing a window macOS reports as covered, so th
 `SYNCPI_GPUI_TEST_OPEN=html|svg|image|markdown` opens the first artifact of that kind, as a click on its Open would.
 `SYNCPI_GPUI_TEST_FIND=<text>` searches for it once the thread has loaded, and `SYNCPI_GPUI_TEST_SEND=<text>` sends
 it from the composer; `SYNCPI_GPUI_TEST_COMMENT=<quoted>|<comment>` comments on the first reply with that text;
-`SYNCPI_GPUI_TEST_COMMAND=<id>,…` runs commands once the thread is open; `SYNCPI_GPUI_TEST_FILE=<path>:<from>-<to>` opens a file in the panel with those lines selected; `SYNCPI_GPUI_TEST_TYPE=<text>` types it in the composer, and `SYNCPI_GPUI_TEST_JOIN=<text>` joins someone's draft and
+`SYNCPI_GPUI_TEST_COMMAND=<id>,…` runs commands once the thread is open; `SYNCPI_GPUI_TEST_FILE=<path>:<from>-<to>` opens a file in the panel with those lines selected, and
+`SYNCPI_GPUI_TEST_FILE_FIND=<text>` finds in it; `SYNCPI_GPUI_TEST_TYPE=<text>` types it in the composer, and `SYNCPI_GPUI_TEST_JOIN=<text>` joins someone's draft and
 adds the text to it. `SYNCPI_FAUX=1` runs the host with the
 scripted model; `SYNCPI_HOME` points at a test home; `SYNCPI_GPUI_THEME=dark`
 (or `light`) overrides the system's appearance. Capture the window with

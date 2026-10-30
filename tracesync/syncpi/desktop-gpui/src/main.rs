@@ -494,6 +494,15 @@ impl Desktop {
                 self.run(&RunCommand { id: id.trim().to_owned().into() }, window, cx);
             }
         }
+        // Tests find in the panel's open file once it's read (SYNCPI_GPUI_TEST_FILE_FIND=text).
+        if let Ok(query) = std::env::var("SYNCPI_GPUI_TEST_FILE_FIND")
+            && TEST_FILE.get()
+            && !TEST_FILE_FIND.get()
+            && let Some(panel) = self.active.as_ref().and_then(|id| self.panels.get(id)).cloned()
+            && panel.update(cx, |panel, cx| panel.find_for_test(&query, window, cx))
+        {
+            TEST_FILE_FIND.set(true);
+        }
         // Tests open a file in the panel with lines selected (SYNCPI_GPUI_TEST_FILE=path:from-to).
         if let Ok(spec) = std::env::var("SYNCPI_GPUI_TEST_FILE")
             && !TEST_FILE.get()
@@ -1432,6 +1441,7 @@ impl Desktop {
 thread_local! {
     static TEST_COMMAND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static TEST_FILE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static TEST_FILE_FIND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// A query string's value, escaped.
@@ -1523,7 +1533,13 @@ fn main() -> anyhow::Result<()> {
                 };
                 Some(KeyBinding::new(&keys, RunCommand { id: c.id.into() }, context))
             })
-            .chain([KeyBinding::new("cmd-q", RunCommand { id: "app.quit".into() }, None)])
+            .chain([
+                KeyBinding::new("cmd-q", RunCommand { id: "app.quit".into() }, None),
+                // Find in the panel's open file, when the panel has focus.
+                KeyBinding::new("cmd-f", RunCommand { id: "find.open".into() }, Some("Panel")),
+                KeyBinding::new("cmd-g", RunCommand { id: "find.next".into() }, Some("Panel")),
+                KeyBinding::new("cmd-shift-g", RunCommand { id: "find.previous".into() }, Some("Panel")),
+            ])
             .collect();
         cx.bind_keys(bindings);
         cx.on_action(|action: &RunCommand, cx| {
