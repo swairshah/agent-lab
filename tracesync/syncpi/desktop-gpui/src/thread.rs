@@ -8,6 +8,7 @@
 use crate::host::Host;
 use crate::theme::{self, MONO, Palette, palette, sz};
 use crate::artifact::{self, Kind, Shown};
+use crate::keymap::RunCommand;
 use crate::{icons, message};
 use gpui::{prelude::FluentBuilder, *};
 use gpui_component::{
@@ -51,6 +52,10 @@ fn eid(s: String) -> ElementId {
     ElementId::Name(s.into())
 }
 
+thread_local! {
+    static TEST_FIND: Cell<bool> = const { Cell::new(false) };
+}
+
 pub struct ThreadView {
     id: String,
     host: Host,
@@ -70,7 +75,19 @@ pub struct ThreadView {
     /// The thread's width last frame, measured, for the column.
     width: Rc<Cell<f32>>,
     loaded: bool,
+    /// Find (⌘F): its field, the matches (a message's key and the match's place among that message's), the current.
+    find: Option<FindBar>,
+    /// Each item's row in the list, last frame: Find scrolls to its match's.
+    row_of: std::collections::HashMap<String, usize>,
+    focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
+}
+
+struct FindBar {
+    input: Entity<InputState>,
+    matches: Vec<(String, usize)>,
+    current: usize,
+    _subscription: Subscription,
 }
 
 impl ThreadView {
@@ -121,6 +138,9 @@ impl ThreadView {
             images: Default::default(),
             width: Rc::new(Cell::new(900.)),
             loaded: false,
+            find: None,
+            row_of: Default::default(),
+            focus: cx.focus_handle(),
             _subscriptions: subscriptions,
         }
     }
@@ -135,7 +155,127 @@ impl ThreadView {
         self.main = event["state"].clone();
         self.meta = json!({ "me": event["me"], "members": event["members"], "online": event["online"], "target": event["target"] });
         self.loaded = true;
+        if self.find.is_some() {
+            self.recount(false, cx);
+        }
         cx.notify();
+    }
+
+    /// Puts the caret in the composer (the thread was just opened).
+    pub fn focus_composer(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.composer.update(cx, |state, cx| state.focus(window, cx));
+    }
+
+    /// ⌘F: Find in the thread's messages (people's and the agent's), with the selection's text if there is one.
+    fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(find) = &self.find {
+            find.input.update(cx, |state, cx| state.focus(window, cx));
+            return;
+        }
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in the thread"));
+        let subscription = cx.subscribe_in(&input, window, |this, _, event, window, cx| match event {
+            InputEvent::Change => {
+                this.recount(true, cx);
+                this.reveal(cx);
+            }
+            InputEvent::PressEnter { .. } => this.step(1, window, cx),
+            _ => {}
+        });
+        input.update(cx, |state, cx| state.focus(window, cx));
+        self.find = Some(FindBar { input, matches: vec![], current: 0, _subscription: subscription });
+        cx.notify();
+    }
+
+    fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.find = None;
+        crate::cursor::set_find(None);
+        self.focus_composer(window, cx);
+        cx.notify();
+    }
+
+    fn query(&self, cx: &App) -> String {
+        self.find.as_ref().map(|f| f.input.read(cx).value().trim().to_lowercase()).unwrap_or_default()
+    }
+
+    /// Counts the matches again (the query changed, or the thread did); `restart` goes back to the first.
+    fn recount(&mut self, restart: bool, cx: &mut Context<Self>) {
+        let query = self.query(cx);
+        let mut matches = vec![];
+        for item in &self.items {
+            if item["kind"] != "user" && item["kind"] != "assistant" {
+                continue;
+            }
+            let key = text(item, "key");
+            for n in 0..crate::cursor::occurrences(&text(item, "text"), &query).len() {
+                matches.push((key.clone(), n));
+            }
+        }
+        if let Some(find) = &mut self.find {
+            let current = find.matches.get(find.current).cloned();
+            find.current = if restart { 0 } else { current.and_then(|c| matches.iter().position(|m| *m == c)).unwrap_or(0) };
+            find.matches = matches;
+        }
+        cx.notify();
+    }
+
+    fn step(&mut self, by: isize, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(find) = &mut self.find else { return };
+        if find.matches.is_empty() {
+            return;
+        }
+        find.current = (find.current as isize + by).rem_euclid(find.matches.len() as isize) as usize;
+        self.reveal(cx);
+        cx.notify();
+    }
+
+    /// Scrolls the current match's row into view.
+    fn reveal(&mut self, cx: &mut Context<Self>) {
+        let Some((key, _)) = self.find.as_ref().and_then(|f| f.matches.get(f.current)) else { return };
+        if let Some(&row) = self.row_of.get(key) {
+            self.list.scroll_to_reveal_item(row);
+        }
+        cx.notify();
+    }
+
+    fn command(&mut self, action: &RunCommand, window: &mut Window, cx: &mut Context<Self>) {
+        match action.id.as_ref() {
+            "find.open" => self.open_find(window, cx),
+            "find.next" if self.find.is_some() => self.step(1, window, cx),
+            "find.previous" if self.find.is_some() => self.step(-1, window, cx),
+            _ => cx.propagate(),
+        }
+    }
+
+    fn find_bar(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        let Some(find) = &self.find else { return div().into_any_element() };
+        let count = if find.matches.is_empty() { "0/0".to_owned() } else { format!("{}/{}", find.current + 1, find.matches.len()) };
+        let button = |id: &'static str, icon: IconName| {
+            div().id(id).p(px(4.)).rounded(px(5.)).text_color(p.muted).cursor_pointer().hover(|s| s.bg(p.sunken).text_color(p.ink)).child(Icon::new(icon).size(px(14.)))
+        };
+        div()
+            .h(px(40.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_2()
+            .pl(px(LEFT))
+            .pr_2()
+            .border_b_1()
+            .border_color(p.rule)
+            .bg(p.surface)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" {
+                    this.close_find(window, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(div().text_size(sz(12.5)).text_color(p.muted).child("Conversation"))
+            .child(div().flex_1().child(Input::new(&find.input).appearance(true).text_size(sz(13.5))))
+            .child(div().w(px(56.)).text_right().font_family(MONO).text_size(sz(12.)).text_color(p.muted).child(count))
+            .child(button("find-previous", IconName::ChevronUp).on_click(cx.listener(|this, _, window, cx| this.step(-1, window, cx))))
+            .child(button("find-next", IconName::ChevronDown).on_click(cx.listener(|this, _, window, cx| this.step(1, window, cx))))
+            .child(button("find-close", IconName::Close).on_click(cx.listener(|this, _, window, cx| this.close_find(window, cx))))
+            .into_any_element()
     }
 
     fn send(&self, message: Value, cx: &mut Context<Self>) {
@@ -479,11 +619,33 @@ impl Render for ThreadView {
         if !self.loaded {
             return div().size_full().flex().items_center().justify_center().text_color(p.muted).child("Loading the thread…").into_any_element();
         }
+        // Tests search for something once the thread has loaded (SYNCPI_GPUI_TEST_FIND), as typing it into Find would.
+        if let Ok(query) = std::env::var("SYNCPI_GPUI_TEST_FIND")
+            && self.find.is_none()
+            && !self.items.is_empty()
+            && !TEST_FIND.replace(true)
+        {
+            self.open_find(window, cx);
+            if let Some(find) = &self.find {
+                find.input.update(cx, |state, cx| state.set_value(query, window, cx));
+            }
+            self.recount(true, cx);
+            self.step(1, window, cx);
+        }
         let main = self.main.clone();
         let items = std::mem::take(&mut self.items);
         // The text cursor in messages (cursor.rs, prose.rs): not focused here; no comments on messages yet.
         crate::cursor::set_marks(Default::default(), p.removed);
         crate::cursor::begin(p.accent.opacity(0.22), p.accent, false, None, &self.list);
+        // Find's matches, painted in the messages' text (prose.rs); the colors of the web view's (--find).
+        let query = self.query(cx);
+        crate::cursor::set_find(self.find.as_ref().filter(|_| !query.is_empty()).map(|f| crate::cursor::Find {
+            query: query.clone(),
+            current: f.matches.get(f.current).cloned(),
+            color: hsla(43. / 360., 1., 0.62, if p.dark { 0.3 } else { 0.32 }),
+            current_color: hsla(28. / 360., 1., 0.58, if p.dark { 0.45 } else { 0.5 }),
+        }));
+        let mut row_of = std::collections::HashMap::new();
         let mut rows: Vec<AnyElement> = vec![];
         let mut previous_agent = false;
         let mut model = text(&main, "model");
@@ -491,6 +653,9 @@ impl Render for ThreadView {
             let item = match unit {
                 Unit::Group(tools) if tools.len() > 1 => {
                     crate::cursor::row(rows.len());
+                    for tool in &tools {
+                        row_of.insert(text(tool, "key"), rows.len());
+                    }
                     let gap = if previous_agent { 10. } else { 16. };
                     rows.push(div().mt(px(gap)).child(self.group_row(&tools, !previous_agent, &model, &p, window, cx)).into_any_element());
                     previous_agent = true;
@@ -502,6 +667,7 @@ impl Render for ThreadView {
             crate::cursor::row(rows.len());
             let kind = text(item, "kind");
             let key = text(item, "key");
+            row_of.insert(key.clone(), rows.len());
             let agent = kind == "assistant" || kind == "tool";
             if kind == "assistant" && !text(item, "model").is_empty() {
                 model = text(item, "model");
@@ -536,6 +702,7 @@ impl Render for ThreadView {
         }
         // The items were taken for this frame's rows (not copied): back where they were.
         self.items = items;
+        self.row_of = row_of;
         let viewer = self.meta["me"]["role"] == "viewer";
         rows.push(
             div()
@@ -587,6 +754,10 @@ impl Render for ThreadView {
             .bg(p.paper)
             .text_color(p.ink)
             .font_family(theme::SANS)
+            .key_context("ThreadView")
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|this, action: &RunCommand, window, cx| this.command(action, window, cx)))
+            .child(self.find_bar(&p, cx))
             .child(
                 div()
                     .relative()

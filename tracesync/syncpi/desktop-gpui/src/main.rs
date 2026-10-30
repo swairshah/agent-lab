@@ -222,6 +222,7 @@ impl Desktop {
         }
         let host = self.host.clone();
         let view = cx.new(|cx| ThreadView::new(id.to_owned(), host, window, cx));
+        view.update(cx, |view, cx| view.focus_composer(window, cx));
         self.threads.insert(id.to_owned(), view);
     }
 
@@ -540,7 +541,13 @@ fn main() -> anyhow::Result<()> {
             .into_iter()
             .filter(|c| NATIVE.contains(&c.id.as_str()))
             .filter_map(|c| Some(KeyBinding::new(&c.keys?, RunCommand { id: c.id.into() }, None)))
-            .chain([KeyBinding::new("cmd-q", RunCommand { id: "app.quit".into() }, None)])
+            .chain([
+                KeyBinding::new("cmd-q", RunCommand { id: "app.quit".into() }, None),
+                // Find in a native thread; a thread's web page keeps its own.
+                KeyBinding::new("cmd-f", RunCommand { id: "find.open".into() }, Some("ThreadView")),
+                KeyBinding::new("cmd-g", RunCommand { id: "find.next".into() }, Some("ThreadView")),
+                KeyBinding::new("cmd-shift-g", RunCommand { id: "find.previous".into() }, Some("ThreadView")),
+            ])
             .collect();
         cx.bind_keys(bindings);
         cx.on_action(|action: &RunCommand, cx| {

@@ -317,6 +317,21 @@ pub(crate) fn visual_lines(
                             }
                         }
                     }
+                    // Find's matches: tinted, the current one more strongly.
+                    let (found, found_color, current_color) = crate::cursor::found(&paint_id, &marked_text);
+                    for (from, to, current) in found {
+                        if let (Some(a), Some(b)) = (at(from), at(to)) {
+                            let mut y = a.y;
+                            while y <= b.y + px(0.5) {
+                                let left = if (y - a.y).abs() < px(0.5) { a.x } else { bounds.left() };
+                                let right = if (y - b.y).abs() < px(0.5) { b.x } else { bounds.right() };
+                                if right > left {
+                                    window.paint_quad(fill(Bounds::new(point(left, y), size(right - left, height)), if current { current_color } else { found_color }));
+                                }
+                                y += height;
+                            }
+                        }
+                    }
                     if let Some((from, to)) = paint.selected {
                         if let (Some(a), Some(b)) = (at(from), at(to)) {
                             let mut y = a.y;

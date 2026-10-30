@@ -37,8 +37,29 @@ struct Text {
     row: usize,
 }
 
+/// Find in the thread (thread.rs): what's searched for (lowercase), and the current match, as the message it's in and
+/// its place among that message's matches; the colors of a match and of the current one.
+#[derive(Clone)]
+pub struct Find {
+    pub query: String,
+    pub current: Option<(String, usize)>,
+    pub color: Hsla,
+    pub current_color: Hsla,
+}
+
+/// Where `query` (lowercase) is in `text`, as byte ranges, ignoring case (exactly, when lowercasing would move them).
+pub fn occurrences(text: &str, query: &str) -> Vec<(usize, usize)> {
+    if query.is_empty() {
+        return vec![];
+    }
+    let lower = text.to_lowercase();
+    let (hay, needle) = if lower.len() == text.len() { (lower.as_str(), query) } else { (text, query) };
+    hay.match_indices(needle).map(|(at, m)| (at, at + m.len())).collect()
+}
+
 #[derive(Default)]
 struct State {
+    find: Option<Find>,
     drawing: Vec<Text>,
     last: Vec<Text>,
     caret: Option<Pos>,
@@ -106,6 +127,32 @@ pub fn begin(
         s.placed.clear();
         s.order = None;
     });
+}
+
+pub fn set_find(find: Option<Find>) {
+    STATE.with_borrow_mut(|s| s.find = find);
+}
+
+/// Find's matches in text `id` (whose text is `full`): byte ranges, and whether each is the current match (counted
+/// with the matches in the texts of the same message drawn before this one); and the two colors.
+pub fn found(id: &str, full: &str) -> (Vec<(usize, usize, bool)>, Hsla, Hsla) {
+    STATE.with_borrow(|s| {
+        let Some(find) = &s.find else { return (vec![], Hsla::default(), Hsla::default()) };
+        let message = message_of(id);
+        let before: usize = texts(s)
+            .iter()
+            .take_while(|t| t.id != id)
+            .filter(|t| t.message == message)
+            .map(|t| occurrences(&t.text, &find.query).len())
+            .sum();
+        let current = find.current.as_ref().filter(|(m, _)| *m == message).map(|(_, n)| *n);
+        let ranges = occurrences(full, &find.query)
+            .into_iter()
+            .enumerate()
+            .map(|(n, (a, b))| (a, b, current == Some(before + n)))
+            .collect();
+        (ranges, find.color, find.current_color)
+    })
 }
 
 /// This frame's comments on messages, by message key, and the color they're marked in.

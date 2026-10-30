@@ -46,13 +46,18 @@ background.
   Open shows one in the panel beside the thread: HTML in a private webview (its own data store, no bridge to the
   app), a recording in a webview that plays it, images and Markdown natively.
 
-Not native yet: comments, side threads, Find, drafts written together, the inbox, settings. Switch back to the web view for those. `SYNCPI_GPUI_NATIVE=1` starts in native mode.
+- Find (⌘F) in people's and the agent's messages: the count, ⌘G / ⇧⌘G or Enter to move, the matches tinted in the
+  text (the current one more strongly; prose.rs paints them from cursor.rs), Esc to close. Tool output isn't searched
+  yet.
+
+Not native yet: comments, side threads, drafts written together, the inbox, settings. Switch back to the web view for those. `SYNCPI_GPUI_NATIVE=1` starts in native mode.
 
 ## Testing without taking the screen
 
 `SYNCPI_GPUI_WINDOW=x,y,w,h` places the window and opens it without focus, as a floating panel: macOS keeps a corner
 of it on screen, and GPUI stops drawing a window macOS reports as covered, so the corner stays above other windows.
 `SYNCPI_GPUI_TEST_OPEN=html|svg|image|markdown` opens the first artifact of that kind, as a click on its Open would.
-`SYNCPI_FAUX=1` runs the host with the scripted model; `SYNCPI_HOME` points at a test home; `SYNCPI_GPUI_THEME=dark`
+`SYNCPI_GPUI_TEST_FIND=<text>` searches for it once the thread has loaded. `SYNCPI_FAUX=1` runs the host with the
+scripted model; `SYNCPI_HOME` points at a test home; `SYNCPI_GPUI_THEME=dark`
 (or `light`) overrides the system's appearance. Capture the window with
 `screencapture -x -o -l <window id>`.
