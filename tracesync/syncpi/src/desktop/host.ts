@@ -114,7 +114,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       const push = () => {
         timer = undefined;
         const { items, ...state } = live.native[conv].state;
-        const meta = { me: live.native.me, members: live.native.members, online: live.native.online, target: live.native.target, role: live.role, drafts: conv === 'main' ? live.draftsNow() : [], sent: live.sentDrafts.length, marks: Object.fromEntries(live.marks), views: Object.fromEntries(live.views) };
+        const meta = { me: live.native.me, members: live.native.members, online: live.native.online, target: live.native.target, role: live.role, drafts: conv === 'main' ? live.draftsNow() : [], sent: live.sentDrafts.length, marks: Object.fromEntries(live.marks), views: Object.fromEntries(live.views), connection: live.conn.state };
         const who = JSON.stringify(meta);
         if (state.rev === rev && who === people) return;
         rev = state.rev;
@@ -127,7 +127,9 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       live.onMessage.add(listener);
       push();
       const ping = setInterval(() => res.write(': ping\n\n'), 15_000);
-      req.on('close', () => { live.onMessage.delete(listener); clearInterval(ping); clearTimeout(timer); });
+      // The connection's state changes without a message: looked at every two seconds.
+      const look = setInterval(listener, 2_000);
+      req.on('close', () => { live.onMessage.delete(listener); clearInterval(ping); clearInterval(look); clearTimeout(timer); });
       return;
     }
     // The native composer's text, as a draft written together (runtime.ts writeDraft): `owner` is whose (default: this

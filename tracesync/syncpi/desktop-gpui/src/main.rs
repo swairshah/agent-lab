@@ -881,6 +881,7 @@ impl Desktop {
         let project = thread.map(|t| t.name.clone()).unwrap_or_default();
         let view = self.main_view();
         let (online, role) = view.as_ref().map(|v| (v.read(cx).online(), v.read(cx).role())).unwrap_or_default();
+        let connection = view.as_ref().map(|v| v.read(cx).connection()).unwrap_or_default();
         let unread = self.unread_mentions().len();
         let button = |id: &'static str, icon: gpui_component::Icon, tip: &'static str, command: &'static str| {
             div()
@@ -952,6 +953,9 @@ impl Desktop {
             })
             .child(div().min_w_0().truncate().text_size(sz(14.)).font_weight(FontWeight::SEMIBOLD).text_color(p.ink).child(title))
             .child(div().flex_none().text_size(sz(12.5)).text_color(p.faint).child(project))
+            .when(!matches!(connection.as_str(), "open" | ""), |d| {
+                d.child(div().flex_none().px_2().rounded(px(4.)).bg(p.warn.opacity(0.15)).text_size(sz(12.)).text_color(p.warn).child(if connection == "closed" { "Reconnecting…" } else { "Connecting…" }))
+            })
             .child(div().flex_1())
             .child(faces.mr_2())
             .when(role != "viewer", |d| d.child(button("top-land", Icon::default().path("syncpi/git-branch.svg"), "Land changes on main", "agent.land")))

@@ -16,6 +16,7 @@ struct Style {
     code: bool,
     strike: bool,
     link: bool,
+    mention: bool,
 }
 
 /// Text with its runs and its links, built from inline nodes.
@@ -26,10 +27,51 @@ struct Inline {
     links: Vec<(std::ops::Range<usize>, String)>,
 }
 
+thread_local! {
+    /// The thread's people, to mark where messages mention them (@Name), as the web view does.
+    static MENTIONS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+pub fn set_mentions(mut names: Vec<String>) {
+    // Longest first, so "@Ada Lovelace" isn't taken for "@Ada".
+    names.sort_by_key(|n| std::cmp::Reverse(n.len()));
+    MENTIONS.with_borrow_mut(|m| *m = names);
+}
+
+/// Where `s` mentions someone: the byte ranges of each "@Name".
+fn mentions_in(s: &str) -> Vec<std::ops::Range<usize>> {
+    if !s.contains('@') {
+        return vec![];
+    }
+    MENTIONS.with_borrow(|names| {
+        let mut out = vec![];
+        for (at, _) in s.match_indices('@') {
+            let rest = &s[at + 1..];
+            if let Some(name) = names.iter().find(|n| rest.len() >= n.len() && rest.is_char_boundary(n.len()) && rest[..n.len()].eq_ignore_ascii_case(n) && !rest[n.len()..].starts_with(|c: char| c.is_alphanumeric())) {
+                out.push(at..at + 1 + name.len());
+            }
+        }
+        out
+    })
+}
+
 impl Inline {
     fn push(&mut self, s: &str, style: Style, p: &Palette) {
         if s.is_empty() {
             return;
+        }
+        // Mentions stand out, in the accent color.
+        if !style.code && !style.mention {
+            let found = mentions_in(s);
+            if !found.is_empty() {
+                let mut from = 0;
+                for range in found {
+                    self.push(&s[from..range.start], style, p);
+                    self.push(&s[range.clone()], Style { mention: true, bold: true, ..style }, p);
+                    from = range.end;
+                }
+                return self.push(&s[from..], style, p);
+            }
         }
         let mut font = font(if style.code { MONO } else { SANS });
         if style.bold {
@@ -42,7 +84,7 @@ impl Inline {
         self.runs.push(TextRun {
             len: s.len(),
             font,
-            color: if style.link { p.accent } else { p.ink },
+            color: if style.link || style.mention { p.accent } else { p.ink },
             background_color: style.code.then_some(p.sunken),
             underline: style.link.then(|| UnderlineStyle {
                 thickness: px(1.),
@@ -505,4 +547,17 @@ pub fn render(id: &str, source: &str, cx: &App) -> AnyElement {
             as_line(id.clone(), &node.to_string(), block(id, node, &p))
         }))
         .into_any_element()
+}
+
+#[cfg(test)]
+mod mention_tests {
+    use super::{mentions_in, set_mentions};
+
+    #[test]
+    fn mentions_are_whole_names_longest_first() {
+        set_mentions(vec!["Ada".into(), "Ada Lovelace".into(), "Bob".into()]);
+        let s = "@Ada Lovelace and @bob, not @Bobby or an@email";
+        let found: Vec<&str> = mentions_in(s).into_iter().map(|r| &s[r]).collect();
+        assert_eq!(found, vec!["@Ada Lovelace", "@bob"]);
+    }
 }

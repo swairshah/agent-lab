@@ -139,6 +139,8 @@ pub fn render(desktop: &Desktop, _window: &mut Window, cx: &mut Context<Desktop>
             )),
     );
     let groups = groups(&desktop.catalog, desktop.archives);
+    // Threads with mentions not yet read (the inbox's), as the Tauri app's sidebar marks them.
+    let unread: std::collections::HashSet<String> = desktop.unread_mentions().iter().filter_map(|i| i["thread"].as_str().map(str::to_owned)).collect();
     if groups.is_empty() {
         list = list.child(div().px(px(8.)).py_1().text_size(sz(13.)).text_color(p.muted).child(if desktop.archives { "No archived threads." } else { "No threads yet." }));
     }
@@ -208,6 +210,7 @@ pub fn render(desktop: &Desktop, _window: &mut Window, cx: &mut Context<Desktop>
                     .when(selected, |d| d.bg(p.ink.opacity(0.08)))
                     .hover(|s| s.bg(p.ink.opacity(0.05)))
                     .child(div().flex_1().min_w_0().truncate().child(t.shown_title()))
+                    .when(unread.contains(&t.id), |d| d.child(div().flex_none().size(px(7.)).rounded_full().bg(p.accent)))
                     .children(t.tags.iter().take(2).map(|tag| {
                         div().flex_none().px(px(5.)).rounded(px(4.)).bg(p.rule).text_size(sz(11.)).text_color(p.muted).child(tag.clone())
                     }))

@@ -167,6 +167,8 @@ pub struct ThreadView {
     written: String,
     writes: u64,
     attachments: Vec<Attachment>,
+    /// Messages sent from here the server hasn't acknowledged yet (request id, text, files): shown "sending…".
+    pending: Vec<(String, String, Vec<String>)>,
     completion: Option<Completion>,
     /// What this person last sent from here (↑ in an empty composer brings it back), and a note to show.
     last_sent: String,
@@ -280,6 +282,7 @@ impl ThreadView {
             written: String::new(),
             writes: 0,
             attachments: vec![],
+            pending: vec![],
             completion: None,
             last_sent: String::new(),
             note: None,
@@ -295,8 +298,10 @@ impl ThreadView {
         }
         self.items = event["keys"].as_array().into_iter().flatten().filter_map(|k| by_key.remove(k.as_str()?)).collect();
         self.main = event["state"].clone();
-        self.meta = json!({ "me": event["me"], "members": event["members"], "online": event["online"], "target": event["target"], "role": event["role"], "marks": event["marks"], "views": event["views"] });
+        self.meta = json!({ "me": event["me"], "members": event["members"], "online": event["online"], "target": event["target"], "role": event["role"], "marks": event["marks"], "views": event["views"], "connection": event["connection"] });
         self.drafts = event["drafts"].as_array().cloned().unwrap_or_default();
+        let acknowledged: HashSet<String> = self.items.iter().filter_map(|i| i["requestId"].as_str().map(str::to_owned)).collect();
+        self.pending.retain(|(id, _, _)| !acknowledged.contains(id));
         self.loaded = true;
         if self.find.is_some() {
             self.recount(false, cx);
@@ -583,8 +588,21 @@ impl ThreadView {
             .into_any_element()
     }
 
-    fn send(&self, message: Value, _cx: &mut Context<Self>) {
+    fn send(&mut self, message: Value, cx: &mut Context<Self>) {
+        // A message of this person's to the shared thread shows at once, "sending…", until the server has it.
+        if message["type"] == "submit" && message["conv"].is_null() && self.conv == "main" {
+            let files: Vec<String> = message["attachments"].as_array().into_iter().flatten().filter_map(|a| a["name"].as_str().map(str::to_owned)).collect();
+            if !text(&message, "text").is_empty() || !files.is_empty() {
+                self.pending.push((text(&message, "requestId"), text(&message, "text"), files));
+                cx.notify();
+            }
+        }
         let _ = self.worker.send(Job::Send(message));
+    }
+
+    /// The connection to the thread's server, as the host has it: "open", "connecting", "closed".
+    pub fn connection(&self) -> String {
+        text(&self.meta, "connection")
     }
 
     fn me(&self) -> String {
@@ -1151,7 +1169,7 @@ impl ThreadView {
     }
 
     /// A message to the thread's server, from the app (a model change, compacting, landing…).
-    pub fn post(&self, message: Value, cx: &mut Context<Self>) {
+    pub fn post(&mut self, message: Value, cx: &mut Context<Self>) {
         self.send(message, cx);
     }
 
@@ -1683,6 +1701,8 @@ impl Render for ThreadView {
             self.send_comment(window, cx);
         }
         self.adopt_draft(window, cx);
+        // People's names, for marking their mentions in messages (prose.rs).
+        crate::prose::set_mentions(self.meta["members"].as_array().into_iter().flatten().map(|m| text(m, "name")).filter(|n| !n.is_empty()).collect());
         // Comments waiting on graphics (annotate.rs): the thread's, to draw; what was made here, to send.
         crate::annotate::set(&self.meta["marks"], text(&self.meta["me"], "id"), text(&self.meta["me"], "name"));
         for mut message in crate::annotate::take_outbox() {
@@ -1825,6 +1845,28 @@ impl Render for ThreadView {
         }
         self.keys_by_row = keys_by_row;
         self.row_of = row_of;
+        for (n, (_, body, files)) in self.pending.iter().enumerate() {
+            let name = text(&self.meta["me"], "name");
+            let color = theme::person_color(&name, p.dark);
+            let mut shown = body.clone();
+            if !files.is_empty() {
+                shown += &format!("{}[{}]", if shown.is_empty() { "" } else { "  " }, files.join(", "));
+            }
+            rows.push(
+                div()
+                    .id(eid(format!("pending-{n}")))
+                    .mt(px(16.))
+                    .w(px(content_width() + AVATAR + GAP))
+                    .flex()
+                    .items_start()
+                    .gap(px(12.))
+                    .opacity(0.6)
+                    .child(div().flex_none().text_size(sz(13.5)).line_height(sz(LINE)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(name))
+                    .child(div().flex_1().min_w_0().text_size(sz(15.)).line_height(sz(LINE)).whitespace_normal().child(shown))
+                    .child(div().flex_none().text_size(sz(12.5)).line_height(sz(LINE)).text_color(p.faint).child("sending…"))
+                    .into_any_element(),
+            );
+        }
         for typing in self.typing_rows(&p, cx) {
             rows.push(div().mt(px(16.)).child(typing).into_any_element());
         }
