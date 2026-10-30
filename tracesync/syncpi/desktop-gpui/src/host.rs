@@ -185,6 +185,12 @@ impl Host {
         Ok(response.bytes()?.to_vec())
     }
 
+    /// A GET's status and body as they came (an answer that's text when it works and JSON when it doesn't).
+    pub fn raw(&self, path: &str) -> Result<(u16, Vec<u8>)> {
+        let response = self.http.get(format!("{}{path}", self.origin)).bearer_auth(&self.secret).send()?;
+        Ok((response.status().as_u16(), response.bytes()?.to_vec()))
+    }
+
     pub fn post(&self, path: &str, body: &Value) -> Result<Value> {
         let response = self
             .http

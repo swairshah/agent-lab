@@ -41,6 +41,10 @@ struct FileTab {
     /// Lines selected (1-based, inclusive), to comment on.
     lines: Option<(usize, usize)>,
     editing: Option<Editor>,
+    /// Showing the file as it was before the thread's last turn (Delta's version picker), and that version, or
+    /// why it can't be shown.
+    before: bool,
+    earlier: Option<Result<String, String>>,
 }
 
 struct Editor {
@@ -156,12 +160,57 @@ impl PanelView {
         }
     }
 
-    /// The thread's artifacts changed.
+    /// The thread's artifacts changed: a file the thread changed again is read again in its tab (unless it's being
+    /// edited there), and earlier versions read so far are out of date.
     pub fn set_artifacts(&mut self, artifacts: Vec<Art>, cx: &mut Context<Self>) {
-        if artifacts != self.artifacts {
-            self.artifacts = artifacts;
-            cx.notify();
+        if artifacts == self.artifacts {
+            return;
         }
+        let fresh: Vec<String> = artifacts.iter().filter(|a| !self.artifacts.contains(a)).filter_map(|a| a.path.clone()).collect();
+        self.artifacts = artifacts;
+        let mut reread = vec![];
+        for tab in &mut self.tabs {
+            tab.earlier = None;
+            if tab.editing.is_none() && fresh.iter().any(|p| *p == tab.path || p.ends_with(&format!("/{}", tab.path))) {
+                reread.push(tab.path.clone());
+            }
+        }
+        for path in reread {
+            self.read_file(path, cx);
+        }
+        let shown_before = match &self.active {
+            Tab::File(path) => self.tabs.iter().find(|t| t.path == *path && t.before).map(|t| t.path.clone()),
+            _ => None,
+        };
+        if let Some(path) = shown_before {
+            self.read_earlier(path, cx);
+        }
+        cx.notify();
+    }
+
+    /// The file as it was before the thread's last turn, from the session's server.
+    fn read_earlier(&mut self, path: String, cx: &mut Context<Self>) {
+        let (host, id) = (self.host.clone(), self.id.clone());
+        cx.spawn(async move |this, cx| {
+            let query = crate::url_escape(&path);
+            let read = cx.background_executor().spawn(async move { host.raw(&format!("/session/{id}/api/file?path={query}&at=before-last-turn")) }).await;
+            let earlier = match read {
+                Ok((200, bytes)) => Ok(String::from_utf8_lossy(&bytes).to_string()),
+                Ok((_, bytes)) => Err(match serde_json::from_slice::<Value>(&bytes).ok().and_then(|v| v["reason"].as_str().map(str::to_owned)).as_deref() {
+                    Some("no-turn") => "The agent hasn't taken a turn yet.".to_owned(),
+                    Some("absent") => format!("{path} didn't exist before the last turn."),
+                    _ => "Couldn't load the earlier version.".to_owned(),
+                }),
+                Err(e) => Err(e.to_string()),
+            };
+            let _ = this.update(cx, |this, cx| {
+                if let Some(tab) = this.tabs.iter_mut().find(|t| t.path == path) {
+                    tab.earlier = Some(earlier);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     pub fn show_changes(&mut self, cx: &mut Context<Self>) {
@@ -207,7 +256,7 @@ impl PanelView {
     /// Opens a project file in its tab (reading it again when it's open already).
     pub fn open_file(&mut self, path: String, cx: &mut Context<Self>) {
         if !self.tabs.iter().any(|t| t.path == path) {
-            self.tabs.push(FileTab { path: path.clone(), text: None, rendered: true, lines: None, editing: None });
+            self.tabs.push(FileTab { path: path.clone(), text: None, rendered: true, lines: None, editing: None, before: false, earlier: None });
         }
         self.active = Tab::File(path.clone());
         self.read_file(path, cx);
@@ -604,7 +653,7 @@ impl PanelView {
         let p = palette(cx);
         let Some(tab) = self.tabs.iter().find(|t| t.path == path) else { return empty("", &p) };
         let markdown = artifact::kind_of_path(path) == artifact::Kind::Markdown;
-        let (editing, rendered, lines) = (tab.editing.is_some(), tab.rendered, tab.lines);
+        let (editing, rendered, lines, before) = (tab.editing.is_some(), tab.rendered, tab.lines, tab.before);
         let others = tab.editing.as_ref().map(|e| e.others.clone()).unwrap_or_default();
         let ready = tab.editing.as_ref().is_some_and(|e| e.ready);
         let (edit_path, toggle_path, reload_path) = (path.to_owned(), path.to_owned(), path.to_owned());
@@ -627,19 +676,59 @@ impl PanelView {
                     cx.notify();
                 })))
             })
-            .when(!editing, |d| d.child(link_button("file-reload", "Reload", &p).on_click(cx.listener(move |this, _, _, cx| this.read_file(reload_path.clone(), cx)))))
-            .child(link_button("file-edit", if editing { "Done" } else { "Edit" }, &p).on_click(cx.listener(move |this, _, window, cx| {
+            .when(!editing, |d| {
+                // Delta's version picker: the file now, or as it was before the thread's last turn.
+                let (latest_path, before_path) = (reload_path.clone(), reload_path.clone());
+                let option = |id: &'static str, label: &'static str, on: bool| {
+                    div().id(id).px_2().py(px(2.)).rounded(px(5.)).text_size(sz(12.)).cursor_pointer().when(on, |d| d.bg(p.raised).text_color(p.ink).shadow_sm()).when(!on, |d| d.text_color(p.muted))
+                };
+                d.child(
+                    div()
+                        .flex()
+                        .p(px(2.))
+                        .gap(px(2.))
+                        .rounded(px(6.))
+                        .bg(p.sunken)
+                        .child(option("version-latest", "Latest", !before).child("Latest").on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(tab) = this.tabs.iter_mut().find(|t| t.path == latest_path) {
+                                tab.before = false;
+                            }
+                            cx.notify();
+                        })))
+                        .child(option("version-before", "Before last turn", before).child("Before last turn").on_click(cx.listener(move |this, _, _, cx| {
+                            let load = this.tabs.iter_mut().find(|t| t.path == before_path).map(|tab| {
+                                tab.before = true;
+                                tab.lines = None;
+                                tab.earlier.is_none()
+                            });
+                            if load == Some(true) {
+                                this.read_earlier(before_path.clone(), cx);
+                            }
+                            cx.notify();
+                        }))),
+                )
+            })
+            .when(!editing && !before, |d| d.child(link_button("file-reload", "Reload", &p).on_click(cx.listener(move |this, _, _, cx| this.read_file(reload_path.clone(), cx)))))
+            .when(!before, |d| d.child(link_button("file-edit", if editing { "Done" } else { "Edit" }, &p).on_click(cx.listener(move |this, _, window, cx| {
                 if editing {
                     this.stop_editing(&edit_path, cx);
                 } else {
                     this.start_editing(edit_path.clone(), window, cx);
                 }
-            })));
+            }))));
         let body: AnyElement = if let Some(editor) = &tab.editing {
             if ready {
                 div().size_full().font_family(MONO).text_size(sz(12.5)).child(Input::new(&editor.input).appearance(false).h_full()).into_any_element()
             } else {
                 empty("Opening the file to write together…", &p)
+            }
+        } else if before {
+            // An earlier version is for reading: no comments on lines that may not exist any more.
+            match &tab.earlier {
+                None => empty("Loading…", &p),
+                Some(Err(e)) => empty(e, &p),
+                Some(Ok(text)) if markdown && rendered => div().id("file-md-before").size_full().overflow_y_scroll().px_5().py_4().text_size(sz(14.5)).line_height(sz(23.)).child(message::render(&format!("before-{path}"), text, window, cx)).into_any_element(),
+                Some(Ok(text)) => code_lines(&format!("before-{path}"), path.rsplit('.').next().unwrap_or(""), text, None, &p, cx, None),
             }
         } else {
             match &tab.text {
