@@ -345,7 +345,9 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
                 // Each column's width, in pixels: a share of the room by its longest cell (a percentage of a box that
                 // scrolls sideways has nothing to resolve against, and cells collapsed to a letter wide), at least
                 // 90; wider than the room, the table scrolls.
-                let widths = column_widths(&rows, columns, crate::thread::content_width());
+                // The room: the thread's column, less the borders, and less the name in front in a person's message.
+                let room = crate::thread::content_width() - 8. - if id.starts_with("user-") { 64. } else { 0. };
+                let widths = column_widths(&rows, columns, room);
                 let total: f32 = widths.iter().sum();
                 let mut table = div()
                     .w(px(total))

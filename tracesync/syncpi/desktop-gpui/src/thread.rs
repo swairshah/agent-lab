@@ -769,25 +769,30 @@ impl ThreadView {
             let name = self.name_of(&owner, text(draft, "name"));
             let others: Vec<String> = draft["writers"].as_array().into_iter().flatten().filter(|w| text(w, "id") != owner).map(|w| text(w, "name")).collect();
             let status = if others.is_empty() { "typing…".to_owned() } else { format!("writing with {}…", others.join(", ")) };
-            // The others' cursors, as a bar in their color where each is.
-            let mut carets: Vec<(usize, String)> = draft["writers"]
+            // The others' cursors, as a bar in their color where each is, in text that wraps as the thread's does.
+            let mut carets: Vec<(usize, Hsla)> = draft["writers"]
                 .as_array()
                 .into_iter()
                 .flatten()
                 .filter(|w| text(w, "id") != me)
-                .map(|w| (byte_of_utf16(&body, w["caret"].as_u64().unwrap_or(0) as usize), text(w, "name")))
+                .map(|w| (byte_of_utf16(&body, w["caret"].as_u64().unwrap_or(0) as usize), theme::person_color(&text(w, "name"), p.dark)))
                 .collect();
-            carets.sort();
-            let mut line = div().flex().flex_wrap().items_baseline().whitespace_normal();
+            carets.sort_by_key(|(at, _)| *at);
+            let mut shown = String::new();
+            let mut marks = vec![];
             let mut from = 0;
-            for (at, who) in carets {
-                if at < from {
+            for (at, color) in carets {
+                if at < from || !body.is_char_boundary(at) {
                     continue;
                 }
-                line = line.child(body[from..at].to_owned()).child(div().w(px(2.)).h(px(17.)).bg(theme::person_color(&who, p.dark)));
+                shown.push_str(&body[from..at]);
+                let start = shown.len();
+                shown.push('▏');
+                marks.push((start..shown.len(), HighlightStyle { color: Some(color), font_weight: Some(FontWeight::BOLD), ..Default::default() }));
                 from = at;
             }
-            line = line.child(body[from..].to_owned());
+            shown.push_str(&body[from..]);
+            let line = StyledText::new(shown).with_highlights(marks);
             let joining = owner.clone();
             rows.push(
                 div()
@@ -796,24 +801,36 @@ impl ThreadView {
                     .items_start()
                     .gap(px(12.))
                     .child(div().flex_none().text_size(sz(13.5)).line_height(sz(LINE)).font_weight(FontWeight::SEMIBOLD).text_color(theme::person_color(&name, p.dark)).child(name.clone()))
-                    .child(div().flex_1().min_w_0().text_size(sz(15.)).line_height(sz(LINE)).text_color(p.ink_2).child(line))
-                    .child(div().flex_none().text_size(sz(12.5)).line_height(sz(LINE)).text_color(p.faint).child(status))
-                    .when(can_write, |d| {
-                        d.child(
-                            div()
-                                .id(eid(format!("join-{owner}")))
-                                .flex_none()
-                                .px_2()
-                                .rounded(px(5.))
-                                .text_size(sz(12.5))
-                                .line_height(sz(LINE))
-                                .text_color(p.accent)
-                                .cursor_pointer()
-                                .hover(|s| s.bg(p.sunken))
-                                .child("Write together")
-                                .on_click(cx.listener(move |this, _, window, cx| this.join_draft(joining.clone(), window, cx))),
-                        )
-                    })
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(div().text_size(sz(15.)).line_height(sz(LINE)).text_color(p.ink_2).whitespace_normal().child(line))
+                            // Who's writing, and Write together, under the text: beside it they'd cover it when it's long.
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(div().text_size(sz(12.5)).text_color(p.faint).child(status))
+                                    .when(can_write, |d| {
+                                        d.child(
+                                            div()
+                                                .id(eid(format!("join-{owner}")))
+                                                .px_2()
+                                                .rounded(px(5.))
+                                                .text_size(sz(12.5))
+                                                .text_color(p.accent)
+                                                .cursor_pointer()
+                                                .hover(|s| s.bg(p.sunken))
+                                                .child("Write together")
+                                                .on_click(cx.listener(move |this, _, window, cx| this.join_draft(joining.clone(), window, cx))),
+                                        )
+                                    }),
+                            ),
+                    )
                     .into_any_element(),
             );
         }
@@ -1036,7 +1053,13 @@ impl ThreadView {
                 .flatten()
                 .filter(|m| text(m, "id") != me && text(m, "name").to_lowercase().starts_with(&typed.to_lowercase()))
                 .map(|m| (format!("@{}", text(m, "name")), text(m, "role"), format!("@{} ", text(m, "name"))))
-                .collect()
+                // A name once, even when two people share it (a mention is by name).
+                .fold(Vec::<(String, String, String)>::new(), |mut out, item| {
+                    if !out.iter().any(|(label, _, _)| *label == item.0) {
+                        out.push(item);
+                    }
+                    out
+                })
         } else {
             vec![]
         };
@@ -1728,7 +1751,13 @@ impl Render for ThreadView {
             && !self.meta["me"].is_null()
             && !TEST_TYPE.replace(true)
         {
-            self.composer.update(cx, |state, cx| state.set_value(typed, window, cx));
+            // As typed: the cursor after the text.
+            let (line, character) = (typed.matches('\n').count() as u32, typed.rsplit('\n').next().unwrap_or("").chars().count() as u32);
+            self.composer.update(cx, |state, cx| {
+                state.set_value(typed, window, cx);
+                state.set_cursor_position(gpui_component::input::Position { line, character }, window, cx);
+            });
+            self.complete(cx);
         }
         if let Ok(more) = std::env::var("SYNCPI_GPUI_TEST_JOIN")
             && self.conv == "main"

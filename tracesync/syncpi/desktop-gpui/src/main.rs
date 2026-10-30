@@ -1303,7 +1303,7 @@ impl Desktop {
         }
     }
 
-    fn main_pane(&self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn main_pane(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let p = palette(cx);
         let thread = self.active.as_deref().and_then(|id| self.thread(id));
         let state = |title: String, detail: String| {
@@ -1394,6 +1394,9 @@ impl Desktop {
                 Some(view) => {
                     let panel = self.panel_open.then(|| self.active.as_ref().and_then(|id| self.panels.get(id).cloned())).flatten();
                     let wide = panel.as_ref().is_some_and(|p| p.read(cx).tree_open);
+                    // The panel takes what the thread can spare: the thread keeps at least 480 pixels, the panel 360.
+                    let room = f32::from(window.viewport_size().width) - if self.sidebar_open { 252. } else { 0. } - 480.;
+                    let panel_width = room.clamp(360., if wide { 820. } else { 600. });
                     let terminals = self.terminal_pane(cx);
                     let (top, follow) = (self.top_bar(cx), self.follow_bar(cx));
                     let row = div()
@@ -1413,7 +1416,7 @@ impl Desktop {
                                 .child(div().flex_1().min_h_0().child(view.clone()))
                                 .children(terminals),
                         )
-                        .children(panel.map(|panel| div().w(px(if wide { 820. } else { 600. })).flex_none().h_full().border_l_1().border_color(palette(cx).rule).child(panel)));
+                        .children(panel.map(|panel| div().w(px(panel_width)).flex_none().h_full().border_l_1().border_color(palette(cx).rule).child(panel)));
                     div().size_full().flex().flex_col().child(top).children(follow).child(row).into_any_element()
                 }
                 None => state("Opening".into(), String::new()),
