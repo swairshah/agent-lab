@@ -49,7 +49,13 @@ impl Desktop {
                 }
                 if let Some(first) = fresh.first() {
                     let what = if first["draft"].is_string() { "tagged you in a draft" } else { "mentioned you" };
-                    this.toast(format!("{} {what} in {}", first["author"].as_str().unwrap_or("Someone"), first["threadTitle"].as_str().unwrap_or("a thread")), false, cx);
+                    let (author, thread) = (first["author"].as_str().unwrap_or("Someone"), first["threadTitle"].as_str().unwrap_or("a thread"));
+                    this.toast(format!("{author} {what} in {thread}"), false, cx);
+                    // And from the system when the app isn't in front, as the Tauri app does.
+                    if !this.window_active {
+                        let line: String = first["text"].as_str().unwrap_or("").lines().next().unwrap_or("").chars().take(140).collect();
+                        notify(&format!("{author} {what}"), &format!("{thread}: {line}"));
+                    }
                 }
                 if items != this.mentions {
                     this.mentions = items;
@@ -289,4 +295,11 @@ pub fn ago(at_ms: f64) -> String {
         3600..86400 => format!("{} h ago", s / 3600),
         _ => format!("{} d ago", s / 86400),
     }
+}
+
+/// A notification from the system. The text goes as the script's arguments, never into the script itself.
+fn notify(title: &str, body: &str) {
+    let _ = std::process::Command::new("osascript")
+        .args(["-e", "on run argv", "-e", "display notification (item 2 of argv) with title (item 1 of argv)", "-e", "end run", title, body])
+        .spawn();
 }

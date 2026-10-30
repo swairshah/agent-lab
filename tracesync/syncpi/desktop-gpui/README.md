@@ -116,3 +116,10 @@ adds the text to it. `SYNCPI_FAUX=1` runs the host with the
 scripted model; `SYNCPI_HOME` points at a test home; `SYNCPI_GPUI_THEME=dark`
 (or `light`) overrides the system's appearance. Capture the window with
 `screencapture -x -o -l <window id>`.
+
+## Packaging
+
+`npm run package:gpui` builds it for release and makes `dist/SyncPi GPUI.app` (scripts/package-gpui.mjs): the Tauri
+app's icon, its own bundle id (dev.syncpi.gpui) and name so the two can live side by side, and the same private runtime
+(the host, the server, node and its modules) in Contents/Resources/runtime, where host.rs looks for it.
+

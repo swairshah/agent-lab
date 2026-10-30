@@ -680,7 +680,7 @@ impl PanelView {
                 // Delta's version picker: the file now, or as it was before the thread's last turn.
                 let (latest_path, before_path) = (reload_path.clone(), reload_path.clone());
                 let option = |id: &'static str, label: &'static str, on: bool| {
-                    div().id(id).px_2().py(px(2.)).rounded(px(5.)).text_size(sz(12.)).cursor_pointer().when(on, |d| d.bg(p.raised).text_color(p.ink).shadow_sm()).when(!on, |d| d.text_color(p.muted))
+                    div().id(id).px_2().py(px(2.)).rounded(px(5.)).text_size(sz(12.)).cursor_pointer().when(on, |d| d.bg(p.raised).text_color(p.ink).shadow_sm()).when(!on, |d| d.text_color(p.muted)).child(label)
                 };
                 d.child(
                     div()
@@ -689,13 +689,13 @@ impl PanelView {
                         .gap(px(2.))
                         .rounded(px(6.))
                         .bg(p.sunken)
-                        .child(option("version-latest", "Latest", !before).child("Latest").on_click(cx.listener(move |this, _, _, cx| {
+                        .child(option("version-latest", "Latest", !before).on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(tab) = this.tabs.iter_mut().find(|t| t.path == latest_path) {
                                 tab.before = false;
                             }
                             cx.notify();
                         })))
-                        .child(option("version-before", "Before last turn", before).child("Before last turn").on_click(cx.listener(move |this, _, _, cx| {
+                        .child(option("version-before", "Before last turn", before).on_click(cx.listener(move |this, _, _, cx| {
                             let load = this.tabs.iter_mut().find(|t| t.path == before_path).map(|tab| {
                                 tab.before = true;
                                 tab.lines = None;

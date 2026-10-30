@@ -58,6 +58,7 @@
     "test:projects": "node build.mjs && tsx test/projects.ts",
     "bench:search": "tsx test/bench/search.ts",
     "desktop:host": "npm run build && node dist/desktop-host.mjs",
-    "gpui": "npm run build && cargo run --manifest-path desktop-gpui/Cargo.toml"
+    "gpui": "npm run build && cargo run --manifest-path desktop-gpui/Cargo.toml",
+    "package:gpui": "npm run build && cargo build --manifest-path desktop-gpui/Cargo.toml --release && node scripts/package-gpui.mjs"
   }
 }

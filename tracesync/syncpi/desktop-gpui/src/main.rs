@@ -119,6 +119,8 @@ pub struct Desktop {
     started_ms: f64,
     /// Someone being followed (member id, name), and where this person was last said to be (follow.ts View).
     following: Option<(String, String)>,
+    /// The window is in front (a mention while it isn't gets a notification from the system).
+    window_active: bool,
     last_view: String,
     /// A message to scroll to once its thread is drawn (thread, item key), and a draft to join there.
     reveal: Option<(String, String, Option<String>)>,
@@ -176,6 +178,7 @@ impl Desktop {
             started_ms: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as f64).unwrap_or(0.),
             reveal: None,
             following: None,
+            window_active: true,
             last_view: String::new(),
         };
         // The thread list every second and a half, as the Tauri shell polls it; page messages every tick.
@@ -199,6 +202,7 @@ impl Desktop {
         })
         .detach();
         cx.observe_window_appearance(window, |this, window, cx| this.apply_theme(window, cx)).detach();
+        cx.observe_window_activation(window, |this, window, _| this.window_active = window.is_window_active()).detach();
         let mut this = this;
         // Threads are native unless the web view was chosen (View → Web thread); SYNCPI_GPUI_NATIVE=0 or 1 for tests.
         this.native = match std::env::var("SYNCPI_GPUI_NATIVE").as_deref() {
