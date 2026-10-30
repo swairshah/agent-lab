@@ -178,6 +178,8 @@ export class LiveSession {
   carets = new Map<string, { name: string; owner: string; anchor?: unknown; head?: unknown }>();
   /** Comments waiting on graphics, by graphic (annotate.ts), as the server shares them; for the native app. */
   marks = new Map<string, import('../shared/protocol.ts').SharedMark[]>();
+  /** Where everyone else is (follow.ts View), by member, for following them from the native app. */
+  views = new Map<string, { name: string; view: import('../shared/protocol.ts').View }>();
   /**
    * Project files the native app is editing, written together live (shared/drafts.ts): each one's Yjs document,
    * followed on the server while it's open here, written to by the app's plain text (writeFile).
@@ -298,6 +300,7 @@ export class LiveSession {
         if (m.update !== undefined) Y.applyUpdate(entry.doc, fromBase64(m.update), 'remote');
         if (m.sent !== undefined) { entry.tagged.clear(); this.sentDrafts.push({ owner: m.owner, by: m.sent }); this.sentDrafts = this.sentDrafts.slice(-20); }
       }
+      if (m.type === 'view' && m.memberId !== this.native.me?.id) { if (m.view === null) this.views.delete(m.memberId); else this.views.set(m.memberId, { name: m.name, view: m.view }); }
       if (m.type === 'marks') { if (m.marks.length === 0) this.marks.delete(m.key); else this.marks.set(m.key, m.marks); }
       if (m.type === 'fileDoc') {
         const entry = this.files.get(m.path);

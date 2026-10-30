@@ -117,6 +117,9 @@ pub struct Desktop {
     inbox_open: Option<inbox::InboxState>,
     inbox_focus: FocusHandle,
     started_ms: f64,
+    /// Someone being followed (member id, name), and where this person was last said to be (follow.ts View).
+    following: Option<(String, String)>,
+    last_view: String,
     /// A message to scroll to once its thread is drawn (thread, item key), and a draft to join there.
     reveal: Option<(String, String, Option<String>)>,
     /// The sidebar lists archived threads instead (⌘Y).
@@ -172,6 +175,8 @@ impl Desktop {
             inbox_focus: cx.focus_handle(),
             started_ms: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as f64).unwrap_or(0.),
             reveal: None,
+            following: None,
+            last_view: String::new(),
         };
         // The thread list every second and a half, as the Tauri shell polls it; page messages every tick.
         cx.spawn_in(window, async move |this, cx| {
@@ -483,6 +488,18 @@ impl Desktop {
                 panel.update(cx, |panel, cx| panel.select_lines(&path, range, cx));
             }
         }
+        // Native threads say whether they're working, for the sidebar.
+        for (id, view) in &self.threads {
+            let busy = view.read(cx).busy();
+            if self.busy.get(id) != Some(&busy) {
+                self.busy.insert(id.clone(), busy);
+                cx.notify();
+            }
+        }
+        if self.ticks % 2 == 0 {
+            self.share_view(cx);
+            self.follow(window, cx);
+        }
         // The open panel follows what the thread produces.
         if self.panel_open && self.ticks % 2 == 0 {
             self.panel(window, cx);
@@ -764,6 +781,204 @@ impl Desktop {
             panel.update(cx, |panel, cx| panel.set_artifacts(artifacts, cx));
         }
         Some(panel)
+    }
+
+    /// Where this person is (follow.ts View): which conversation, the message at the top, the file in the panel;
+    /// sent when it changes, so others can follow them.
+    fn share_view(&mut self, cx: &mut Context<Self>) {
+        let (Some(id), Some(shown)) = (self.active.clone(), self.shown_view()) else { return };
+        let panel = self.panel_open.then(|| self.panels.get(&id).and_then(|p| p.read(cx).shown_file())).flatten();
+        let mut view = json!({ "conv": self.aside.unwrap_or("main"), "panel": panel });
+        if let Some(at) = shown.read(cx).top_key() {
+            view["at"] = json!(at);
+        }
+        let said = view.to_string();
+        if said != self.last_view {
+            self.last_view = said;
+            self.post_to_thread(json!({ "type": "view", "view": view }), cx);
+        }
+    }
+
+    /// Following someone: this view goes where theirs does (their conversation, the message at their top, the file
+    /// in their panel).
+    fn follow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((member, name)) = self.following.clone() else { return };
+        let Some(view) = self.main_view().and_then(|v| v.read(cx).view_of(&member)) else {
+            self.following = None;
+            return self.toast(format!("{name} left; not following any more."), false, cx);
+        };
+        let conv = match view["conv"].as_str() {
+            Some("setup") => Some("setup"),
+            Some("land") => Some("land"),
+            _ => None,
+        };
+        if conv != self.aside {
+            match conv {
+                Some(conv) => self.open_aside(conv, window, cx),
+                None => self.aside = None,
+            }
+        }
+        if let (Some(at), Some(shown)) = (view["at"].as_str(), self.shown_view()) {
+            let at = at.to_owned();
+            shown.update(cx, |v, cx| {
+                if v.top_key().as_deref() != Some(at.as_str()) {
+                    v.reveal_key(&at, cx);
+                }
+            });
+        }
+        match view["panel"].as_str() {
+            Some(path) => {
+                let path = path.to_owned();
+                let same = self.panel_open && self.active.as_ref().and_then(|id| self.panels.get(id)).is_some_and(|p| p.read(cx).shown_file().as_deref() == Some(path.as_str()));
+                if !same {
+                    self.open_file(path, window, cx);
+                }
+            }
+            None if self.panel_open => {
+                self.panel_open = false;
+                cx.notify();
+            }
+            None => {}
+        }
+    }
+
+    fn stop_following(&mut self, cx: &mut Context<Self>) {
+        if self.following.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// Over a native thread, as the web view's top bar: its title, who's here (a face to follow them), and its
+    /// actions: land, share, git, terminal, the inbox, changes, settings. Dragging it moves the window.
+    fn top_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let p = palette(cx);
+        let thread = self.active.as_deref().and_then(|id| self.thread(id));
+        let title = thread.map(|t| t.shown_title()).unwrap_or_default();
+        let project = thread.map(|t| t.name.clone()).unwrap_or_default();
+        let view = self.main_view();
+        let (online, role) = view.as_ref().map(|v| (v.read(cx).online(), v.read(cx).role())).unwrap_or_default();
+        let unread = self.unread_mentions().len();
+        let button = |id: &'static str, icon: gpui_component::Icon, tip: &'static str, command: &'static str| {
+            div()
+                .id(id)
+                .p(px(5.))
+                .rounded(px(5.))
+                .text_color(p.muted)
+                .cursor_pointer()
+                .hover(|s| s.bg(p.sunken).text_color(p.ink))
+                .child(icon.size(px(15.)))
+                .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tip).build(window, cx))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, window, cx| this.run(&RunCommand { id: command.into() }, window, cx)))
+        };
+        let mut faces = div().flex().items_center();
+        for (id, name) in online.into_iter().take(5) {
+            let color = theme::person_color(&name, p.dark);
+            let following = self.following.as_ref().is_some_and(|(f, _)| *f == id);
+            let tip = if following { format!("Following {name}: click to stop") } else { format!("{name} is here: click to follow them") };
+            let (who, label) = (id.clone(), name.clone());
+            faces = faces.child(
+                div()
+                    .id(SharedString::from(format!("face-{id}")))
+                    .ml(px(-4.))
+                    .size(px(24.))
+                    .rounded_full()
+                    .border_2()
+                    .border_color(if following { p.accent } else { p.paper })
+                    .bg(color.opacity(0.2))
+                    .text_color(color)
+                    .text_size(px(9.5))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .child(theme::initials(&name))
+                    .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if this.following.as_ref().is_some_and(|(f, _)| *f == who) {
+                            this.following = None;
+                        } else {
+                            this.following = Some((who.clone(), label.clone()));
+                            this.toast(format!("Following {label}. Esc stops."), false, cx);
+                        }
+                        cx.notify();
+                    })),
+            );
+        }
+        use gpui_component::{Icon, IconName};
+        div()
+            .id("top-bar")
+            .h(px(44.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_1()
+            .pl(px(if self.sidebar_open { 16. } else { 84. }))
+            .pr_2()
+            .border_b_1()
+            .border_color(p.rule)
+            .on_mouse_down(MouseButton::Left, |event, window, _| {
+                if event.click_count == 2 {
+                    window.titlebar_double_click();
+                } else {
+                    window.start_window_move();
+                }
+            })
+            .child(div().min_w_0().truncate().text_size(sz(14.)).font_weight(FontWeight::SEMIBOLD).text_color(p.ink).child(title))
+            .child(div().flex_none().text_size(sz(12.5)).text_color(p.faint).child(project))
+            .child(div().flex_1())
+            .child(faces.mr_2())
+            .when(role != "viewer", |d| d.child(button("top-land", Icon::default().path("syncpi/git-branch.svg"), "Land changes on main", "agent.land")))
+            .when(role == "admin", |d| {
+                d.child(
+                    div()
+                        .id("top-share")
+                        .px_2()
+                        .py(px(3.))
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(p.rule)
+                        .text_size(sz(12.5))
+                        .text_color(p.ink_2)
+                        .cursor_pointer()
+                        .hover(|s| s.bg(p.sunken))
+                        .child("Share")
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(|this, _, _, cx| this.share(cx))),
+                )
+            })
+            .child(button("top-git", Icon::default().path("syncpi/code.svg"), "Uncommitted changes (⇧⌘G)", "view.git"))
+            .child(button("top-terminal", Icon::new(IconName::SquareTerminal), "Terminal (⌃`)", "view.terminal"))
+            .child(div().relative().child(button("top-inbox", Icon::new(IconName::Inbox), "Inbox (⇧⌘J)", "inbox.toggle")).when(unread > 0, |d| {
+                d.child(div().absolute().top(px(1.)).right(px(1.)).size(px(7.)).rounded_full().bg(p.accent))
+            }))
+            .child(button("top-changes", Icon::new(IconName::PanelRight), "Changes (⇧⌘D)", "view.changes"))
+            .child(button("top-settings", Icon::new(IconName::Settings), "Settings (⌘,)", "app.settings"))
+            .into_any_element()
+    }
+
+    /// While following someone: who, and how to stop.
+    fn follow_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (_, name) = self.following.as_ref()?;
+        let p = palette(cx);
+        Some(
+            div()
+                .h(px(32.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_4()
+                .border_b_1()
+                .border_color(p.rule)
+                .bg(p.accent_soft)
+                .text_size(sz(12.5))
+                .child(div().text_color(p.ink_2).child(format!("Following {name}")))
+                .child(div().id("follow-stop").text_color(p.accent).cursor_pointer().child("Stop (Esc)").on_click(cx.listener(|this, _, _, cx| this.stop_following(cx))))
+                .into_any_element(),
+        )
     }
 
     /// A new terminal for the open thread (running `command` when given), shown.
@@ -1081,12 +1296,26 @@ impl Desktop {
                     let panel = self.panel_open.then(|| self.active.as_ref().and_then(|id| self.panels.get(id).cloned())).flatten();
                     let wide = panel.as_ref().is_some_and(|p| p.read(cx).tree_open);
                     let terminals = self.terminal_pane(cx);
-                    div()
-                        .size_full()
+                    let (top, follow) = (self.top_bar(cx), self.follow_bar(cx));
+                    let row = div()
+                        .flex_1()
+                        .min_h_0()
                         .flex()
-                        .child(div().flex_1().min_w_0().h_full().flex().flex_col().child(div().flex_1().min_h_0().child(view.clone())).children(terminals))
-                        .children(panel.map(|panel| div().w(px(if wide { 820. } else { 600. })).flex_none().h_full().border_l_1().border_color(palette(cx).rule).child(panel)))
-                        .into_any_element()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .h_full()
+                                .flex()
+                                .flex_col()
+                                // Scrolling or clicking in the thread yourself stops following someone.
+                                .on_scroll_wheel(cx.listener(|this, _, _, cx| this.stop_following(cx)))
+                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.stop_following(cx)))
+                                .child(div().flex_1().min_h_0().child(view.clone()))
+                                .children(terminals),
+                        )
+                        .children(panel.map(|panel| div().w(px(if wide { 820. } else { 600. })).flex_none().h_full().border_l_1().border_color(palette(cx).rule).child(panel)));
+                    div().size_full().flex().flex_col().child(top).children(follow).child(row).into_any_element()
                 }
                 None => state("Opening".into(), String::new()),
             },
@@ -1155,6 +1384,12 @@ impl Render for Desktop {
             .text_color(p.ink)
             .font_family(theme::SANS)
             .key_context("SyncPi")
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" && this.following.is_some() {
+                    this.stop_following(cx);
+                    cx.stop_propagation();
+                }
+            }))
             .on_action(cx.listener(|this, action: &RunCommand, window, cx| this.run(action, window, cx)))
             .when(self.sidebar_open, |d| d.child(sidebar::render(self, window, cx)))
             .child(div().flex_1().h_full().min_w_0().child(self.main_pane(window, cx)))

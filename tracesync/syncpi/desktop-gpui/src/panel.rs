@@ -148,6 +148,14 @@ impl PanelView {
         }
     }
 
+    /// The file shown, if a file's tab is (for others following this person).
+    pub fn shown_file(&self) -> Option<String> {
+        match &self.active {
+            Tab::File(path) => Some(path.clone()),
+            _ => None,
+        }
+    }
+
     /// The thread's artifacts changed.
     pub fn set_artifacts(&mut self, artifacts: Vec<Art>, cx: &mut Context<Self>) {
         if artifacts != self.artifacts {

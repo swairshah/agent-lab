@@ -50,6 +50,11 @@ background.
   text (the current one more strongly; prose.rs paints them from cursor.rs), Esc to close. Tool output isn't searched
   yet.
 
+- the top bar over a native thread: its title, who's here (click a face to follow them: your view goes where
+  theirs does, the message at their top and the file in their panel; scrolling, clicking or Esc stops), land, share,
+  git, the terminal, the inbox, changes, settings; everyone shares where they are for this, as the web view does.
+- the timeline at the thread's right edge (a line per turn, milestones accented; hover says what it was, a click
+  goes there) and milestone cards in the thread.
 - comments on part of a graphic (an SVG, a screenshot): Comment, then a click marks a point and a drag an area, with
   a box for the comment; comments wait on the graphic, numbered and shared live with everyone (web view users too:
   the same keys), until Send puts them in the thread as one message with a picture of the graphic marked with them

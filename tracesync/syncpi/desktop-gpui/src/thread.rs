@@ -149,8 +149,9 @@ pub struct ThreadView {
     loaded: bool,
     /// Find (⌘F): its field, the matches (a message's key and the match's place among that message's), the current.
     find: Option<FindBar>,
-    /// Each item's row in the list, last frame: Find scrolls to its match's.
+    /// Each item's row in the list, last frame: Find scrolls to its match's; and an item's key for each row.
     row_of: std::collections::HashMap<String, usize>,
+    keys_by_row: Vec<String>,
     focus: FocusHandle,
     /// A comment being written on a message's text: the message's key, the quoted text, the block its box goes under.
     comment: Option<(String, String, String)>,
@@ -269,6 +270,7 @@ impl ThreadView {
             loaded: false,
             find: None,
             row_of: Default::default(),
+            keys_by_row: vec![],
             focus: cx.focus_handle(),
             comment: None,
             comment_input,
@@ -293,7 +295,7 @@ impl ThreadView {
         }
         self.items = event["keys"].as_array().into_iter().flatten().filter_map(|k| by_key.remove(k.as_str()?)).collect();
         self.main = event["state"].clone();
-        self.meta = json!({ "me": event["me"], "members": event["members"], "online": event["online"], "target": event["target"], "role": event["role"], "marks": event["marks"] });
+        self.meta = json!({ "me": event["me"], "members": event["members"], "online": event["online"], "target": event["target"], "role": event["role"], "marks": event["marks"], "views": event["views"] });
         self.drafts = event["drafts"].as_array().cloned().unwrap_or_default();
         self.loaded = true;
         if self.find.is_some() {
@@ -1728,6 +1730,30 @@ impl Render for ThreadView {
             let element = match kind.as_str() {
                 "user" => Some(self.user_row(item, &key, &p, window, cx)),
                 "assistant" => self.assistant_row(item, &key, !previous_agent, &model, &p, window, cx),
+                // A milestone the agent marked: a flag, its title and what changed (thread-view.ts milestoneCard).
+                "tool" if item["name"] == "milestone" && item["status"] != "error" && item["args"]["title"].is_string() => Some(
+                    row(
+                        (!previous_agent).then(|| avatar_model(&model, &p)),
+                        div()
+                            .w_full()
+                            .flex()
+                            .gap_2()
+                            .px_3()
+                            .py_2()
+                            .rounded(px(8.))
+                            .border_l_2()
+                            .border_color(p.accent)
+                            .bg(p.accent_soft)
+                            .child(div().text_color(p.accent).child("⚑"))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child(div().text_size(sz(14.5)).font_weight(FontWeight::SEMIBOLD).child(text(&item["args"], "title")))
+                                    .child(div().text_size(sz(13.5)).text_color(p.ink_2).child(text(&item["args"], "summary"))),
+                            ),
+                    )
+                    .into_any_element(),
+                ),
                 "tool" => Some(row((!previous_agent).then(|| avatar_model(&model, &p)), self.tool_content(item, &key, &p, window, cx)).into_any_element()),
                 "notice" => Some(
                     div()
@@ -1755,6 +1781,15 @@ impl Render for ThreadView {
         }
         // The items were taken for this frame's rows (not copied): back where they were.
         self.items = items;
+        let mut keys_by_row = vec![String::new(); rows.len()];
+        for (key, row) in &row_of {
+            if let Some(slot) = keys_by_row.get_mut(*row)
+                && slot.is_empty()
+            {
+                *slot = key.clone();
+            }
+        }
+        self.keys_by_row = keys_by_row;
         self.row_of = row_of;
         for typing in self.typing_rows(&p, cx) {
             rows.push(div().mt(px(16.)).child(typing).into_any_element());
@@ -1859,10 +1894,119 @@ impl Render for ThreadView {
                     .flex_1()
                     .min_h_0()
                     .child(canvas(move |bounds, _, _| width.set(f32::from(bounds.size.width)), |_, _, _, _| {}).absolute().size_full())
-                    .child(list(self.list.clone(), move |n, _, _| rows.borrow_mut().get_mut(n).and_then(Option::take).unwrap_or_else(|| div().into_any_element())).size_full()),
+                    .child(list(self.list.clone(), move |n, _, _| rows.borrow_mut().get_mut(n).and_then(Option::take).unwrap_or_else(|| div().into_any_element())).size_full())
+                    .children(self.timeline(&p, cx)),
             )
             .child(self.status_bar(&main, &p, cx))
             .into_any_element()
+    }
+}
+
+impl ThreadView {
+    /// The item at the top of the screen (for others following this person), and how far into it.
+    pub fn top_key(&self) -> Option<String> {
+        let top = self.list.logical_scroll_top();
+        self.keys_by_row.get(top.item_ix).filter(|k| !k.is_empty()).cloned()
+    }
+
+    /// Who else is in the thread now: (member id, name).
+    pub fn online(&self) -> Vec<(String, String)> {
+        let me = text(&self.meta["me"], "id");
+        let mut out: Vec<(String, String)> = vec![];
+        for o in self.meta["online"].as_array().into_iter().flatten() {
+            let id = text(o, "memberId");
+            if id != me && !out.iter().any(|(i, _)| *i == id) {
+                let name = self.name_of(&id, text(o, "name"));
+                out.push((id, name));
+            }
+        }
+        out
+    }
+
+    /// Where someone else is (follow.ts View), if they share it.
+    pub fn view_of(&self, member: &str) -> Option<Value> {
+        self.meta["views"][member]["view"].as_object().map(|v| Value::Object(v.clone()))
+    }
+
+    pub fn busy(&self) -> bool {
+        self.main["busy"].as_bool().unwrap_or(false)
+    }
+
+    /// The timeline at the thread's right edge, as in Delta (thread-map.ts): a short line for each turn, the one on
+    /// screen darker and one with a milestone in the accent color; hovering says what it was, a click goes there.
+    fn timeline(&self, p: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        struct Turn {
+            key: String,
+            name: String,
+            asked: String,
+            did: Vec<String>,
+            milestone: Option<String>,
+            answer: String,
+        }
+        let mut turns: Vec<Turn> = vec![];
+        for item in &self.items {
+            match item["kind"].as_str() {
+                Some("user") => turns.push(Turn {
+                    key: text(item, "key"),
+                    name: self.name_of(&text(item, "memberId"), item["author"].as_str().unwrap_or("someone").to_owned()),
+                    asked: text(item, "text"),
+                    did: vec![],
+                    milestone: None,
+                    answer: String::new(),
+                }),
+                Some("tool") => {
+                    if let Some(turn) = turns.last_mut() {
+                        if item["name"] == "milestone" {
+                            turn.milestone = item["args"]["title"].as_str().map(str::to_owned);
+                        } else {
+                            turn.did.push(text(item, "name"));
+                        }
+                    }
+                }
+                Some("assistant") => {
+                    if let Some(turn) = turns.last_mut().filter(|t| t.answer.is_empty()) {
+                        turn.answer = text(item, "text").chars().take(140).collect();
+                    }
+                }
+                _ => {}
+            }
+        }
+        if turns.len() < 2 {
+            return None;
+        }
+        let top_row = self.list.logical_scroll_top().item_ix;
+        let current = turns.iter().rposition(|t| self.row_of.get(&t.key).is_some_and(|r| *r <= top_row)).unwrap_or(0);
+        let mut column = div().flex().flex_col().gap(px(3.)).py_2().px(px(6.)).rounded(px(6.)).hover(|s| s.bg(p.sunken.opacity(0.7)));
+        for (n, turn) in turns.into_iter().enumerate() {
+            let color = if turn.milestone.is_some() { p.accent } else if n == current { p.ink_2 } else { p.rule_strong };
+            let tip = {
+                let mut tip = format!("{}: {}", turn.name, turn.asked.chars().take(120).collect::<String>());
+                match (&turn.milestone, turn.did.is_empty()) {
+                    (Some(m), _) => tip += &format!("\n⚑ {m}"),
+                    (None, false) => tip += &format!("\n{}", group_summary(&turn.did)),
+                    _ => {}
+                }
+                if !turn.answer.is_empty() {
+                    tip += &format!("\n{}", turn.answer);
+                }
+                tip
+            };
+            let key = turn.key.clone();
+            column = column.child(
+                div()
+                    .id(eid(format!("turn-{n}")))
+                    .w(px(if n == current { 16. } else { 12. }))
+                    .h(px(3.))
+                    .rounded(px(2.))
+                    .bg(color)
+                    .cursor_pointer()
+                    .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.reveal_key(&key, cx);
+                    })),
+            );
+        }
+        Some(div().absolute().top_0().bottom_0().right(px(4.)).flex().flex_col().justify_center().items_end().child(column).into_any_element())
     }
 }
 

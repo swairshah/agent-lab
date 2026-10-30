@@ -114,7 +114,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       const push = () => {
         timer = undefined;
         const { items, ...state } = live.native[conv].state;
-        const meta = { me: live.native.me, members: live.native.members, online: live.native.online, target: live.native.target, role: live.role, drafts: conv === 'main' ? live.draftsNow() : [], sent: live.sentDrafts.length, marks: Object.fromEntries(live.marks) };
+        const meta = { me: live.native.me, members: live.native.members, online: live.native.online, target: live.native.target, role: live.role, drafts: conv === 'main' ? live.draftsNow() : [], sent: live.sentDrafts.length, marks: Object.fromEntries(live.marks), views: Object.fromEntries(live.views) };
         const who = JSON.stringify(meta);
         if (state.rev === rev && who === people) return;
         rev = state.rev;
@@ -158,7 +158,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     }
     if (verb === 'send' && req.method === 'POST') {
       const message = await input(req);
-      if (!['submit', 'abort', 'side', 'land', 'mark', 'invite', 'invites', 'revoke', 'setRole', 'remove', 'rename', 'compact', 'new', 'branches', 'fork', 'switchBranch', 'configure'].includes(message.type)) throw new Error('Unknown session command');
+      if (!['submit', 'abort', 'side', 'land', 'mark', 'view', 'invite', 'invites', 'revoke', 'setRole', 'remove', 'rename', 'compact', 'new', 'branches', 'fork', 'switchBranch', 'configure'].includes(message.type)) throw new Error('Unknown session command');
       if (message.type === 'submit' && (typeof message.text !== 'string' || typeof message.requestId !== 'string')) throw new Error('A message and request ID are required');
       live.send(message as ClientMessage); return json(res, { ok: true });
     }
