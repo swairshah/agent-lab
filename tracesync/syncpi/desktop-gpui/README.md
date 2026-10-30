@@ -50,6 +50,10 @@ background.
   text (the current one more strongly; prose.rs paints them from cursor.rs), Esc to close. Tool output isn't searched
   yet.
 
+- comments on part of a graphic (an SVG, a screenshot): Comment, then a click marks a point and a drag an area, with
+  a box for the comment; comments wait on the graphic, numbered and shared live with everyone (web view users too:
+  the same keys), until Send puts them in the thread as one message with a picture of the graphic marked with them
+  (drawn with resvg).
 - the composer as the web view's: completions for slash commands (with what each does) and @mentions; every slash
   command (/invite, /session-share, /members, /name, /role, /remove, /links, /revoke, /compact, /new, /tree [n],
   /model, /settings, /remote, /steer, /queue, /stop, /side, /env, /land, /changes, /sync, /web, /ssh, /quit,

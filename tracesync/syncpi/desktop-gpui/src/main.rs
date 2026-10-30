@@ -2,6 +2,7 @@
 // natively as Delta draws everything; each thread is still the web view (src/web), embedded in a webview, until
 // its parts are made native one by one. The app runs the same local host as the Tauri app (dist/desktop-host.mjs),
 // which serves the thread pages and keeps their connections, file sync and tools.
+mod annotate;
 mod artifact;
 mod citations;
 mod cursor;

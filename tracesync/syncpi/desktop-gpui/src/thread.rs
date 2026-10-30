@@ -293,7 +293,7 @@ impl ThreadView {
         }
         self.items = event["keys"].as_array().into_iter().flatten().filter_map(|k| by_key.remove(k.as_str()?)).collect();
         self.main = event["state"].clone();
-        self.meta = json!({ "me": event["me"], "members": event["members"], "online": event["online"], "target": event["target"], "role": event["role"] });
+        self.meta = json!({ "me": event["me"], "members": event["members"], "online": event["online"], "target": event["target"], "role": event["role"], "marks": event["marks"] });
         self.drafts = event["drafts"].as_array().cloned().unwrap_or_default();
         self.loaded = true;
         if self.find.is_some() {
@@ -1252,7 +1252,9 @@ impl ThreadView {
             return match kind {
                 Kind::Svg => {
                     let (image, natural) = artifact::svg_image(&content);
-                    Some(artifact::card(format!("art-{key}"), kind, path.clone(), artifact::picture(image.clone(), 320., natural), Some(Shown::Image { title: path, image }), p))
+                    let shown = natural.map(|n| crate::annotate::fit((n.width, n.height), content_width() - 26., 320.)).unwrap_or(size(px(320.), px(200.)));
+                    let body = crate::annotate::graphic(&format!("file:{path}"), &format!("the SVG image {path}"), crate::annotate::Source::Svg(content.clone()), crate::annotate::picture(image.clone()), shown, p);
+                    Some(artifact::card(format!("art-{key}"), kind, path.clone(), body, Some(Shown::Image { title: path, image }), p))
                 }
                 Kind::Html => Some(artifact::card(format!("art-{key}"), kind, path.clone(), artifact::excerpt("html", &content, cx), Some(Shown::Html { title: path, content }), p)),
                 Kind::Markdown => {
@@ -1277,7 +1279,11 @@ impl ThreadView {
             let path = self.recording(&name);
             let body = match self.remote_image(path, artifact::image_format(&name), cx) {
                 Some(image) => {
-                    return Some(artifact::card(format!("art-{key}"), Kind::Image, title.clone(), artifact::picture(image.clone(), 420., None), Some(Shown::Image { title, image }), p));
+                    let natural = crate::annotate::raster_size(&image.bytes).map(|(w, h)| (w as f32, h as f32)).unwrap_or((1280., 800.));
+                    let shown = crate::annotate::fit(natural, content_width() - 26., 420.);
+                    let mime = if image.format == ImageFormat::Jpeg { "image/jpeg" } else { "image/png" };
+                    let body = crate::annotate::graphic(&format!("shot:{name}"), &format!("the screenshot \"{title}\""), crate::annotate::Source::Raster(image.bytes.clone(), mime), crate::annotate::picture(image.clone()), shown, p);
+                    return Some(artifact::card(format!("art-{key}"), Kind::Image, title.clone(), body, Some(Shown::Image { title, image }), p));
                 }
                 None => div().p_3().text_size(sz(12.5)).text_color(p.muted).child("Loading the screenshot…").into_any_element(),
             };
@@ -1641,6 +1647,14 @@ impl Render for ThreadView {
             self.send_comment(window, cx);
         }
         self.adopt_draft(window, cx);
+        // Comments waiting on graphics (annotate.rs): the thread's, to draw; what was made here, to send.
+        crate::annotate::set(&self.meta["marks"], text(&self.meta["me"], "id"), text(&self.meta["me"], "name"));
+        for mut message in crate::annotate::take_outbox() {
+            if message["type"] == "submit" {
+                message["where"] = json!(where_to());
+            }
+            self.send(message, cx);
+        }
         // Tests type into the composer once the thread has loaded (SYNCPI_GPUI_TEST_TYPE), and join someone's draft
         // once there is one, adding to it (SYNCPI_GPUI_TEST_JOIN=<text>), as a person would.
         if let Ok(typed) = std::env::var("SYNCPI_GPUI_TEST_TYPE")
@@ -1807,6 +1821,13 @@ impl Render for ThreadView {
             .font_family(theme::SANS)
             .key_context("ThreadView")
             .track_focus(&self.focus)
+            // Esc closes a comment box on a graphic, or leaves comment mode, before anything else sees it.
+            .capture_key_down(cx.listener(|_, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" && crate::annotate::escape() {
+                    cx.stop_propagation();
+                    window.refresh();
+                }
+            }))
             // Files dropped on the thread go with the next message.
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 this.add_files(paths.paths(), cx);
@@ -1958,7 +1979,7 @@ fn parse_invite(arg: &str) -> Result<Value, String> {
     Ok(out)
 }
 
-fn base64(bytes: &[u8]) -> String {
+pub(crate) fn base64(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {

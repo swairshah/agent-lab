@@ -155,6 +155,7 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
         .flex_col()
         .gap(px(8.))
         .flex_shrink_0();
+    let mut fences = 0;
     for (index, block) in blocks(source).into_iter().enumerate() {
         let block_id = format!("{id}-block-{index}");
         match block {
@@ -211,9 +212,20 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
                 use crate::artifact::{Kind, Shown, card, excerpt, picture, svg_image};
                 let p = crate::theme::palette(cx);
                 let kind = crate::artifact::kind_of_fence(&language, &content).unwrap_or(Kind::Html);
+                // The web view's key for this block (artifacts.ts replyArtifacts): the message's, and its place among
+                // the message's HTML and SVG blocks; comments on it are shared under it.
+                let graphic_key = id.strip_prefix("assistant-").map(|message| format!("{message}:block{fences}"));
+                fences += 1;
                 let element = if kind == Kind::Svg {
                     let (image, natural) = svg_image(&content);
-                    card(block_id, kind, "SVG image".into(), picture(image.clone(), 280., natural), Some(Shown::Image { title: "SVG image".into(), image }), &p)
+                    let body = match (graphic_key, natural) {
+                        (Some(key), Some(n)) => {
+                            let shown = crate::annotate::fit((n.width, n.height), crate::thread::content_width() - 26., 280.);
+                            crate::annotate::graphic(&key, "the SVG image in a reply", crate::annotate::Source::Svg(content.clone()), crate::annotate::picture(image.clone()), shown, &p)
+                        }
+                        _ => picture(image.clone(), 280., natural),
+                    };
+                    card(block_id, kind, "SVG image".into(), body, Some(Shown::Image { title: "SVG image".into(), image }), &p)
                 } else {
                     card(block_id, kind, "HTML snippet".into(), excerpt("html", &content, cx), Some(Shown::Html { title: "HTML snippet".into(), content: content.clone() }), &p)
                 };
