@@ -50,6 +50,12 @@ background.
   text (the current one more strongly; prose.rs paints them from cursor.rs), Esc to close. Tool output isn't searched
   yet.
 
+- the composer as the web view's: completions for slash commands (with what each does) and @mentions; every slash
+  command (/invite, /session-share, /members, /name, /role, /remove, /links, /revoke, /compact, /new, /tree [n],
+  /model, /settings, /remote, /steer, /queue, /stop, /side, /env, /land, /changes, /sync, /web, /ssh, /quit,
+  /where); files dropped on the thread and images pasted go with the next message (the server's limits); ↑ in an
+  empty composer brings back the last message. A message shows what was sent with it and who wrote it together;
+  admins can Edit & fork it.
 - side threads: /side [new] [question] opens this person's side thread (the host streams it with `?conv=side`), with
   its banner, Start over and Back; the composer also takes /queue, /steer and /stop, on whichever thread it's in.
 

@@ -605,6 +605,19 @@ impl Desktop {
                 same
             }, window, cx),
             ThreadEvent::Terminal(command) => this.new_terminal(Some(command.clone()), window, cx),
+            ThreadEvent::Run(id) if id == "thread.ssh" => {
+                match this.active.as_deref().and_then(|t| this.thread(t)).and_then(|t| t.vm.clone()) {
+                    Some(vm) => this.new_terminal(Some(format!("ssh {vm}.exe.xyz")), window, cx),
+                    None => this.toast("This thread runs on this machine, not a VM.", true, cx),
+                }
+            }
+            ThreadEvent::Run(id) => this.run(&RunCommand { id: id.clone().into() }, window, cx),
+            ThreadEvent::Where(vm) => {
+                this.prefs.where_vm = Some(*vm);
+                this.save_prefs();
+                thread::set_where_vm(*vm);
+                this.toast(if *vm { "Your requests run on the session VM" } else { "Your requests run on this Mac" }, false, cx);
+            }
             ThreadEvent::Back => {
                 this.aside = None;
                 if let Some(main) = this.threads.get(&thread) {

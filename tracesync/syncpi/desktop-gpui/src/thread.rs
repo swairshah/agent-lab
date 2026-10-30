@@ -68,6 +68,62 @@ pub enum ThreadEvent {
     Changes,
     /// `!cmd` in the composer: run it in a new terminal.
     Terminal(String),
+    /// A slash command that's the app's to run (a command id of src/shared/keymap.json, or "thread.ssh").
+    Run(String),
+    /// /where: this person's requests run on the VM (true) or this Mac.
+    Where(bool),
+}
+
+/// The composer's slash commands, as the web view's (src/web/composer.ts COMMANDS): name and what it does.
+const COMMANDS: &[(&str, &str)] = &[
+    ("invite", "Invite by email, or make a link: [email] [role] [7d|never]"),
+    ("session-share", "Make a share link"),
+    ("members", "People, roles and invites"),
+    ("name", "Change your name"),
+    ("role", "Change someone's role: <name> <admin|editor|viewer>"),
+    ("remove", "Remove someone from the session"),
+    ("links", "Invites that still work"),
+    ("revoke", "Revoke an invite"),
+    ("compact", "Summarize older messages now"),
+    ("new", "Start a new context (admins)"),
+    ("tree", "Branches; /tree <n> branches before message n"),
+    ("model", "Change the agent's model (admins)"),
+    ("settings", "Settings (⌘,)"),
+    ("remote", "Run this request on the session VM (keeps going if you close the app): /remote <task>"),
+    ("steer", "Add to what the agent is doing, without stopping it: /steer <message>"),
+    ("queue", "Send after the agent's current run, without stopping it: /queue <message>"),
+    ("stop", "Stop the agent"),
+    ("side", "Your private side thread, forked from this one, to ask about it: /side [question], /side new"),
+    ("env", "The setup agent's thread"),
+    ("land", "Land this thread's changes on main (the project's land skill)"),
+    ("changes", "Changes and artifacts"),
+    ("sync", "Sync the project with this machine now"),
+    ("web", "Open the thread in a browser"),
+    ("ssh", "A terminal on the thread's VM"),
+    ("quit", "Quit SyncPi"),
+    ("where", "Run your requests here or on the VM: /where here, /where vm"),
+];
+
+/// What the server takes (src/shared/protocol.ts ATTACHMENT_LIMITS).
+const MAX_ATTACHMENTS: usize = 8;
+const MAX_IMAGE: usize = 5 * 1024 * 1024;
+const MAX_TEXT: usize = 256 * 1024;
+
+/// A file to send with the next message: its name, type, and contents in base64.
+#[derive(Clone)]
+struct Attachment {
+    name: String,
+    mime: String,
+    data: String,
+    image: Option<Arc<Image>>,
+}
+
+/// Completions under the composer: a slash command, or someone to mention; what to put in place of the word typed.
+struct Completion {
+    items: Vec<(String, String, String)>,
+    selected: usize,
+    /// Where the word being completed starts in the composer's text.
+    from: usize,
 }
 
 pub struct ThreadView {
@@ -109,6 +165,11 @@ pub struct ThreadView {
     /// has, so a stream event from before a write doesn't take back what was just typed).
     written: String,
     writes: u64,
+    attachments: Vec<Attachment>,
+    completion: Option<Completion>,
+    /// What this person last sent from here (↑ in an empty composer brings it back), and a note to show.
+    last_sent: String,
+    note: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -140,7 +201,10 @@ impl ThreadView {
             cx.subscribe_in(&composer, window, |this, _, event, window, cx| match event {
                 // Enter starts a new line; ⌘↩ sends, as in the web view.
                 InputEvent::PressEnter { secondary: true } => this.submit(window, cx),
-                InputEvent::Change => this.typed(cx),
+                InputEvent::Change => {
+                    this.typed(cx);
+                    this.complete(cx);
+                }
                 _ => {}
             }),
             cx.subscribe_in(&comment_input, window, |this, _, event, window, cx| {
@@ -213,6 +277,10 @@ impl ThreadView {
             joined: None,
             written: String::new(),
             writes: 0,
+            attachments: vec![],
+            completion: None,
+            last_sent: String::new(),
+            note: None,
             _subscriptions: subscriptions,
         }
     }
@@ -719,9 +787,11 @@ impl ThreadView {
     /// [question] opens this person's side thread (forked again with "new"), asking it the question.
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.composer.read(cx).value().trim().to_string();
-        if text.is_empty() {
+        if text.is_empty() && self.attachments.is_empty() {
             return;
         }
+        self.completion = None;
+        self.note = None;
         // `!cmd`: a command for a new terminal on this Mac, not a message.
         if let Some(command) = text.strip_prefix('!').map(str::trim).filter(|c| !c.is_empty()) {
             cx.emit(ThreadEvent::Terminal(command.to_owned()));
@@ -739,7 +809,70 @@ impl ThreadView {
             None => ("", text.clone()),
         };
         let mut conv = if self.conv == "main" { Value::Null } else { json!(self.conv) };
+        let (command, rest) = if self.attachments.is_empty() || matches!(command, "" | "queue" | "steer" | "remote") { (command, rest) } else { ("", text.clone()) };
+        let words: Vec<String> = rest.split_whitespace().map(str::to_owned).collect();
+        let member = |this: &Self, query: &str| -> String {
+            this.meta["members"].as_array().into_iter().flatten().find(|m| self::text(m, "name") == query || self::text(m, "email") == query || self::text(m, "id") == query).map(|m| self::text(m, "id")).unwrap_or_else(|| query.to_owned())
+        };
         match command {
+            "invite" => match parse_invite(&rest) {
+                Ok(mut invite) => {
+                    invite["type"] = json!("invite");
+                    self.send(invite, cx);
+                    self.note = Some("Invite made: it's in Settings → People".into());
+                }
+                Err(e) => return self.say(e, cx),
+            },
+            "session-share" => cx.emit(ThreadEvent::Run("thread.share".into())),
+            "members" | "links" => cx.emit(ThreadEvent::Run("view.people".into())),
+            "settings" | "model" => cx.emit(ThreadEvent::Run("app.settings".into())),
+            "name" if !rest.is_empty() => self.send(json!({ "type": "rename", "name": rest }), cx),
+            "role" if words.len() == 2 => {
+                let id = member(self, &words[0]);
+                self.send(json!({ "type": "setRole", "memberId": id, "role": words[1] }), cx);
+            }
+            "remove" if !rest.is_empty() => {
+                let id = member(self, &rest);
+                self.send(json!({ "type": "remove", "memberId": id }), cx);
+            }
+            "revoke" if !rest.is_empty() => self.send(json!({ "type": "revoke", "code": rest }), cx),
+            "compact" if !rest.is_empty() => self.send(json!({ "type": "compact", "instructions": rest }), cx),
+            "compact" => cx.emit(ThreadEvent::Run("agent.compact".into())),
+            "new" => cx.emit(ThreadEvent::Run("agent.newContext".into())),
+            "tree" => match rest.parse::<usize>() {
+                // Before the nth message people sent: the thread branches there, and the message comes back to edit.
+                Ok(n) => {
+                    let users: Vec<&Value> = self.items.iter().filter(|i| i["kind"] == "user" && self::text(i, "key").chars().all(|c| c.is_ascii_digit())).collect();
+                    match users.get(n.wrapping_sub(1)) {
+                        Some(item) => {
+                            let (key, body) = (self::text(item, "key"), self::text(item, "text"));
+                            return self.fork(key, body, window, cx);
+                        }
+                        None => return self.say(format!("There's no message {n}."), cx),
+                    }
+                }
+                Err(_) => cx.emit(ThreadEvent::Run("agent.branches".into())),
+            },
+            "remote" => {
+                if rest.is_empty() {
+                    return self.say("Say what to do: /remote <task>".into(), cx);
+                }
+                let mut message = json!({ "type": "submit", "requestId": request_id(), "text": rest, "mode": "interrupt", "where": "vm" });
+                self.attach(&mut message);
+                self.send(message, cx);
+            }
+            "env" => cx.emit(ThreadEvent::Run("agent.setup".into())),
+            "land" => cx.emit(ThreadEvent::Run("agent.land".into())),
+            "changes" => cx.emit(ThreadEvent::Run("view.changes".into())),
+            "sync" => cx.emit(ThreadEvent::Run("project.sync".into())),
+            "web" => cx.emit(ThreadEvent::Run("project.web".into())),
+            "quit" => cx.emit(ThreadEvent::Run("app.quit".into())),
+            "ssh" => cx.emit(ThreadEvent::Run("thread.ssh".into())),
+            "where" => match rest.as_str() {
+                "vm" => cx.emit(ThreadEvent::Where(true)),
+                "here" | "device" | "mac" => cx.emit(ThreadEvent::Where(false)),
+                _ => return self.say("Use /where here or /where vm".into(), cx),
+            },
             "stop" => self.stop(cx),
             "side" => {
                 let fresh = rest == "new" || rest.starts_with("new ");
@@ -755,7 +888,7 @@ impl ThreadView {
                 cx.emit(ThreadEvent::Side);
             }
             "queue" | "steer" | "" => {
-                if rest.is_empty() {
+                if rest.is_empty() && self.attachments.is_empty() {
                     return;
                 }
                 let mode = match command {
@@ -767,6 +900,7 @@ impl ThreadView {
                 if !conv.is_null() {
                     message["conv"] = conv.take();
                 }
+                self.attach(&mut message);
                 if let Some(owner) = &draft {
                     message["draft"] = json!(owner);
                 }
@@ -775,6 +909,10 @@ impl ThreadView {
             // Anything else goes as written (a message that starts with a slash).
             _ => self.send(json!({ "type": "submit", "requestId": request_id(), "text": text, "mode": "interrupt", "where": where_to(), "conv": conv }), cx),
         }
+        if !text.is_empty() {
+            self.last_sent = text.clone();
+        }
+        self.attachments.clear();
         self.composer.update(cx, |state, cx| state.set_value("", window, cx));
         if self.conv == "main" {
             self.put_draft(String::new(), 0);
@@ -783,6 +921,215 @@ impl ThreadView {
                 self.written = String::new();
             }
         }
+    }
+
+    /// A note under the composer (a command's usage, why a file wasn't attached).
+    fn say(&mut self, note: String, cx: &mut Context<Self>) {
+        self.note = Some(note);
+        cx.notify();
+    }
+
+    fn attach(&mut self, message: &mut Value) {
+        if !self.attachments.is_empty() {
+            message["attachments"] = Value::Array(self.attachments.iter().map(|a| json!({ "name": a.name, "mimeType": a.mime, "data": a.data })).collect());
+        }
+    }
+
+    /// Edit & fork (admins): the thread branches just before message `key`, and its text comes back to edit.
+    fn fork(&mut self, key: String, body: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.send(json!({ "type": "fork", "before": key }), cx);
+        self.composer.update(cx, |state, cx| {
+            state.set_value(body, window, cx);
+            state.focus(window, cx);
+        });
+    }
+
+    /// Files dropped on the thread, or an image pasted: attached to the next message, within the server's limits.
+    pub fn add_files(&mut self, paths: &[std::path::PathBuf], cx: &mut Context<Self>) {
+        for path in paths {
+            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            match std::fs::read(path) {
+                Ok(bytes) => self.add_bytes(name, bytes, cx),
+                Err(e) => self.say(format!("Couldn't read {name}: {e}"), cx),
+            }
+        }
+    }
+
+    fn add_bytes(&mut self, name: String, bytes: Vec<u8>, cx: &mut Context<Self>) {
+        if self.attachments.len() >= MAX_ATTACHMENTS {
+            return self.say(format!("At most {MAX_ATTACHMENTS} files at a time."), cx);
+        }
+        let mime = match name.rsplit('.').next().unwrap_or("").to_lowercase().as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            _ => "text/plain",
+        };
+        let is_image = mime.starts_with("image/");
+        if is_image && bytes.len() > MAX_IMAGE {
+            return self.say(format!("{name} is larger than {} MB", MAX_IMAGE / 1024 / 1024), cx);
+        }
+        if !is_image && (bytes.len() > MAX_TEXT || std::str::from_utf8(&bytes).is_err()) {
+            return self.say(format!("{name} isn't text, or is larger than {} KB", MAX_TEXT / 1024), cx);
+        }
+        let image = is_image.then(|| Arc::new(Image::from_bytes(artifact::image_format(&name), bytes.clone())));
+        self.attachments.push(Attachment { name, mime: mime.into(), data: base64(&bytes), image });
+        self.note = None;
+        cx.notify();
+    }
+
+    /// Completions for the word being typed: a slash command at the start, or @someone.
+    fn complete(&mut self, cx: &mut Context<Self>) {
+        let state = self.composer.read(cx);
+        let value = state.value().to_string();
+        let caret = state.cursor().min(value.len());
+        let before = &value[..caret];
+        let word_start = before.rfind(char::is_whitespace).map(|i| i + 1).unwrap_or(0);
+        let word = &before[word_start..];
+        let items: Vec<(String, String, String)> = if word_start == 0 && word.starts_with('/') && !before.contains('\n') {
+            let typed = &word[1..];
+            COMMANDS.iter().filter(|(name, _)| name.starts_with(typed)).map(|(name, about)| (format!("/{name}"), about.to_string(), format!("/{name} "))).collect()
+        } else if let Some(typed) = word.strip_prefix('@') {
+            let me = text(&self.meta["me"], "id");
+            self.meta["members"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|m| text(m, "id") != me && text(m, "name").to_lowercase().starts_with(&typed.to_lowercase()))
+                .map(|m| (format!("@{}", text(m, "name")), text(m, "role"), format!("@{} ", text(m, "name"))))
+                .collect()
+        } else {
+            vec![]
+        };
+        let fresh = !items.is_empty() && !(items.len() == 1 && items[0].0 == word);
+        self.completion = fresh.then(|| Completion { items, selected: 0, from: word_start });
+        cx.notify();
+    }
+
+    fn accept_completion(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(completion) = self.completion.take() else { return };
+        let Some((_, _, insert)) = completion.items.get(completion.selected).cloned() else { return };
+        let value = self.composer.read(cx).value().to_string();
+        let caret = self.composer.read(cx).cursor().min(value.len());
+        let next = format!("{}{insert}{}", &value[..completion.from], &value[caret..]);
+        let at = completion.from + insert.len();
+        self.composer.update(cx, |state, cx| {
+            state.set_value(next.clone(), window, cx);
+            let before = &next[..at];
+            let line = before.matches('\n').count() as u32;
+            let character = before.rsplit('\n').next().unwrap_or("").chars().count() as u32;
+            state.set_cursor_position(gpui_component::input::Position { line, character }, window, cx);
+        });
+        self.completion = None;
+        cx.notify();
+    }
+
+    /// Keys the composer's completions and attachments take before the text field: arrows and Tab or Enter in the
+    /// list, Esc to close it, ⌘V with an image, ↑ in an empty composer for the last message.
+    fn composer_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let key = event.keystroke.key.as_str();
+        let m = event.keystroke.modifiers;
+        if let Some(completion) = &mut self.completion {
+            let count = completion.items.len();
+            match key {
+                "down" => completion.selected = (completion.selected + 1) % count,
+                "up" => completion.selected = (completion.selected + count - 1) % count,
+                "tab" => return { self.accept_completion(window, cx); cx.stop_propagation() },
+                "enter" if !m.platform => return { self.accept_completion(window, cx); cx.stop_propagation() },
+                "escape" => self.completion = None,
+                _ => return,
+            }
+            cx.stop_propagation();
+            return cx.notify();
+        }
+        if m.platform && key == "v"
+            && let Some(item) = cx.read_from_clipboard()
+            && let Some(image) = item.entries().iter().find_map(|e| if let ClipboardEntry::Image(image) = e { Some(image.clone()) } else { None })
+        {
+            let extension = match image.format {
+                ImageFormat::Jpeg => "jpg",
+                ImageFormat::Gif => "gif",
+                ImageFormat::Webp => "webp",
+                _ => "png",
+            };
+            self.add_bytes(format!("pasted.{extension}"), image.bytes.clone(), cx);
+            return cx.stop_propagation();
+        }
+        if key == "up" && !m.modified() && self.composer.read(cx).value().is_empty() && !self.last_sent.is_empty() {
+            let last = self.last_sent.clone();
+            self.composer.update(cx, |state, cx| state.set_value(last, window, cx));
+            cx.stop_propagation();
+        }
+    }
+
+    /// Under the composer: completions, files to send, a note.
+    fn composer_extras(&self, p: &Palette, cx: &mut Context<Self>) -> Div {
+        let mut extras = div().flex().flex_col().gap_1();
+        if !self.attachments.is_empty() {
+            let mut chips = div().flex().flex_wrap().gap_2().pt_1();
+            for (n, a) in self.attachments.iter().enumerate() {
+                chips = chips.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .pl_1()
+                        .pr(px(4.))
+                        .py(px(2.))
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(p.rule)
+                        .bg(p.raised)
+                        .text_size(sz(12.))
+                        .children(a.image.clone().map(|image| img(image).size(px(28.)).rounded(px(4.)).object_fit(ObjectFit::Cover)))
+                        .child(div().max_w(px(200.)).truncate().child(a.name.clone()))
+                        .child(
+                            div()
+                                .id(eid(format!("detach-{n}")))
+                                .text_color(p.muted)
+                                .cursor_pointer()
+                                .child(Icon::new(IconName::Close).size(px(11.)))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if n < this.attachments.len() {
+                                        this.attachments.remove(n);
+                                    }
+                                    cx.notify();
+                                })),
+                        ),
+                );
+            }
+            extras = extras.child(chips);
+        }
+        if let Some(completion) = &self.completion {
+            let mut list = div().mt_1().flex().flex_col().py_1().rounded(px(8.)).border_1().border_color(p.rule).bg(p.raised).shadow_md().max_h(px(240.)).overflow_hidden();
+            for (n, (label, detail, _)) in completion.items.iter().enumerate().take(9) {
+                let on = n == completion.selected;
+                list = list.child(
+                    div()
+                        .id(eid(format!("completion-{n}")))
+                        .flex()
+                        .gap_3()
+                        .px_3()
+                        .py(px(4.))
+                        .cursor_pointer()
+                        .when(on, |d| d.bg(p.sunken))
+                        .child(div().flex_none().font_family(MONO).text_size(sz(12.5)).text_color(p.ink).child(label.clone()))
+                        .child(div().flex_1().min_w_0().truncate().text_size(sz(12.5)).text_color(p.muted).child(detail.clone()))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            if let Some(c) = &mut this.completion {
+                                c.selected = n;
+                            }
+                            this.accept_completion(window, cx);
+                        })),
+                );
+            }
+            extras = extras.child(list);
+        }
+        if let Some(note) = &self.note {
+            extras = extras.child(div().text_size(sz(12.5)).text_color(p.warn).child(note.clone()));
+        }
+        extras
     }
 
     pub fn stop(&mut self, cx: &mut Context<Self>) {
@@ -958,7 +1305,7 @@ impl ThreadView {
             .unwrap_or(fallback)
     }
 
-    fn user_row(&self, item: &Value, key: &str, p: &Palette, window: &mut Window, cx: &mut App) -> AnyElement {
+    fn user_row(&self, item: &Value, key: &str, p: &Palette, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let name = self.name_of(&text(item, "memberId"), item["author"].as_str().unwrap_or("someone").to_owned());
         let color = theme::person_color(&name, p.dark);
         let body = text(item, "text");
@@ -975,13 +1322,55 @@ impl ThreadView {
         if !body.is_empty() {
             content = content.child(message::render(&format!("user-{key}"), &keep_breaks(&body), window, cx));
         }
+        // What was sent with it: images (served by the host) and files.
+        let attached: Vec<Value> = item["attachments"].as_array().cloned().unwrap_or_default();
+        if !attached.is_empty() {
+            let mut files = div().flex().flex_wrap().gap_2();
+            for a in attached {
+                let name = text(&a, "name");
+                let image = a["url"].as_str().filter(|_| a["kind"] == "image").and_then(|url| {
+                    let path = if url.starts_with('/') { url.to_owned() } else { format!("/session/{}/{url}", self.id) };
+                    self.remote_image(path, artifact::image_format(&name), cx)
+                });
+                files = files.child(match image {
+                    Some(image) => div().rounded(px(6.)).overflow_hidden().border_1().border_color(p.rule).child(img(image).max_h(px(160.)).max_w(px(260.)).object_fit(ObjectFit::Contain)).into_any_element(),
+                    None => div().px_2().py(px(2.)).rounded(px(5.)).border_1().border_color(p.rule).bg(p.raised).font_family(MONO).text_size(sz(12.)).text_color(p.ink_2).child(name).into_any_element(),
+                });
+            }
+            content = content.child(files);
+        }
+        let with: Vec<String> = item["with"].as_array().into_iter().flatten().filter_map(|w| w.as_str().map(str::to_owned)).collect();
+        // Edit & fork (admins, in the shared thread): branch just before this message and edit it.
+        let can_fork = self.role() == "admin" && self.conv == "main" && key.chars().all(|c| c.is_ascii_digit());
+        let (fork_key, fork_text) = (key.to_owned(), body.clone());
         div()
             .w(px(content_width() + AVATAR + GAP))
             .flex()
             .items_start()
             .gap(px(12.))
+            .group("user-row")
             .child(div().flex_none().text_size(sz(13.5)).line_height(sz(LINE)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(name))
             .child(content)
+            .when(!with.is_empty(), |d| d.child(div().flex_none().text_size(sz(12.)).line_height(sz(LINE)).text_color(p.faint).child(format!("with {}", with.join(", ")))))
+            .when(can_fork, |d| {
+                d.child(
+                    div()
+                        .id(eid(format!("fork-{key}")))
+                        .flex_none()
+                        .invisible()
+                        .group_hover("user-row", |s| s.visible())
+                        .px_2()
+                        .rounded(px(5.))
+                        .text_size(sz(12.))
+                        .line_height(sz(LINE))
+                        .text_color(p.muted)
+                        .cursor_pointer()
+                        .hover(|s| s.bg(p.sunken).text_color(p.ink))
+                        .child("Edit & fork")
+                        .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("Branch the thread just before this message and edit it").build(window, cx))
+                        .on_click(cx.listener(move |this, _, window, cx| this.fork(fork_key.clone(), fork_text.clone(), window, cx))),
+                )
+            })
             .into_any_element()
     }
 
@@ -1369,7 +1758,11 @@ impl Render for ThreadView {
                 } else {
                     row(
                         Some(avatar_person(&text(&self.meta["me"], "name"), p.dark)),
-                        div().w_full().children(with).child(Input::new(&self.composer).appearance(false).px_0().py(px(2.)).w_full().text_size(sz(15.))),
+                        div()
+                            .w_full()
+                            .children(with)
+                            .child(div().capture_key_down(cx.listener(Self::composer_key)).child(Input::new(&self.composer).appearance(false).px_0().py(px(2.)).w_full().text_size(sz(15.))))
+                            .child(self.composer_extras(&p, cx)),
                     )
                     .into_any_element()
                 })
@@ -1414,6 +1807,11 @@ impl Render for ThreadView {
             .font_family(theme::SANS)
             .key_context("ThreadView")
             .track_focus(&self.focus)
+            // Files dropped on the thread go with the next message.
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                this.add_files(paths.paths(), cx);
+                this.focus_composer(window, cx);
+            }))
             // A press on a message's text put the caret there (prose.rs): the thread takes focus.
             .on_mouse_down(
                 MouseButton::Left,
@@ -1529,6 +1927,51 @@ pub fn set_where_vm(vm: bool) {
 
 fn where_to() -> &'static str {
     if WHERE_VM.load(std::sync::atomic::Ordering::Relaxed) { "vm" } else { "device" }
+}
+
+/// /invite's words (src/shared/commands.ts parseInvite): an email, a role, an expiry (7d, 12h, never), --uses N.
+fn parse_invite(arg: &str) -> Result<Value, String> {
+    let mut out = json!({});
+    let words: Vec<&str> = arg.split_whitespace().collect();
+    let mut i = 0;
+    while i < words.len() {
+        let w = words[i];
+        if w == "--link" || w == "link" {
+        } else if w.contains('@') {
+            out["email"] = json!(w);
+        } else if ["admin", "editor", "viewer"].contains(&w) {
+            out["role"] = json!(w);
+        } else if let Some(days) = w.strip_suffix('d').and_then(|d| d.parse::<f64>().ok()) {
+            out["expiresInDays"] = json!(days);
+        } else if let Some(hours) = w.strip_suffix('h').and_then(|h| h.parse::<f64>().ok()) {
+            out["expiresInDays"] = json!(hours / 24.);
+        } else if w == "never" {
+            out["expiresInDays"] = json!(0);
+        } else if w == "--uses" && words.get(i + 1).is_some_and(|n| n.parse::<u32>().is_ok()) {
+            i += 1;
+            out["maxUses"] = json!(words[i].parse::<u32>().unwrap());
+        } else {
+            return Err(format!("Don't understand \"{w}\"; usage: /invite [email] [admin|editor|viewer] [7d|12h|never] [--uses N]"));
+        }
+        i += 1;
+    }
+    Ok(out)
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = (chunk[0] as u32) << 16 | (*chunk.get(1).unwrap_or(&0) as u32) << 8 | *chunk.get(2).unwrap_or(&0) as u32;
+        for (k, shift) in [18, 12, 6, 0].into_iter().enumerate() {
+            if k <= chunk.len() {
+                out.push(TABLE[(n >> shift & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
 }
 
 fn request_id() -> String {
@@ -1758,4 +2201,33 @@ fn keep_breaks(text: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    // Not a glob: gpui's `test` attribute would shadow the standard one.
+    use super::{base64, parse_invite};
+
+    #[test]
+    fn invites_read_as_the_web_view_reads_them() {
+        let invite = parse_invite("ada@example.com viewer 7d").unwrap();
+        assert_eq!(invite["email"].as_str(), Some("ada@example.com"));
+        assert_eq!(invite["role"].as_str(), Some("viewer"));
+        assert_eq!(invite["expiresInDays"].as_f64(), Some(7.));
+        let link = parse_invite("never --uses 3").unwrap();
+        assert_eq!(link["expiresInDays"].as_f64(), Some(0.));
+        assert_eq!(link["maxUses"].as_u64(), Some(3));
+        assert_eq!(parse_invite("12h").unwrap()["expiresInDays"].as_f64(), Some(0.5));
+        assert!(parse_invite("soon").is_err());
+    }
+
+    #[test]
+    fn base64_matches_the_standard() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+        assert_eq!(base64(&[0xff, 0xfe, 0x00]), "//4A");
+    }
 }
