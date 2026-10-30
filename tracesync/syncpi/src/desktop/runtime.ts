@@ -176,6 +176,44 @@ export class LiveSession {
   /** How many draft writes the native app has made that were taken here (it counts them; writes come in order). */
   draftSeq = 0;
   carets = new Map<string, { name: string; owner: string; anchor?: unknown; head?: unknown }>();
+  /**
+   * Project files the native app is editing, written together live (shared/drafts.ts): each one's Yjs document,
+   * followed on the server while it's open here, written to by the app's plain text (writeFile).
+   */
+  files = new Map<string, { doc: Y.Doc; ready: boolean; seq: number }>();
+  openFile(path: string) {
+    if (this.files.has(path)) return;
+    const doc = new Y.Doc();
+    doc.on('update', (update: Uint8Array, origin: unknown) => { if (origin !== 'remote') this.conn.send({ type: 'fileDoc', path, update: toBase64(update) }); });
+    this.files.set(path, { doc, ready: false, seq: 0 });
+    this.conn.send({ type: 'fileDoc', path, open: true });
+  }
+  closeFile(path: string) {
+    if (!this.files.delete(path)) return;
+    this.conn.send({ type: 'fileDoc', path, open: false });
+    this.conn.send({ type: 'caret' });
+  }
+  writeFile(path: string, text: string, caret: number, seq?: number) {
+    const entry = this.files.get(path);
+    if (entry === undefined || !entry.ready) throw new Error('This file is still opening');
+    if (seq !== undefined) entry.seq = Math.max(entry.seq, seq);
+    const shared = draftText(entry.doc);
+    replaceText(shared, text, 'local', Math.min(caret, text.length));
+    const at = (index: number) => Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(shared, Math.min(index, shared.length)));
+    this.conn.send({ type: 'caret', owner: `file:${path}`, anchor: at(caret), head: at(caret) });
+  }
+  /** A file being edited, as it is now: its text, the app's last write taken, and who else is in it (their cursors). */
+  fileNow(path: string) {
+    const entry = this.files.get(path);
+    if (entry === undefined) return undefined;
+    const text = draftText(entry.doc).toString();
+    const writers = [...this.carets].filter(([id, c]) => c.owner === `file:${path}` && id !== this.native.me?.id).map(([id, c]) => {
+      let caret: number | undefined;
+      try { caret = c.head === undefined ? undefined : Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(c.head), entry.doc)?.index; } catch { caret = undefined; }
+      return { id, name: this.native.members.find(m => m.id === id)?.name ?? c.name, caret: caret ?? 0 };
+    });
+    return { text, ready: entry.ready, seq: entry.seq, writers };
+  }
   /** Drafts sent to the agent since the native app last looked: owner, and who sent it. */
   sentDrafts: { owner: string; by: string }[] = [];
   draft(owner: string) {
@@ -230,6 +268,7 @@ export class LiveSession {
       if (this.full) this.device.register();
       // The server may have restarted: it merges each draft whole.
       for (const [owner, { doc }] of this.drafts) if (draftText(doc).length > 0) this.conn.send({ type: 'draft', owner, update: toBase64(Y.encodeStateAsUpdate(doc)) });
+      for (const [path, { doc }] of this.files) { this.conn.send({ type: 'fileDoc', path, open: true }); this.conn.send({ type: 'fileDoc', path, update: toBase64(Y.encodeStateAsUpdate(doc)) }); }
     };
     this.conn.onBinary = d => this.device.binary(d);
     this.conn.onState = state => { if (state === 'closed') this.device.disconnected(); };
@@ -256,6 +295,10 @@ export class LiveSession {
         entry.name = m.name;
         if (m.update !== undefined) Y.applyUpdate(entry.doc, fromBase64(m.update), 'remote');
         if (m.sent !== undefined) { entry.tagged.clear(); this.sentDrafts.push({ owner: m.owner, by: m.sent }); this.sentDrafts = this.sentDrafts.slice(-20); }
+      }
+      if (m.type === 'fileDoc') {
+        const entry = this.files.get(m.path);
+        if (entry !== undefined) { Y.applyUpdate(entry.doc, fromBase64(m.update), 'remote'); entry.ready = true; }
       }
       if (m.type === 'caret' && m.memberId !== this.native.me?.id) {
         if (m.owner === undefined) this.carets.delete(m.memberId);

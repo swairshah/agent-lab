@@ -459,3 +459,46 @@ pub(crate) fn highlighted(language: &str, code: String, cx: &App) -> StyledText 
         .clone();
     StyledText::new(code).with_highlights(styles)
 }
+
+/// Code with syntax colors, one StyledText per line (a file shown with line numbers), from the same cache.
+pub(crate) fn highlighted_lines(language: &str, code: &str, cx: &App) -> Vec<StyledText> {
+    let styles = whole_styles(language, code, cx);
+    let mut out = vec![];
+    let mut start = 0;
+    for line in code.split('\n') {
+        let end = start + line.len();
+        let mine: Vec<(std::ops::Range<usize>, HighlightStyle)> = styles
+            .iter()
+            .filter(|(r, _)| r.end > start && r.start < end)
+            .map(|(r, style)| (r.start.max(start) - start..r.end.min(end) - start, *style))
+            .filter(|(r, _)| r.start < r.end && line.is_char_boundary(r.start) && line.is_char_boundary(r.end))
+            .collect();
+        out.push(StyledText::new(if line.is_empty() { " ".to_owned() } else { line.to_owned() }).with_highlights(if line.is_empty() { vec![] } else { mine }));
+        start = end + 1;
+    }
+    out
+}
+
+fn whole_styles(language: &str, code: &str, cx: &App) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
+    use std::collections::HashMap;
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    use std::sync::{Mutex, OnceLock};
+    type Styles = Vec<(std::ops::Range<usize>, HighlightStyle)>;
+    static CACHE: OnceLock<Mutex<HashMap<u64, Styles>>> = OnceLock::new();
+    let theme = &cx.theme().highlight_theme;
+    let mut hasher = DefaultHasher::new();
+    (language, code, cx.theme().is_dark()).hash(&mut hasher);
+    let key = hasher.finish();
+    CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .entry(key)
+        .or_insert_with(|| {
+            let mut highlighter = gpui_component::highlighter::SyntaxHighlighter::new(&language.to_lowercase());
+            highlighter.update(None, &gpui_component::input::Rope::from_str(code));
+            highlighter.styles(&(0..code.len()), theme)
+        })
+        .clone()
+}
+

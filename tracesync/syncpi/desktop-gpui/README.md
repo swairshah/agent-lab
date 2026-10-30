@@ -78,7 +78,13 @@ background.
 - the inbox (⇧⌘J, and in the sidebar with the unread count): mentions and tags in drafts across every thread;
   opening one goes to the message, or joins the draft; a note when one arrives.
 
-Not native yet: the changes and files panel, git, the terminal. Switch to the web view for those (View → Native or web thread). `SYNCPI_GPUI_NATIVE=1` or `0` overrides it.
+- the panel beside the thread: Changes (⇧⌘D, or the +N −M chip in the status bar), every artifact grouped by file,
+  newest first, Seen marks, the selected one large; the project tree (⇧⌘E), its files in tabs (Markdown rendered or
+  as source, code with line numbers: pick lines by their numbers, shift-click to extend, and comment on them);
+  Edit writes a file together with whoever else has it open (the host keeps its Yjs document: `…/filedoc`); Git
+  (⇧⌘G) with what's uncommitted, Stage and Commit; artifacts opened from the thread in tabs of their own.
+
+Not native yet: the terminal. Switch to the web view for those (View → Native or web thread). `SYNCPI_GPUI_NATIVE=1` or `0` overrides it.
 
 ## Testing without taking the screen
 
@@ -87,7 +93,7 @@ of it on screen, and GPUI stops drawing a window macOS reports as covered, so th
 `SYNCPI_GPUI_TEST_OPEN=html|svg|image|markdown` opens the first artifact of that kind, as a click on its Open would.
 `SYNCPI_GPUI_TEST_FIND=<text>` searches for it once the thread has loaded, and `SYNCPI_GPUI_TEST_SEND=<text>` sends
 it from the composer; `SYNCPI_GPUI_TEST_COMMENT=<quoted>|<comment>` comments on the first reply with that text;
-`SYNCPI_GPUI_TEST_COMMAND=<id>,…` runs commands once the thread is open; `SYNCPI_GPUI_TEST_TYPE=<text>` types it in the composer, and `SYNCPI_GPUI_TEST_JOIN=<text>` joins someone's draft and
+`SYNCPI_GPUI_TEST_COMMAND=<id>,…` runs commands once the thread is open; `SYNCPI_GPUI_TEST_FILE=<path>:<from>-<to>` opens a file in the panel with those lines selected; `SYNCPI_GPUI_TEST_TYPE=<text>` types it in the composer, and `SYNCPI_GPUI_TEST_JOIN=<text>` joins someone's draft and
 adds the text to it. `SYNCPI_FAUX=1` runs the host with the
 scripted model; `SYNCPI_HOME` points at a test home; `SYNCPI_GPUI_THEME=dark`
 (or `light`) overrides the system's appearance. Capture the window with

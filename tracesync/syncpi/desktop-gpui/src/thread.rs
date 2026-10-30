@@ -64,6 +64,8 @@ thread_local! {
 pub enum ThreadEvent {
     Side,
     Back,
+    /// The changes chip in the status bar: the panel's Changes.
+    Changes,
 }
 
 pub struct ThreadView {
@@ -303,6 +305,11 @@ impl ThreadView {
         self.list.scroll_to_reveal_item(row);
         cx.notify();
         true
+    }
+
+    /// What the thread produced, for the panel (edits, files written, HTML and SVG in replies).
+    pub fn artifacts(&self) -> Vec<artifact::Art> {
+        artifact::thread_artifacts(&self.items)
     }
 
     /// Whether someone's draft is here to join.
@@ -1142,6 +1149,37 @@ impl ThreadView {
             .text_color(p.muted)
             .child(div().truncate().child(if target.is_empty() { String::new() } else { format!("Runs on {target}") }))
             .child(div().flex_1())
+            .children({
+                // Every line the thread's changes added and removed; a click shows them (⇧⌘D).
+                let (mut added, mut removed, mut files) = (0, 0, std::collections::HashSet::new());
+                for a in artifact::thread_artifacts(&self.items) {
+                    match a.source {
+                        "edit" => {
+                            let (plus, minus) = patch_stats(&a.content);
+                            added += plus;
+                            removed += minus;
+                        }
+                        "write" => added += a.content.lines().count(),
+                        _ => continue,
+                    }
+                    files.extend(a.path);
+                }
+                (added + removed > 0).then(|| {
+                    div()
+                        .id("changes-chip")
+                        .flex()
+                        .gap_1()
+                        .px_2()
+                        .rounded(px(4.))
+                        .font_family(MONO)
+                        .cursor_pointer()
+                        .hover(|s| s.bg(p.sunken))
+                        .child(div().text_color(p.added).child(format!("+{added}")))
+                        .child(div().text_color(p.removed).child(format!("−{removed}")))
+                        .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(format!("This thread changed {} file{}. Click to see the changes.", files.len(), if files.len() == 1 { "" } else { "s" })).build(window, cx))
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(ThreadEvent::Changes)))
+                })
+            })
             .when(!retry.is_empty(), |d| d.child(div().text_color(p.warn).child(retry)))
             .when(busy, |d| {
                 d.child(div().flex().items_center().gap_1().child(Icon::new(IconName::LoaderCircle).size_3().text_color(p.accent)).child("Working"))
@@ -1560,7 +1598,7 @@ fn verb(tool: &str) -> &str {
 }
 
 /// Lines added and removed in a unified patch.
-fn patch_stats(patch: &str) -> (usize, usize) {
+pub(crate) fn patch_stats(patch: &str) -> (usize, usize) {
     patch.lines().fold((0, 0), |(a, r), line| {
         if line.starts_with("+++") || line.starts_with("---") {
             (a, r)
@@ -1575,7 +1613,7 @@ fn patch_stats(patch: &str) -> (usize, usize) {
 }
 
 /// A unified patch as a diff: added and removed lines tinted, with old and new line numbers.
-fn diff_view(id: String, patch: &str, p: &Palette) -> Stateful<Div> {
+pub(crate) fn diff_view(id: String, patch: &str, p: &Palette) -> Stateful<Div> {
     let (mut old, mut new, mut hunks) = (0usize, 0usize, 0usize);
     let mut lines = div().flex().flex_col().min_w_full();
     for line in patch.lines().take(600) {

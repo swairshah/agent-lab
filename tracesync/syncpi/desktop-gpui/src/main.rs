@@ -13,6 +13,7 @@ mod inbox;
 mod keymap;
 mod message;
 mod palette;
+mod panel;
 mod prose;
 mod settings;
 mod sidebar;
@@ -93,8 +94,9 @@ pub struct Desktop {
     /// Each thread's side thread (this person's, /side), once opened, and whether it's the one shown.
     sides: HashMap<String, Entity<ThreadView>>,
     _subscriptions: Vec<Subscription>,
-    /// What the panel beside a native thread shows (an artifact opened from it), and its webview when it has one.
-    panel: Option<(artifact::Shown, Option<Entity<WebView>>)>,
+    /// The panel beside a native thread (panel.rs), one per thread, and whether it's open.
+    panels: HashMap<String, Entity<panel::PanelView>>,
+    panel_open: bool,
     /// The setup and land agents' threads, once opened, by thread; and which of them (or the side thread) is shown.
     asides: HashMap<(String, &'static str), Entity<ThreadView>>,
     aside: Option<&'static str>,
@@ -147,7 +149,8 @@ impl Desktop {
             threads: HashMap::new(),
             sides: HashMap::new(),
             _subscriptions: Vec::new(),
-            panel: None,
+            panels: HashMap::new(),
+            panel_open: false,
             asides: HashMap::new(),
             aside: None,
             palette: None,
@@ -364,28 +367,12 @@ impl Desktop {
         cx.notify();
     }
 
-    /// A project file, from the palette: in the panel, as Markdown when it is, else as code.
+    /// A project file, from the palette: in a tab of the panel.
     fn open_file(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(id) = self.active.clone() else { return };
-        let host = self.host.clone();
-        cx.spawn_in(window, async move |this, cx| {
-            let query: String = url_escape(&path);
-            let read = cx.background_executor().spawn(async move { host.get(&format!("/api/sessions/{id}/file?path={query}")) }).await;
-            let _ = this.update_in(cx, |this, window, cx| match read {
-                Ok(value) => {
-                    let content = value["text"].as_str().unwrap_or_default().to_owned();
-                    let shown = if artifact::kind_of_path(&path) == artifact::Kind::Markdown {
-                        artifact::Shown::Markdown { title: path.clone(), content }
-                    } else {
-                        let language = path.rsplit('.').next().unwrap_or("").to_owned();
-                        artifact::Shown::Markdown { title: path.clone(), content: format!("```{language}\n{content}\n```") }
-                    };
-                    this.open_panel(shown, window, cx);
-                }
-                Err(e) => this.toast(e.to_string(), true, cx),
-            });
-        })
-        .detach();
+        self.toggle_panel(false, |panel, cx| {
+            panel.open_file(path, cx);
+            false
+        }, window, cx);
     }
 
     /// Share (⇧⌘S): a new invite link to the thread, shown to copy.
@@ -475,6 +462,24 @@ impl Desktop {
                 self.run(&RunCommand { id: id.trim().to_owned().into() }, window, cx);
             }
         }
+        // Tests open a file in the panel with lines selected (SYNCPI_GPUI_TEST_FILE=path:from-to).
+        if let Ok(spec) = std::env::var("SYNCPI_GPUI_TEST_FILE")
+            && !TEST_FILE.get()
+            && self.main_view().is_some_and(|v| !v.read(cx).role().is_empty())
+        {
+            TEST_FILE.set(true);
+            let (path, lines) = spec.split_once(':').unwrap_or((&spec, ""));
+            let range = lines.split_once('-').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?)));
+            let path = path.to_owned();
+            self.open_file(path.clone(), window, cx);
+            if let (Some(range), Some(panel)) = (range, self.panel(window, cx)) {
+                panel.update(cx, |panel, cx| panel.select_lines(&path, range, cx));
+            }
+        }
+        // The open panel follows what the thread produces.
+        if self.panel_open && self.ticks % 2 == 0 {
+            self.panel(window, cx);
+        }
         // Settings shows the thread as it is now.
         self.ticks += 1;
         if self.settings.is_some() && self.ticks % 4 == 0 {
@@ -547,7 +552,6 @@ impl Desktop {
     /// Shows a thread: its page when it's ready (loaded once, kept while recent), else how its setup is going.
     pub fn show(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.active.as_deref() != Some(id) {
-            self.panel = None;
             self.aside = None;
         }
         self.active = Some(id.to_owned());
@@ -589,6 +593,11 @@ impl Desktop {
                     this.open_aside("side", window, cx);
                 }
             }
+            ThreadEvent::Changes => this.toggle_panel(true, |panel, cx| {
+                let same = panel.active == panel::Tab::Changes;
+                panel.show_changes(cx);
+                same
+            }, window, cx),
             ThreadEvent::Back => {
                 this.aside = None;
                 if let Some(main) = this.threads.get(&thread) {
@@ -706,84 +715,53 @@ impl Desktop {
         .detach();
     }
 
-    /// Shows an artifact in the panel: HTML in a private webview (its own data store: no cookies, nothing to reach the
-    /// app with), a page the host serves (a recording) in one with the host's cookie, images and Markdown natively.
-    fn open_panel(&mut self, shown: artifact::Shown, window: &mut Window, cx: &mut Context<Self>) {
-        self.panel = None;
-        let builder = match &shown {
-            artifact::Shown::Html { content, .. } => Some(wry::WebViewBuilder::new().with_incognito(true).with_html(content)),
-            artifact::Shown::Page { url, .. } => Some(wry::WebViewBuilder::new().with_url(url)),
-            _ => None,
-        };
-        let webview = builder.and_then(|b| b.build_as_child(window).map_err(|e| self.error = Some(e.to_string())).ok()).map(|w| cx.new(|cx| WebView::new(w, window, cx)));
-        self.panel = Some((shown, webview));
+    /// The open thread's panel, made the first time it's needed.
+    fn panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<Entity<panel::PanelView>> {
+        let id = self.active.clone()?;
+        if !self.panels.contains_key(&id) {
+            let host = self.host.clone();
+            let view = cx.new(|cx| panel::PanelView::new(host, id.clone(), window, cx));
+            let subscription = cx.subscribe_in(&view, window, |this, _, event, window, cx| match event {
+                panel::PanelEvent::Send(message) => {
+                    let mut message = message.clone();
+                    message["where"] = json!(if this.prefs.where_vm.unwrap_or(false) { "vm" } else { "device" });
+                    this.post_to_thread(message, cx);
+                    this.toast("Comment sent", false, cx);
+                }
+                panel::PanelEvent::Close => {
+                    this.panel_open = false;
+                    this.focus_thread(window, cx);
+                    cx.notify();
+                }
+            });
+            self._subscriptions.push(subscription);
+            self.panels.insert(id.clone(), view);
+        }
+        let panel = self.panels.get(&id).cloned()?;
+        if let Some(thread) = self.main_view() {
+            let artifacts = thread.read(cx).artifacts();
+            panel.update(cx, |panel, cx| panel.set_artifacts(artifacts, cx));
+        }
+        Some(panel)
+    }
+
+    /// Opens the panel on what `with` shows; the same command again closes it.
+    fn toggle_panel(&mut self, toggle: bool, with: impl FnOnce(&mut panel::PanelView, &mut Context<panel::PanelView>) -> bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.native {
+            return self.toast("Switch to the native thread (View) for this.", true, cx);
+        }
+        let Some(panel) = self.panel(window, cx) else { return self.toast("Open a thread first.", true, cx) };
+        let same = panel.update(cx, |panel, cx| with(panel, cx));
+        self.panel_open = !(toggle && self.panel_open && same);
         cx.notify();
     }
 
-    fn panel_view(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let p = palette(cx);
-        let Some((shown, webview)) = &self.panel else { return div().into_any_element() };
-        let body = match (shown, webview) {
-            (_, Some(webview)) => div().size_full().child(webview.clone()).into_any_element(),
-            (artifact::Shown::Image { image, .. }, _) => div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .p_4()
-                .bg(gpui::white())
-                .child(img(image.clone()).max_w_full().max_h_full().object_fit(ObjectFit::Contain))
-                .into_any_element(),
-            (artifact::Shown::Markdown { content, title }, _) => div()
-                .id("panel-markdown")
-                .size_full()
-                .overflow_y_scroll()
-                .px_5()
-                .py_4()
-                .text_size(sz(14.5))
-                .line_height(sz(23.))
-                .child(div().child(message::render(&format!("panel-{title}"), content, window, cx)))
-                .into_any_element(),
-            _ => div().into_any_element(),
-        };
-        div()
-            .w(px(480.))
-            .h_full()
-            .flex_none()
-            .flex()
-            .flex_col()
-            .border_l_1()
-            .border_color(p.rule)
-            .bg(p.surface)
-            .child(
-                div()
-                    .h(px(40.))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .pl_4()
-                    .pr_2()
-                    .border_b_1()
-                    .border_color(p.rule)
-                    .child(div().flex_1().min_w_0().truncate().text_size(sz(13.)).text_color(p.ink_2).child(shown.title().to_owned()))
-                    .child(
-                        div()
-                            .id("panel-close")
-                            .p(px(5.))
-                            .rounded(px(5.))
-                            .text_color(p.muted)
-                            .hover(|s| s.bg(p.sunken).text_color(p.ink))
-                            .cursor_pointer()
-                            .child(gpui_component::Icon::new(gpui_component::IconName::Close).size(px(14.)))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.panel = None;
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .child(div().flex_1().min_h_0().child(body))
-            .into_any_element()
+    /// Shows an artifact opened from the thread in the panel.
+    fn open_panel(&mut self, shown: artifact::Shown, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_panel(false, |panel, cx| {
+            panel.preview(shown, cx);
+            false
+        }, window, cx);
     }
 
     fn step(&mut self, by: isize, window: &mut Window, cx: &mut Context<Self>) {
@@ -903,6 +881,27 @@ impl Desktop {
                 self.confirm(Confirm::NewContext, cx);
             }
             "agent.branches" => self.branches(cx),
+            "view.changes" => self.toggle_panel(true, |panel, cx| {
+                let same = panel.active == panel::Tab::Changes;
+                panel.show_changes(cx);
+                same
+            }, window, cx),
+            "view.git" => self.toggle_panel(true, |panel, cx| {
+                let same = panel.active == panel::Tab::Git;
+                panel.show_git(cx);
+                same
+            }, window, cx),
+            "view.files" => {
+                let open = self.panel_open;
+                self.toggle_panel(false, |panel, cx| {
+                    if !open && panel.tree_open {
+                        return false;
+                    }
+                    panel.toggle_tree(cx);
+                    false
+                }, window, cx);
+            }
+            "file.comment" => self.toast("Pick lines by their numbers in a file's tab, then write the comment under them.", false, cx),
             "app.settings" => self.open_settings(settings::Section::General, window, cx),
             "view.people" => self.open_settings(settings::Section::People, window, cx),
             "agent.setup" => self.open_aside("setup", window, cx),
@@ -921,7 +920,7 @@ impl Desktop {
         }
     }
 
-    fn main_pane(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn main_pane(&self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let p = palette(cx);
         let thread = self.active.as_deref().and_then(|id| self.thread(id));
         let state = |title: String, detail: String| {
@@ -964,12 +963,16 @@ impl Desktop {
             Some(t) if t.status.as_deref() == Some("failed") => state("Setup failed".into(), t.error.clone().unwrap_or_default()),
             Some(t) if !t.ready() => state("Preparing the thread".into(), t.step.clone().unwrap_or_else(|| "Starting".into())),
             Some(_) if self.native => match self.shown_view() {
-                Some(view) => div()
-                    .size_full()
-                    .flex()
-                    .child(div().flex_1().min_w_0().h_full().child(view.clone()))
-                    .when(self.panel.is_some(), |d| d.child(self.panel_view(window, cx)))
-                    .into_any_element(),
+                Some(view) => {
+                    let panel = self.panel_open.then(|| self.active.as_ref().and_then(|id| self.panels.get(id).cloned())).flatten();
+                    let wide = panel.as_ref().is_some_and(|p| p.read(cx).tree_open);
+                    div()
+                        .size_full()
+                        .flex()
+                        .child(div().flex_1().min_w_0().h_full().child(view.clone()))
+                        .children(panel.map(|panel| div().w(px(if wide { 820. } else { 600. })).flex_none().h_full().border_l_1().border_color(palette(cx).rule).child(panel)))
+                        .into_any_element()
+                }
                 None => state("Opening".into(), String::new()),
             },
             Some(t) => match self.pages.iter().find(|(id, _)| *id == t.id) {
@@ -982,6 +985,7 @@ impl Desktop {
 
 thread_local! {
     static TEST_COMMAND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static TEST_FILE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// A query string's value, escaped.

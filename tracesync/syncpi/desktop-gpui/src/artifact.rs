@@ -190,3 +190,80 @@ pub fn excerpt(language: &str, content: &str, cx: &App) -> AnyElement {
         .when(more > 0, |d| d.child(div().pt_1().text_color(p.faint).child(format!("{more} more lines"))))
         .into_any_element()
 }
+
+/// Something the thread produced, for the panel's Changes (src/shared/artifacts.ts threadArtifacts): an edit (a
+/// patch), a file written, or an HTML or SVG block in a reply. `key` is the item's key with its place there.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Art {
+    pub key: String,
+    /// "diff", "html", "svg", "markdown", "image" or "code".
+    pub kind: &'static str,
+    pub title: String,
+    pub path: Option<String>,
+    pub content: String,
+    pub lang: String,
+    /// "edit", "write" or "reply".
+    pub source: &'static str,
+}
+
+fn kind_name(path: &str) -> &'static str {
+    match kind_of_path(path) {
+        Kind::Html => "html",
+        Kind::Svg => "svg",
+        Kind::Markdown => "markdown",
+        Kind::Image => "image",
+        Kind::Code => "code",
+    }
+}
+
+/// Every artifact in a thread's items, oldest first.
+pub fn thread_artifacts(items: &[serde_json::Value]) -> Vec<Art> {
+    let s = |v: &serde_json::Value| v.as_str().map(str::to_owned);
+    let mut out = vec![];
+    for item in items {
+        let key = s(&item["key"]).unwrap_or_default();
+        if item["kind"] == "tool" && item["status"] == "done" {
+            let Some(path) = s(&item["args"]["path"]).or_else(|| s(&item["args"]["file_path"])) else { continue };
+            let lang = path.rsplit('.').next().unwrap_or("").to_lowercase();
+            match item["name"].as_str() {
+                Some("edit") => {
+                    if let Some(patch) = s(&item["details"]["patch"]).filter(|p| !p.is_empty()) {
+                        out.push(Art { key: format!("{key}:diff"), kind: "diff", title: path.clone(), path: Some(path), content: patch, lang, source: "edit" });
+                    }
+                }
+                Some("write") => {
+                    if let Some(content) = s(&item["args"]["content"]) {
+                        out.push(Art { key: format!("{key}:file"), kind: kind_name(&path), title: path.clone(), path: Some(path), content, lang, source: "write" });
+                    }
+                }
+                _ => {}
+            }
+        } else if item["kind"] == "assistant" && !item["streaming"].as_bool().unwrap_or(false) {
+            let text = s(&item["text"]).unwrap_or_default();
+            let mut n = 0;
+            let mut lines = text.lines();
+            while let Some(line) = lines.next() {
+                let Some(fence) = line.strip_prefix("```") else { continue };
+                let lang = fence.split_whitespace().next().unwrap_or("").to_lowercase();
+                let mut body = vec![];
+                for inner in lines.by_ref() {
+                    if inner.trim_end() == "```" {
+                        break;
+                    }
+                    body.push(inner);
+                }
+                let body = body.join("\n");
+                let kind = match lang.as_str() {
+                    "html" => "html",
+                    "svg" => "svg",
+                    "" if body.trim_start().to_lowercase().starts_with("<svg") => "svg",
+                    _ => continue,
+                };
+                out.push(Art { key: format!("{key}:block{n}"), kind, title: if kind == "html" { "HTML snippet".into() } else { "SVG image".into() }, path: None, content: body, lang, source: "reply" });
+                n += 1;
+            }
+        }
+    }
+    out
+}
+

@@ -141,6 +141,21 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       return json(res, { ok: true });
     }
     if (verb === 'drafts-sent' && req.method === 'GET') return json(res, { sent: live.sentDrafts });
+    // A project file written together, for the native app (runtime.ts openFile/writeFile/fileNow): POST {path, open}
+    // starts or stops following it; POST {path, text, caret, seq} writes the editor's text; GET ?path= reads it.
+    if (verb === 'filedoc') {
+      if (req.method === 'GET') {
+        const now = live.fileNow(safePath(url.searchParams.get('path') || '') || '');
+        return now ? json(res, now) : json(res, { error: 'This file isn\'t open' }, 404);
+      }
+      const data = await input(req);
+      const path = safePath(typeof data.path === 'string' ? data.path : '');
+      if (!path) throw new Error('Choose a valid file');
+      if (data.open === true) { await live.editable(); live.openFile(path); }
+      else if (data.open === false) live.closeFile(path);
+      else if (typeof data.text === 'string') live.writeFile(path, data.text, typeof data.caret === 'number' ? data.caret : data.text.length, typeof data.seq === 'number' ? data.seq : undefined);
+      return json(res, { ok: true });
+    }
     if (verb === 'send' && req.method === 'POST') {
       const message = await input(req);
       if (!['submit', 'abort', 'side', 'land', 'invite', 'invites', 'revoke', 'setRole', 'remove', 'rename', 'compact', 'new', 'branches', 'fork', 'switchBranch', 'configure'].includes(message.type)) throw new Error('Unknown session command');
