@@ -54,11 +54,20 @@ fn eid(s: String) -> ElementId {
 
 thread_local! {
     static TEST_FIND: Cell<bool> = const { Cell::new(false) };
+    static TEST_SEND: Cell<bool> = const { Cell::new(false) };
+}
+
+/// What a thread view asks of the app: show this person's side thread, or go back to the thread.
+pub enum ThreadEvent {
+    Side,
+    Back,
 }
 
 pub struct ThreadView {
     id: String,
     host: Host,
+    /// "main", the shared thread, or "side": this person's private side thread (/side), a fork of it.
+    conv: &'static str,
     /// The thread's state (ThreadState without its items), its items in order, and who's here ({ me, members,
     /// online, target }), kept up to date from the host's stream (/api/sessions/<id>/stream).
     main: Value,
@@ -91,13 +100,13 @@ struct FindBar {
 }
 
 impl ThreadView {
-    pub fn new(id: String, host: Host, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let composer = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
-                .auto_grow(1, 14)
-                .placeholder("Message the agent. Enter for a new line, ⌘↩ to send")
-        });
+    pub fn new(id: String, host: Host, conv: &'static str, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let placeholder = if conv == "side" {
+            "Ask about the thread. Only you see this. ⌘↩ to send"
+        } else {
+            "Message the agent. Enter for a new line, ⌘↩ to send; /side, /queue, /steer, /stop"
+        };
+        let composer = cx.new(|cx| InputState::new(window, cx).multi_line(true).auto_grow(1, 14).placeholder(placeholder));
         let subscriptions = vec![cx.subscribe_in(&composer, window, |this, _, event, window, cx| {
             // Enter starts a new line; ⌘↩ sends, as in the web view.
             if let InputEvent::PressEnter { secondary: true } = event {
@@ -108,7 +117,7 @@ impl ThreadView {
         // when the view goes (its receiver with it), and starts again when the host's connection drops.
         let (events, mut received) = futures::channel::mpsc::unbounded::<Value>();
         let stream_host = host.clone();
-        let path = format!("/api/sessions/{id}/stream");
+        let path = format!("/api/sessions/{id}/stream?conv={conv}");
         std::thread::spawn(move || {
             while !events.is_closed() {
                 let _ = stream_host.events(&path, |event| events.unbounded_send(event).is_ok());
@@ -127,6 +136,7 @@ impl ThreadView {
         Self {
             id,
             host,
+            conv,
             main: Value::Null,
             items: Vec::new(),
             meta: Value::Null,
@@ -291,19 +301,91 @@ impl ThreadView {
     }
 
     /// ⌘↩: the composer's text to the agent. As in the web view, it stops the run in progress (when this person may)
-    /// and runs on this Mac.
+    /// and runs on this Mac. /queue waits for the run instead, /steer joins it, /stop stops it, and /side [new]
+    /// [question] opens this person's side thread (forked again with "new"), asking it the question.
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.composer.read(cx).value().trim().to_string();
         if text.is_empty() {
             return;
         }
-        let request = format!("{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos());
-        self.send(json!({ "type": "submit", "requestId": request, "text": text, "mode": "interrupt", "where": "device" }), cx);
+        let (command, rest) = match text.strip_prefix('/') {
+            Some(after) => {
+                let (word, rest) = after.split_once(char::is_whitespace).unwrap_or((after, ""));
+                (word, rest.trim().to_owned())
+            }
+            None => ("", text.clone()),
+        };
+        let mut conv = if self.conv == "side" { json!("side") } else { Value::Null };
+        match command {
+            "stop" => self.stop(cx),
+            "side" => {
+                let fresh = rest == "new" || rest.starts_with("new ");
+                let question = if fresh { rest.trim_start_matches("new").trim().to_owned() } else { rest };
+                let mut message = json!({ "type": "side", "requestId": request_id(), "where": "device" });
+                if fresh {
+                    message["fresh"] = json!(true);
+                }
+                if !question.is_empty() {
+                    message["text"] = json!(question);
+                }
+                self.send(message, cx);
+                cx.emit(ThreadEvent::Side);
+            }
+            "queue" | "steer" | "" => {
+                if rest.is_empty() {
+                    return;
+                }
+                let mode = match command {
+                    "queue" => "followUp",
+                    "steer" => "steer",
+                    _ => "interrupt",
+                };
+                let mut message = json!({ "type": "submit", "requestId": request_id(), "text": rest, "mode": mode, "where": "device" });
+                if !conv.is_null() {
+                    message["conv"] = conv.take();
+                }
+                self.send(message, cx);
+            }
+            // Anything else goes as written (a message that starts with a slash).
+            _ => self.send(json!({ "type": "submit", "requestId": request_id(), "text": text, "mode": "interrupt", "where": "device", "conv": conv }), cx),
+        }
         self.composer.update(cx, |state, cx| state.set_value("", window, cx));
     }
 
     fn stop(&mut self, cx: &mut Context<Self>) {
-        self.send(json!({ "type": "abort" }), cx);
+        let mut message = json!({ "type": "abort" });
+        if self.conv == "side" {
+            message["conv"] = json!("side");
+        }
+        self.send(message, cx);
+    }
+
+    /// Over a side thread: whose it is, Start over (fork it again from the thread as it is now), Back.
+    fn side_banner(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        if self.conv != "side" {
+            return div().into_any_element();
+        }
+        let button = |id: &'static str, label: &'static str| {
+            div().id(id).px_2().py(px(3.)).rounded(px(5.)).text_color(p.ink_2).cursor_pointer().hover(|s| s.bg(p.sunken).text_color(p.ink)).child(label)
+        };
+        div()
+            .h(px(38.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_2()
+            .pl(px(LEFT))
+            .pr_2()
+            .border_b_1()
+            .border_color(p.rule)
+            .bg(p.accent_soft)
+            .text_size(sz(12.5))
+            .child(div().flex_1().text_color(p.ink_2).child("Your side thread · only you see it, and it can't change files"))
+            .child(button("side-fresh", "Start over").on_click(cx.listener(|this, _, _, cx| {
+                this.send(json!({ "type": "side", "requestId": request_id(), "fresh": true, "where": "device" }), cx);
+            })))
+            .child(button("side-back", "Back to the thread").on_click(cx.listener(|_, _, _, cx| cx.emit(ThreadEvent::Back))))
+            .into_any_element()
     }
 
     /// An image the host serves, fetched once (in the background) and kept; None until it has arrived.
@@ -632,6 +714,16 @@ impl Render for ThreadView {
             self.recount(true, cx);
             self.step(1, window, cx);
         }
+        // Tests send something from the composer once the thread has loaded (SYNCPI_GPUI_TEST_SEND), as typing it and
+        // pressing ⌘↩ would.
+        if let Ok(text) = std::env::var("SYNCPI_GPUI_TEST_SEND")
+            && self.conv == "main"
+            && !self.items.is_empty()
+            && !TEST_SEND.replace(true)
+        {
+            self.composer.update(cx, |state, cx| state.set_value(text, window, cx));
+            self.submit(window, cx);
+        }
         let main = self.main.clone();
         let items = std::mem::take(&mut self.items);
         // The text cursor in messages (cursor.rs, prose.rs): not focused here; no comments on messages yet.
@@ -757,6 +849,7 @@ impl Render for ThreadView {
             .key_context("ThreadView")
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, action: &RunCommand, window, cx| this.command(action, window, cx)))
+            .child(self.side_banner(&p, cx))
             .child(self.find_bar(&p, cx))
             .child(
                 div()
@@ -769,6 +862,12 @@ impl Render for ThreadView {
             .child(self.status_bar(&main, &p, cx))
             .into_any_element()
     }
+}
+
+impl EventEmitter<ThreadEvent> for ThreadView {}
+
+fn request_id() -> String {
+    format!("{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos())
 }
 
 /// One row of the thread: the mark's column (or the space for it) and the content, at the column's width.

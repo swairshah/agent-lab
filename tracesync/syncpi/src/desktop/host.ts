@@ -101,7 +101,9 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     if (verb === 'native' && req.method === 'GET') return json(res, live.snapshot());
     // The native app's live thread (desktop-gpui): server-sent events, at most one every 33 ms, each with the thread's
     // state, the order of its items and only the items changed since the last (every item has a rev), and who's here.
+    // `?conv=side`: this person's side thread instead.
     if (verb === 'stream' && req.method === 'GET') {
+      const conv = url.searchParams.get('conv') === 'side' ? 'side' : 'main';
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
       // By object, not key: a reconnect draws the thread again from scratch (new items, revs from 0), all resent.
       const sent = new WeakMap<object, number>();
@@ -110,7 +112,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       let timer: NodeJS.Timeout | undefined;
       const push = () => {
         timer = undefined;
-        const { items, ...state } = live.native.main.state;
+        const { items, ...state } = live.native[conv].state;
         const meta = { me: live.native.me, members: live.native.members, online: live.native.online, target: live.native.target };
         const who = JSON.stringify(meta);
         if (state.rev === rev && who === people) return;
@@ -129,7 +131,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     }
     if (verb === 'send' && req.method === 'POST') {
       const message = await input(req);
-      if (!['submit', 'abort', 'invite', 'invites', 'revoke', 'setRole', 'remove', 'rename', 'compact', 'new', 'branches', 'fork', 'switchBranch', 'configure'].includes(message.type)) throw new Error('Unknown session command');
+      if (!['submit', 'abort', 'side', 'invite', 'invites', 'revoke', 'setRole', 'remove', 'rename', 'compact', 'new', 'branches', 'fork', 'switchBranch', 'configure'].includes(message.type)) throw new Error('Unknown session command');
       if (message.type === 'submit' && (typeof message.text !== 'string' || typeof message.requestId !== 'string')) throw new Error('A message and request ID are required');
       live.send(message as ClientMessage); return json(res, { ok: true });
     }

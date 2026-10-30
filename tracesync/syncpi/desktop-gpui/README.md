@@ -50,14 +50,18 @@ background.
   text (the current one more strongly; prose.rs paints them from cursor.rs), Esc to close. Tool output isn't searched
   yet.
 
-Not native yet: comments, side threads, drafts written together, the inbox, settings. Switch back to the web view for those. `SYNCPI_GPUI_NATIVE=1` starts in native mode.
+- side threads: /side [new] [question] opens this person's side thread (the host streams it with `?conv=side`), with
+  its banner, Start over and Back; the composer also takes /queue, /steer and /stop, on whichever thread it's in.
+
+Not native yet: comments, drafts written together, the inbox, settings. Switch back to the web view for those. `SYNCPI_GPUI_NATIVE=1` starts in native mode.
 
 ## Testing without taking the screen
 
 `SYNCPI_GPUI_WINDOW=x,y,w,h` places the window and opens it without focus, as a floating panel: macOS keeps a corner
 of it on screen, and GPUI stops drawing a window macOS reports as covered, so the corner stays above other windows.
 `SYNCPI_GPUI_TEST_OPEN=html|svg|image|markdown` opens the first artifact of that kind, as a click on its Open would.
-`SYNCPI_GPUI_TEST_FIND=<text>` searches for it once the thread has loaded. `SYNCPI_FAUX=1` runs the host with the
+`SYNCPI_GPUI_TEST_FIND=<text>` searches for it once the thread has loaded, and `SYNCPI_GPUI_TEST_SEND=<text>` sends
+it from the composer. `SYNCPI_FAUX=1` runs the host with the
 scripted model; `SYNCPI_HOME` points at a test home; `SYNCPI_GPUI_THEME=dark`
 (or `light`) overrides the system's appearance. Capture the window with
 `screencapture -x -o -l <window id>`.

@@ -29,7 +29,7 @@ use std::{
     time::Duration,
 };
 use theme::{palette, sz};
-use thread::ThreadView;
+use thread::{ThreadEvent, ThreadView};
 
 /// Thread pages kept loaded, so going back to a recent one is instant (as the Tauri app's shell keeps them).
 const KEEP: usize = 4;
@@ -56,6 +56,10 @@ pub struct Desktop {
     /// Threads drawn natively (View → Native thread), instead of their web pages: one view per thread opened.
     native: bool,
     threads: HashMap<String, Entity<ThreadView>>,
+    /// Each thread's side thread (this person's, /side), once opened, and whether it's the one shown.
+    sides: HashMap<String, Entity<ThreadView>>,
+    in_side: bool,
+    _subscriptions: Vec<Subscription>,
     /// What the panel beside a native thread shows (an artifact opened from it), and its webview when it has one.
     panel: Option<(artifact::Shown, Option<Entity<WebView>>)>,
 }
@@ -89,6 +93,9 @@ impl Desktop {
             error: None,
             native: std::env::var("SYNCPI_GPUI_NATIVE").as_deref() == Ok("1"),
             threads: HashMap::new(),
+            sides: HashMap::new(),
+            in_side: false,
+            _subscriptions: Vec::new(),
             panel: None,
         };
         // The thread list every second and a half, as the Tauri shell polls it; page messages every tick.
@@ -196,6 +203,7 @@ impl Desktop {
     pub fn show(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.active.as_deref() != Some(id) {
             self.panel = None;
+            self.in_side = false;
         }
         self.active = Some(id.to_owned());
         for (page_id, page) in &self.pages {
@@ -220,10 +228,38 @@ impl Desktop {
         if !self.native || self.threads.contains_key(id) || !self.thread(id).is_some_and(|t| t.ready()) {
             return;
         }
-        let host = self.host.clone();
-        let view = cx.new(|cx| ThreadView::new(id.to_owned(), host, window, cx));
-        view.update(cx, |view, cx| view.focus_composer(window, cx));
+        let view = self.thread_view(id, "main", window, cx);
         self.threads.insert(id.to_owned(), view);
+    }
+
+    /// A native view of a thread's conversation ("main" or "side"), and what it asks of the app.
+    fn thread_view(&mut self, id: &str, conv: &'static str, window: &mut Window, cx: &mut Context<Self>) -> Entity<ThreadView> {
+        let host = self.host.clone();
+        let view = cx.new(|cx| ThreadView::new(id.to_owned(), host, conv, window, cx));
+        view.update(cx, |view, cx| view.focus_composer(window, cx));
+        let thread = id.to_owned();
+        let subscription = cx.subscribe_in(&view, window, move |this, _, event, window, cx| match event {
+            ThreadEvent::Side => {
+                if !this.sides.contains_key(&thread) {
+                    let side = this.thread_view(&thread, "side", window, cx);
+                    this.sides.insert(thread.clone(), side);
+                }
+                this.in_side = true;
+                if let Some(side) = this.sides.get(&thread) {
+                    side.update(cx, |side, cx| side.focus_composer(window, cx));
+                }
+                cx.notify();
+            }
+            ThreadEvent::Back => {
+                this.in_side = false;
+                if let Some(main) = this.threads.get(&thread) {
+                    main.update(cx, |main, cx| main.focus_composer(window, cx));
+                }
+                cx.notify();
+            }
+        });
+        self._subscriptions.push(subscription);
+        view
     }
 
     fn ensure_page(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -484,7 +520,7 @@ impl Desktop {
             None => div().size_full().into_any_element(),
             Some(t) if t.status.as_deref() == Some("failed") => state("Setup failed".into(), t.error.clone().unwrap_or_default()),
             Some(t) if !t.ready() => state("Preparing the thread".into(), t.step.clone().unwrap_or_else(|| "Starting".into())),
-            Some(t) if self.native => match self.threads.get(&t.id) {
+            Some(t) if self.native => match (if self.in_side { self.sides.get(&t.id) } else { None }).or_else(|| self.threads.get(&t.id)) {
                 Some(view) => div()
                     .size_full()
                     .flex()
