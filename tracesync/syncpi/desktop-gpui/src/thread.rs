@@ -7,6 +7,7 @@
 // Ported in parts from the earlier native app (tag gpui-desktop-final, transcript.rs).
 use crate::host::Host;
 use crate::theme::{self, MONO, Palette, palette, sz};
+use crate::artifact::{self, Kind, Shown};
 use crate::{icons, message};
 use gpui::{prelude::FluentBuilder, *};
 use gpui_component::{
@@ -18,7 +19,10 @@ use std::{
     cell::Cell,
     collections::HashSet,
     rc::Rc,
-    sync::atomic::{AtomicU32, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
     time::Duration,
 };
 
@@ -61,6 +65,8 @@ pub struct ThreadView {
     thinking: HashSet<String>,
     toggled: HashSet<String>,
     groups: HashSet<String>,
+    /// Images fetched from the host (screenshots), by path: None while one is loading.
+    images: Rc<std::cell::RefCell<std::collections::HashMap<String, Option<Arc<Image>>>>>,
     /// The thread's width last frame, measured, for the column.
     width: Rc<Cell<f32>>,
     loaded: bool,
@@ -112,6 +118,7 @@ impl ThreadView {
             thinking: HashSet::new(),
             toggled: HashSet::new(),
             groups: HashSet::new(),
+            images: Default::default(),
             width: Rc::new(Cell::new(900.)),
             loaded: false,
             _subscriptions: subscriptions,
@@ -157,6 +164,91 @@ impl ThreadView {
 
     fn stop(&mut self, cx: &mut Context<Self>) {
         self.send(json!({ "type": "abort" }), cx);
+    }
+
+    /// An image the host serves, fetched once (in the background) and kept; None until it has arrived.
+    fn remote_image(&self, path: String, format: ImageFormat, cx: &mut Context<Self>) -> Option<Arc<Image>> {
+        if let Some(found) = self.images.borrow().get(&path) {
+            return found.clone();
+        }
+        self.images.borrow_mut().insert(path.clone(), None);
+        let host = self.host.clone();
+        let images = self.images.clone();
+        cx.spawn(async move |this, cx| {
+            let fetched = cx.background_executor().spawn({
+                let path = path.clone();
+                async move { host.bytes(&path) }
+            });
+            if let Ok(bytes) = fetched.await {
+                images.borrow_mut().insert(path, Some(Arc::new(Image::from_bytes(format, bytes))));
+                let _ = this.update(cx, |_, cx| cx.notify());
+            }
+        })
+        .detach();
+        None
+    }
+
+    /// A screenshot or recording from the agent's browser tools (on the VM), served through the host.
+    fn recording(&self, name: &str) -> String {
+        let file = name.rsplit('/').next().unwrap_or(name);
+        format!("/session/{}/api/recording?name={}", self.id, file)
+    }
+
+    /// A tool call's artifact, shown under its line: a file it wrote (HTML, SVG, Markdown), a screenshot, a recording.
+    fn tool_artifact(&self, item: &Value, key: &str, p: &Palette, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let tool = text(item, "name");
+        let args = &item["args"];
+        let details = &item["details"];
+        if tool == "write" {
+            let path = args["path"].as_str().or(args["file_path"].as_str())?.to_owned();
+            let content = args["content"].as_str()?.to_owned();
+            let kind = artifact::kind_of_path(&path);
+            return match kind {
+                Kind::Svg => {
+                    let (image, natural) = artifact::svg_image(&content);
+                    Some(artifact::card(format!("art-{key}"), kind, path.clone(), artifact::picture(image.clone(), 320., natural), Some(Shown::Image { title: path, image }), p))
+                }
+                Kind::Html => Some(artifact::card(format!("art-{key}"), kind, path.clone(), artifact::excerpt("html", &content, cx), Some(Shown::Html { title: path, content }), p)),
+                Kind::Markdown => {
+                    let body = div()
+                        .id(eid(format!("md-{key}")))
+                        .max_h(px(360.))
+                        .overflow_y_scroll()
+                        .px(px(14.))
+                        .py(px(10.))
+                        .text_size(sz(14.))
+                        .line_height(sz(22.))
+                        .child(message::render(&format!("md-{key}"), &content, window, cx))
+                        .into_any_element();
+                    Some(artifact::card(format!("art-{key}"), kind, path.clone(), body, Some(Shown::Markdown { title: path, content }), p))
+                }
+                _ => None,
+            };
+        }
+        if tool == "screenshot_browser" {
+            let name = details["image"].as_str()?.to_owned();
+            let title = args["title"].as_str().unwrap_or("Screenshot").to_owned();
+            let path = self.recording(&name);
+            let body = match self.remote_image(path, artifact::image_format(&name), cx) {
+                Some(image) => {
+                    return Some(artifact::card(format!("art-{key}"), Kind::Image, title.clone(), artifact::picture(image.clone(), 420., None), Some(Shown::Image { title, image }), p));
+                }
+                None => div().p_3().text_size(sz(12.5)).text_color(p.muted).child("Loading the screenshot…").into_any_element(),
+            };
+            return Some(artifact::card(format!("art-{key}"), Kind::Image, title, body, None, p));
+        }
+        if tool == "record_browser" {
+            let video = details["video"].as_str()?.to_owned();
+            let title = args["title"].as_str().unwrap_or("Recording").to_owned();
+            let poster = details["poster"].as_str().map(|poster| (self.recording(poster), poster.to_owned()));
+            let body = match poster.and_then(|(path, name)| self.remote_image(path, artifact::image_format(&name), cx)) {
+                Some(image) => artifact::picture(image, 320., None),
+                None => div().p_3().text_size(sz(12.5)).text_color(p.muted).child("A recording: Open plays it.").into_any_element(),
+            };
+            let url = format!("{}{}", self.host.origin, self.recording(&video));
+            return Some(artifact::card(format!("art-{key}"), Kind::Image, title.clone(), body, Some(Shown::Page { title, url }), p));
+        }
+        None
     }
 
     fn name_of(&self, member: &str, fallback: String) -> String {
@@ -236,7 +328,7 @@ impl ThreadView {
     }
 
     /// One tool call: a quiet line, opening to its diff, written file or output. Edits start open.
-    fn tool_content(&self, item: &Value, key: &str, p: &Palette, cx: &mut Context<Self>) -> Div {
+    fn tool_content(&self, item: &Value, key: &str, p: &Palette, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let tool = text(item, "name");
         let status = text(item, "status");
         let args = &item["args"];
@@ -244,7 +336,9 @@ impl ThreadView {
         let summary = detail.split_whitespace().collect::<Vec<_>>().join(" ");
         let patch = item["details"]["patch"].as_str().unwrap_or("").to_owned();
         let stats = (!patch.is_empty()).then(|| patch_stats(&patch));
-        let open = (!patch.is_empty()) != self.toggled.contains(key) || status == "error";
+        // Edits and artifacts (a written page, a screenshot) are what people come to see: they start open.
+        let artifact = self.tool_artifact(item, key, p, window, cx);
+        let open = (!patch.is_empty() || artifact.is_some()) != self.toggled.contains(key) || status == "error";
         let k = key.to_owned();
         let header = div()
             .id(eid(format!("tool-{key}")))
@@ -282,7 +376,9 @@ impl ThreadView {
         if open {
             let output = text(item, "output");
             let written = args["content"].as_str().filter(|_| tool == "write");
-            let body = if !patch.is_empty() {
+            let body = if let Some(artifact) = artifact {
+                Some(artifact)
+            } else if !patch.is_empty() {
                 Some(diff_view(format!("diff-{key}"), &patch, p).into_any_element())
             } else if let Some(source) = written {
                 Some(code_box(format!("write-{key}"), source.to_owned(), p).into_any_element())
@@ -301,7 +397,7 @@ impl ThreadView {
     }
 
     /// A run of quiet tool calls as one line ("Ran 1 command, read 3 files"), opening to one line per call.
-    fn group_row(&self, tools: &[&Value], avatar: bool, model: &str, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+    fn group_row(&self, tools: &[&Value], avatar: bool, model: &str, p: &Palette, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let key = format!("group-{}", text(tools[0], "key"));
         let open = self.groups.contains(&key);
         let running = tools.iter().any(|t| t["status"] == "running" || t["status"] == "pending");
@@ -330,7 +426,7 @@ impl ThreadView {
         );
         if open {
             for tool in tools {
-                content = content.child(div().pt(px(2.)).child(self.tool_content(tool, &text(tool, "key"), p, cx)));
+                content = content.child(div().pt(px(2.)).child(self.tool_content(tool, &text(tool, "key"), p, window, cx)));
             }
         }
         row(avatar.then(|| avatar_model(model, p)), content).into_any_element()
@@ -396,7 +492,7 @@ impl Render for ThreadView {
                 Unit::Group(tools) if tools.len() > 1 => {
                     crate::cursor::row(rows.len());
                     let gap = if previous_agent { 10. } else { 16. };
-                    rows.push(div().mt(px(gap)).child(self.group_row(&tools, !previous_agent, &model, &p, cx)).into_any_element());
+                    rows.push(div().mt(px(gap)).child(self.group_row(&tools, !previous_agent, &model, &p, window, cx)).into_any_element());
                     previous_agent = true;
                     continue;
                 }
@@ -413,7 +509,7 @@ impl Render for ThreadView {
             let element = match kind.as_str() {
                 "user" => Some(self.user_row(item, &key, &p, window, cx)),
                 "assistant" => self.assistant_row(item, &key, !previous_agent, &model, &p, window, cx),
-                "tool" => Some(row((!previous_agent).then(|| avatar_model(&model, &p)), self.tool_content(item, &key, &p, cx)).into_any_element()),
+                "tool" => Some(row((!previous_agent).then(|| avatar_model(&model, &p)), self.tool_content(item, &key, &p, window, cx)).into_any_element()),
                 "notice" => Some(
                     div()
                         .w(px(column))

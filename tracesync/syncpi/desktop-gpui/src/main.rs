@@ -2,6 +2,7 @@
 // natively as Delta draws everything; each thread is still the web view (src/web), embedded in a webview, until
 // its parts are made native one by one. The app runs the same local host as the Tauri app (dist/desktop-host.mjs),
 // which serves the thread pages and keeps their connections, file sync and tools.
+mod artifact;
 mod citations;
 mod cursor;
 mod diagram;
@@ -55,6 +56,8 @@ pub struct Desktop {
     /// Threads drawn natively (View → Native thread), instead of their web pages: one view per thread opened.
     native: bool,
     threads: HashMap<String, Entity<ThreadView>>,
+    /// What the panel beside a native thread shows (an artifact opened from it), and its webview when it has one.
+    panel: Option<(artifact::Shown, Option<Entity<WebView>>)>,
 }
 
 impl Desktop {
@@ -86,6 +89,7 @@ impl Desktop {
             error: None,
             native: std::env::var("SYNCPI_GPUI_NATIVE").as_deref() == Ok("1"),
             threads: HashMap::new(),
+            panel: None,
         };
         // The thread list every second and a half, as the Tauri shell polls it; page messages every tick.
         cx.spawn_in(window, async move |this, cx| {
@@ -190,6 +194,9 @@ impl Desktop {
 
     /// Shows a thread: its page when it's ready (loaded once, kept while recent), else how its setup is going.
     pub fn show(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active.as_deref() != Some(id) {
+            self.panel = None;
+        }
         self.active = Some(id.to_owned());
         for (page_id, page) in &self.pages {
             if page_id != id || self.native {
@@ -323,6 +330,86 @@ impl Desktop {
         .detach();
     }
 
+    /// Shows an artifact in the panel: HTML in a private webview (its own data store: no cookies, nothing to reach the
+    /// app with), a page the host serves (a recording) in one with the host's cookie, images and Markdown natively.
+    fn open_panel(&mut self, shown: artifact::Shown, window: &mut Window, cx: &mut Context<Self>) {
+        self.panel = None;
+        let builder = match &shown {
+            artifact::Shown::Html { content, .. } => Some(wry::WebViewBuilder::new().with_incognito(true).with_html(content)),
+            artifact::Shown::Page { url, .. } => Some(wry::WebViewBuilder::new().with_url(url)),
+            _ => None,
+        };
+        let webview = builder.and_then(|b| b.build_as_child(window).map_err(|e| self.error = Some(e.to_string())).ok()).map(|w| cx.new(|cx| WebView::new(w, window, cx)));
+        self.panel = Some((shown, webview));
+        cx.notify();
+    }
+
+    fn panel_view(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let p = palette(cx);
+        let Some((shown, webview)) = &self.panel else { return div().into_any_element() };
+        let body = match (shown, webview) {
+            (_, Some(webview)) => div().size_full().child(webview.clone()).into_any_element(),
+            (artifact::Shown::Image { image, .. }, _) => div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .p_4()
+                .bg(gpui::white())
+                .child(img(image.clone()).max_w_full().max_h_full().object_fit(ObjectFit::Contain))
+                .into_any_element(),
+            (artifact::Shown::Markdown { content, title }, _) => div()
+                .id("panel-markdown")
+                .size_full()
+                .overflow_y_scroll()
+                .px_5()
+                .py_4()
+                .text_size(sz(14.5))
+                .line_height(sz(23.))
+                .child(div().child(message::render(&format!("panel-{title}"), content, window, cx)))
+                .into_any_element(),
+            _ => div().into_any_element(),
+        };
+        div()
+            .w(px(480.))
+            .h_full()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .border_l_1()
+            .border_color(p.rule)
+            .bg(p.surface)
+            .child(
+                div()
+                    .h(px(40.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .pl_4()
+                    .pr_2()
+                    .border_b_1()
+                    .border_color(p.rule)
+                    .child(div().flex_1().min_w_0().truncate().text_size(sz(13.)).text_color(p.ink_2).child(shown.title().to_owned()))
+                    .child(
+                        div()
+                            .id("panel-close")
+                            .p(px(5.))
+                            .rounded(px(5.))
+                            .text_color(p.muted)
+                            .hover(|s| s.bg(p.sunken).text_color(p.ink))
+                            .cursor_pointer()
+                            .child(gpui_component::Icon::new(gpui_component::IconName::Close).size(px(14.)))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.panel = None;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(div().flex_1().min_h_0().child(body))
+            .into_any_element()
+    }
+
     fn step(&mut self, by: isize, window: &mut Window, cx: &mut Context<Self>) {
         let order: Vec<String> = sidebar::groups(&self.catalog).into_iter().flat_map(|g| g.threads.into_iter().map(|t| t.id)).collect();
         if order.is_empty() {
@@ -354,7 +441,7 @@ impl Desktop {
         }
     }
 
-    fn main_pane(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn main_pane(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let p = palette(cx);
         let thread = self.active.as_deref().and_then(|id| self.thread(id));
         let state = |title: String, detail: String| {
@@ -397,7 +484,12 @@ impl Desktop {
             Some(t) if t.status.as_deref() == Some("failed") => state("Setup failed".into(), t.error.clone().unwrap_or_default()),
             Some(t) if !t.ready() => state("Preparing the thread".into(), t.step.clone().unwrap_or_else(|| "Starting".into())),
             Some(t) if self.native => match self.threads.get(&t.id) {
-                Some(view) => div().size_full().child(view.clone()).into_any_element(),
+                Some(view) => div()
+                    .size_full()
+                    .flex()
+                    .child(div().flex_1().min_w_0().h_full().child(view.clone()))
+                    .when(self.panel.is_some(), |d| d.child(self.panel_view(window, cx)))
+                    .into_any_element(),
                 None => state("Opening".into(), String::new()),
             },
             Some(t) => match self.pages.iter().find(|(id, _)| *id == t.id) {
@@ -419,6 +511,10 @@ fn dark(window: &Window) -> bool {
 
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // An artifact's Open (artifact.rs) asks for the panel.
+        if let Some(shown) = artifact::take_open() {
+            self.open_panel(shown, window, cx);
+        }
         let p = palette(cx);
         div()
             .size_full()
@@ -429,7 +525,7 @@ impl Render for Desktop {
             .key_context("SyncPi")
             .on_action(cx.listener(|this, action: &RunCommand, window, cx| this.run(action, window, cx)))
             .when(self.sidebar_open, |d| d.child(sidebar::render(self, window, cx)))
-            .child(div().flex_1().h_full().min_w_0().child(self.main_pane(cx)))
+            .child(div().flex_1().h_full().min_w_0().child(self.main_pane(window, cx)))
     }
 }
 

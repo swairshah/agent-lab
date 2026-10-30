@@ -206,6 +206,19 @@ pub fn render(id: &str, source: &str, window: &mut Window, cx: &mut App) -> AnyE
                 }
                 container = container.child(list);
             }
+            // HTML and SVG in a reply are artifacts, as in the web view: a card, opening in the panel.
+            Block::Code { language, content } if crate::artifact::kind_of_fence(&language, &content).is_some() => {
+                use crate::artifact::{Kind, Shown, card, excerpt, picture, svg_image};
+                let p = crate::theme::palette(cx);
+                let kind = crate::artifact::kind_of_fence(&language, &content).unwrap_or(Kind::Html);
+                let element = if kind == Kind::Svg {
+                    let (image, natural) = svg_image(&content);
+                    card(block_id, kind, "SVG image".into(), picture(image.clone(), 280., natural), Some(Shown::Image { title: "SVG image".into(), image }), &p)
+                } else {
+                    card(block_id, kind, "HTML snippet".into(), excerpt("html", &content, cx), Some(Shown::Html { title: "HTML snippet".into(), content: content.clone() }), &p)
+                };
+                container = container.child(element);
+            }
             Block::Code { language, content } if language == "mermaid" => {
                 container = container.child(crate::diagram::view(
                     &block_id,
@@ -422,7 +435,7 @@ mod tests {
 
 /// Code with syntax colors (tree-sitter, through gpui-component), kept per block and theme since a frame may draw it
 /// many times. Unknown languages stay plain.
-fn highlighted(language: &str, code: String, cx: &App) -> StyledText {
+pub(crate) fn highlighted(language: &str, code: String, cx: &App) -> StyledText {
     use std::collections::HashMap;
     use std::hash::{DefaultHasher, Hash, Hasher};
     use std::sync::{Mutex, OnceLock};

@@ -155,6 +155,15 @@ impl Host {
         Ok(value)
     }
 
+    /// A file the host serves (a project file, a recording), as bytes.
+    pub fn bytes(&self, path: &str) -> Result<Vec<u8>> {
+        let response = self.http.get(format!("{}{path}", self.origin)).bearer_auth(&self.secret).send()?;
+        if !response.status().is_success() {
+            bail!("{}", response.status());
+        }
+        Ok(response.bytes()?.to_vec())
+    }
+
     pub fn post(&self, path: &str, body: &Value) -> Result<Value> {
         let response = self
             .http

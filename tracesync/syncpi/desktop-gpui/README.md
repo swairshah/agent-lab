@@ -40,13 +40,19 @@ background.
   line ("Ran 1 command, read 1 file");
 - notices, the composer as the last row (⌘↩ sends, as in the web view), and a status bar with Stop.
 
-Not native yet: artifacts (HTML previews, images, the side panel), comments, side threads, Find, drafts written
-together, the inbox, settings. Switch back to the web view for those. `SYNCPI_GPUI_NATIVE=1` starts in native mode.
+- artifacts, as the web view finds them (src/shared/artifacts.ts): a file the agent wrote (HTML, SVG, Markdown), HTML
+  and SVG blocks in a reply, and screenshots and recordings from its browser tools, each a card in the thread (SVG
+  and images drawn natively; SVG rendered to PNG with resvg, since gpui 0.2.2 swaps red and blue in an SVG image).
+  Open shows one in the panel beside the thread: HTML in a private webview (its own data store, no bridge to the
+  app), a recording in a webview that plays it, images and Markdown natively.
+
+Not native yet: comments, side threads, Find, drafts written together, the inbox, settings. Switch back to the web view for those. `SYNCPI_GPUI_NATIVE=1` starts in native mode.
 
 ## Testing without taking the screen
 
 `SYNCPI_GPUI_WINDOW=x,y,w,h` places the window and opens it without focus, as a floating panel: macOS keeps a corner
 of it on screen, and GPUI stops drawing a window macOS reports as covered, so the corner stays above other windows.
+`SYNCPI_GPUI_TEST_OPEN=html|svg|image|markdown` opens the first artifact of that kind, as a click on its Open would.
 `SYNCPI_FAUX=1` runs the host with the scripted model; `SYNCPI_HOME` points at a test home; `SYNCPI_GPUI_THEME=dark`
 (or `light`) overrides the system's appearance. Capture the window with
 `screencapture -x -o -l <window id>`.
