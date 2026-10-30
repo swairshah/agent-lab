@@ -297,6 +297,19 @@ impl ThreadView {
         cx.notify();
     }
 
+    /// Scrolls the row of item `key` into view (from the inbox); false until the thread has drawn it.
+    pub fn reveal_key(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
+        let Some(&row) = self.row_of.get(key) else { return false };
+        self.list.scroll_to_reveal_item(row);
+        cx.notify();
+        true
+    }
+
+    /// Whether someone's draft is here to join.
+    pub fn has_draft(&self, owner: &str) -> bool {
+        self.drafts.iter().any(|d| text(d, "owner") == owner && !text(d, "text").is_empty())
+    }
+
     /// Scrolls the current match's row into view.
     fn reveal(&mut self, cx: &mut Context<Self>) {
         let Some((key, _)) = self.find.as_ref().and_then(|f| f.matches.get(f.current)) else { return };
@@ -564,7 +577,7 @@ impl ThreadView {
     }
 
     /// Write together: the composer writes `owner`'s draft with them; yours waits as you left it.
-    fn join_draft(&mut self, owner: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn join_draft(&mut self, owner: String, window: &mut Window, cx: &mut Context<Self>) {
         let Some(draft) = self.drafts.iter().find(|d| text(d, "owner") == owner) else { return };
         let body = text(draft, "text");
         self.joined = Some(owner);

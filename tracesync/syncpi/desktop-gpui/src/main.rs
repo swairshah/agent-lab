@@ -9,6 +9,7 @@ mod diagram;
 mod dialogs;
 mod host;
 mod icons;
+mod inbox;
 mod keymap;
 mod message;
 mod palette;
@@ -56,6 +57,11 @@ struct Prefs {
     web: Option<bool>,
     /// This person's requests run on the session's VM rather than this Mac.
     where_vm: Option<bool>,
+    /// The inbox's items read, and those already seen (announced), by id (inbox.rs).
+    #[serde(default)]
+    inbox_read: Vec<String>,
+    #[serde(default)]
+    inbox_seen: Vec<String>,
 }
 
 fn prefs_path() -> std::path::PathBuf {
@@ -99,6 +105,13 @@ pub struct Desktop {
     prefs: Prefs,
     settings: Option<settings::SettingsState>,
     ticks: u64,
+    /// The inbox's items (mentions and tags in drafts, every thread), and the inbox when it's open.
+    mentions: Vec<Value>,
+    inbox_open: Option<inbox::InboxState>,
+    inbox_focus: FocusHandle,
+    started_ms: f64,
+    /// A message to scroll to once its thread is drawn (thread, item key), and a draft to join there.
+    reveal: Option<(String, String, Option<String>)>,
     /// The sidebar lists archived threads instead (⌘Y).
     archives: bool,
 }
@@ -144,6 +157,11 @@ impl Desktop {
             archives: false,
             settings: None,
             ticks: 0,
+            mentions: Vec::new(),
+            inbox_open: None,
+            inbox_focus: cx.focus_handle(),
+            started_ms: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as f64).unwrap_or(0.),
+            reveal: None,
         };
         // The thread list every second and a half, as the Tauri shell polls it; page messages every tick.
         cx.spawn_in(window, async move |this, cx| {
@@ -461,6 +479,26 @@ impl Desktop {
         self.ticks += 1;
         if self.settings.is_some() && self.ticks % 4 == 0 {
             self.refresh_settings(cx);
+        }
+        if self.ticks % 16 == 2 {
+            self.refresh_inbox(cx);
+        }
+        // An inbox item opened: its message, once the thread has drawn it; or the draft it tagged you in.
+        if let Some((thread, key, draft)) = self.reveal.clone()
+            && self.active.as_deref() == Some(thread.as_str())
+            && let Some(view) = self.threads.get(&thread).cloned()
+        {
+            let done = match draft {
+                Some(owner) if view.read(cx).has_draft(&owner) => {
+                    view.update(cx, |view, cx| view.join_draft(owner, window, cx));
+                    true
+                }
+                Some(_) => view.update(cx, |view, cx| view.reveal_key(&key, cx)),
+                None => view.update(cx, |view, cx| view.reveal_key(&key, cx)),
+            };
+            if done || self.ticks % 40 == 0 {
+                self.reveal = None;
+            }
         }
         if self.toast.as_ref().is_some_and(|(_, error, at)| at.elapsed() > Duration::from_secs(if *error { 6 } else { 3 })) {
             self.toast = None;
@@ -780,6 +818,7 @@ impl Desktop {
             "palette.files" => self.open_palette(Tab::Files, window, cx),
             "palette.threads" => self.open_palette(Tab::Threads, window, cx),
             "agent.model" => self.open_palette(Tab::Models, window, cx),
+            "inbox.toggle" => self.toggle_inbox(window, cx),
             "app.keymap" => {
                 self.dialog = Some(Dialog::Keymap);
                 cx.notify();
@@ -968,6 +1007,7 @@ impl Render for Desktop {
         let p = palette(cx);
         let dialog = self.dialog_view(cx);
         let settings = self.settings_view(window, cx);
+        let inbox = self.inbox_view(cx);
         let toast = self.toast.as_ref().map(|(text, error, _)| {
             div()
                 .absolute()
@@ -1001,6 +1041,7 @@ impl Render for Desktop {
             .child(div().flex_1().h_full().min_w_0().child(self.main_pane(window, cx)))
             .children(self.palette.clone())
             .children(settings)
+            .children(inbox)
             .children(dialog)
             .children(toast)
     }

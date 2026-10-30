@@ -274,14 +274,39 @@ pub fn render(desktop: &Desktop, _window: &mut Window, cx: &mut Context<Desktop>
                 .items_center()
                 .justify_end()
                 .gap(px(2.))
-                .pl(px(80.))
-                .pr(px(8.))
+                .pl(px(76.))
+                .pr(px(6.))
                 .on_mouse_down(MouseButton::Left, |event, window, _| {
                     if event.click_count == 2 {
                         window.titlebar_double_click();
                     } else {
                         window.start_window_move();
                     }
+                })
+                .child({
+                    let unread = desktop.unread_mentions().len();
+                    div()
+                        .relative()
+                        .child(head_button("sidebar-inbox", Icon::new(IconName::Inbox), "Inbox (⇧⌘J)", "inbox.toggle", &p, cx))
+                        .when(unread > 0, |d| {
+                            d.child(
+                                div()
+                                    .absolute()
+                                    .top(px(-1.))
+                                    .right(px(-3.))
+                                    .min_w(px(14.))
+                                    .h(px(14.))
+                                    .px(px(3.))
+                                    .rounded_full()
+                                    .bg(p.accent)
+                                    .text_color(p.accent_ink)
+                                    .text_size(px(9.5))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(unread.to_string()),
+                            )
+                        })
                 })
                 .child(head_button("sidebar-search", Icon::new(IconName::Search), "Go to thread (⌘T)", "palette.threads", &p, cx))
                 .child(head_button(

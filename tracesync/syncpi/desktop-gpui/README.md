@@ -75,7 +75,10 @@ background.
   thinking level, context; people (roles, removing) and invites (email or link, role, expiry; revoking);
   branches; the environment the setup agent prepared; the session.
 
-Not native yet: the inbox, the changes and files panel, git, the terminal. Switch to the web view for those (View → Native or web thread). `SYNCPI_GPUI_NATIVE=1` or `0` overrides it.
+- the inbox (⇧⌘J, and in the sidebar with the unread count): mentions and tags in drafts across every thread;
+  opening one goes to the message, or joins the draft; a note when one arrives.
+
+Not native yet: the changes and files panel, git, the terminal. Switch to the web view for those (View → Native or web thread). `SYNCPI_GPUI_NATIVE=1` or `0` overrides it.
 
 ## Testing without taking the screen
 
