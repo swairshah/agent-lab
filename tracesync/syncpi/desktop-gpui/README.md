@@ -71,7 +71,11 @@ background.
   keyboard shortcuts. The sidebar has search, the archive (⌘Y), the theme, pins, bookmarks, tags and a right-click
   menu. Threads are native by default; View → Native or web thread switches.
 
-Not native yet: the inbox, settings, the changes and files panel, git, the terminal. Switch to the web view for those (View → Native or web thread). `SYNCPI_GPUI_NATIVE=1` or `0` overrides it.
+- Settings (⌘,): your name, appearance, where your requests run (this Mac or the session VM), the model and
+  thinking level, context; people (roles, removing) and invites (email or link, role, expiry; revoking);
+  branches; the environment the setup agent prepared; the session.
+
+Not native yet: the inbox, the changes and files panel, git, the terminal. Switch to the web view for those (View → Native or web thread). `SYNCPI_GPUI_NATIVE=1` or `0` overrides it.
 
 ## Testing without taking the screen
 

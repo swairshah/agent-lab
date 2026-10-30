@@ -359,7 +359,7 @@ impl ThreadView {
             "requestId": request_id(),
             "text": written,
             "mode": "interrupt",
-            "where": "device",
+            "where": where_to(),
             "comments": [{ "path": "", "start": 0, "end": 0, "excerpt": excerpt, "text": note, "message": message }],
         });
         if self.conv != "main" {
@@ -716,7 +716,7 @@ impl ThreadView {
             "side" => {
                 let fresh = rest == "new" || rest.starts_with("new ");
                 let question = if fresh { rest.trim_start_matches("new").trim().to_owned() } else { rest };
-                let mut message = json!({ "type": "side", "requestId": request_id(), "where": "device" });
+                let mut message = json!({ "type": "side", "requestId": request_id(), "where": where_to() });
                 if fresh {
                     message["fresh"] = json!(true);
                 }
@@ -735,7 +735,7 @@ impl ThreadView {
                     "steer" => "steer",
                     _ => "interrupt",
                 };
-                let mut message = json!({ "type": "submit", "requestId": request_id(), "text": rest, "mode": mode, "where": "device" });
+                let mut message = json!({ "type": "submit", "requestId": request_id(), "text": rest, "mode": mode, "where": where_to() });
                 if !conv.is_null() {
                     message["conv"] = conv.take();
                 }
@@ -745,7 +745,7 @@ impl ThreadView {
                 self.send(message, cx);
             }
             // Anything else goes as written (a message that starts with a slash).
-            _ => self.send(json!({ "type": "submit", "requestId": request_id(), "text": text, "mode": "interrupt", "where": "device", "conv": conv }), cx),
+            _ => self.send(json!({ "type": "submit", "requestId": request_id(), "text": text, "mode": "interrupt", "where": where_to(), "conv": conv }), cx),
         }
         self.composer.update(cx, |state, cx| state.set_value("", window, cx));
         if self.conv == "main" {
@@ -831,7 +831,7 @@ impl ThreadView {
             .text_size(sz(12.5))
             .child(div().flex_1().text_color(p.ink_2).child("Your side thread · only you see it, and it can't change files"))
             .child(button("side-fresh", "Start over").on_click(cx.listener(|this, _, _, cx| {
-                this.send(json!({ "type": "side", "requestId": request_id(), "fresh": true, "where": "device" }), cx);
+                this.send(json!({ "type": "side", "requestId": request_id(), "fresh": true, "where": where_to() }), cx);
             })))
             .child(button("side-back", "Back to the thread").on_click(cx.listener(|_, _, _, cx| cx.emit(ThreadEvent::Back))))
             .into_any_element()
@@ -1459,6 +1459,17 @@ fn comment_card(c: &Value, name: &str, p: &Palette) -> AnyElement {
         code = code.child(div().text_color(p.faint).child(format!("{} more lines", lines.len() - 6)));
     }
     card.child(div().font_family(MONO).text_size(sz(12.)).text_color(p.accent).child(place)).child(code).child(note).into_any_element()
+}
+
+static WHERE_VM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Where this person's requests run (Settings → Your requests run on): this Mac, or the session's VM.
+pub fn set_where_vm(vm: bool) {
+    WHERE_VM.store(vm, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn where_to() -> &'static str {
+    if WHERE_VM.load(std::sync::atomic::Ordering::Relaxed) { "vm" } else { "device" }
 }
 
 fn request_id() -> String {

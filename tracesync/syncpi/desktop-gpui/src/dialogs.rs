@@ -177,7 +177,7 @@ impl Desktop {
                 .when(!primary, |d| d.border_1().border_color(p.rule).text_color(p.ink_2).hover(|s| s.bg(p.sunken)))
                 .child(label)
         };
-        let field_box = |input: &Entity<InputState>| div().px_2().py(px(5.)).rounded(px(6.)).border_1().border_color(p.rule_strong).bg(p.paper).child(Input::new(input).appearance(false).text_size(sz(14.)));
+        let field_box = |input: &Entity<InputState>| div().px_2().py(px(5.)).rounded(px(6.)).border_1().border_color(p.rule_strong).bg(p.paper).child(Input::new(input).appearance(false).px_0().py(px(1.)).text_size(sz(14.)));
         let label = |text: String| div().text_size(sz(12.5)).text_color(p.muted).child(text);
         let mut body = div().flex().flex_col().gap_3();
         let mut ok: Option<String> = None;

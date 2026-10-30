@@ -13,6 +13,7 @@ mod keymap;
 mod message;
 mod palette;
 mod prose;
+mod settings;
 mod sidebar;
 mod theme;
 mod thread;
@@ -53,6 +54,8 @@ struct Prefs {
     preview: Option<String>,
     /// Threads drawn natively (the default), or as the web view.
     web: Option<bool>,
+    /// This person's requests run on the session's VM rather than this Mac.
+    where_vm: Option<bool>,
 }
 
 fn prefs_path() -> std::path::PathBuf {
@@ -94,6 +97,8 @@ pub struct Desktop {
     /// A short note at the bottom of the window, and whether it's an error; it goes after a few seconds.
     toast: Option<(String, bool, Instant)>,
     prefs: Prefs,
+    settings: Option<settings::SettingsState>,
+    ticks: u64,
     /// The sidebar lists archived threads instead (⌘Y).
     archives: bool,
 }
@@ -137,6 +142,8 @@ impl Desktop {
             toast: None,
             prefs: std::fs::read(prefs_path()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default(),
             archives: false,
+            settings: None,
+            ticks: 0,
         };
         // The thread list every second and a half, as the Tauri shell polls it; page messages every tick.
         cx.spawn_in(window, async move |this, cx| {
@@ -167,6 +174,7 @@ impl Desktop {
             Err(_) => this.prefs.web != Some(true),
         };
         this.apply_theme(window, cx);
+        thread::set_where_vm(this.prefs.where_vm.unwrap_or(false));
         this
     }
 
@@ -448,6 +456,11 @@ impl Desktop {
             for id in commands.split(',') {
                 self.run(&RunCommand { id: id.trim().to_owned().into() }, window, cx);
             }
+        }
+        // Settings shows the thread as it is now.
+        self.ticks += 1;
+        if self.settings.is_some() && self.ticks % 4 == 0 {
+            self.refresh_settings(cx);
         }
         if self.toast.as_ref().is_some_and(|(_, error, at)| at.elapsed() > Duration::from_secs(if *error { 6 } else { 3 })) {
             self.toast = None;
@@ -851,6 +864,8 @@ impl Desktop {
                 self.confirm(Confirm::NewContext, cx);
             }
             "agent.branches" => self.branches(cx),
+            "app.settings" => self.open_settings(settings::Section::General, window, cx),
+            "view.people" => self.open_settings(settings::Section::People, window, cx),
             "agent.setup" => self.open_aside("setup", window, cx),
             "agent.side" => self.open_aside("side", window, cx),
             "agent.landThread" => self.open_aside("land", window, cx),
@@ -952,6 +967,7 @@ impl Render for Desktop {
         }
         let p = palette(cx);
         let dialog = self.dialog_view(cx);
+        let settings = self.settings_view(window, cx);
         let toast = self.toast.as_ref().map(|(text, error, _)| {
             div()
                 .absolute()
@@ -984,6 +1000,7 @@ impl Render for Desktop {
             .when(self.sidebar_open, |d| d.child(sidebar::render(self, window, cx)))
             .child(div().flex_1().h_full().min_w_0().child(self.main_pane(window, cx)))
             .children(self.palette.clone())
+            .children(settings)
             .children(dialog)
             .children(toast)
     }
