@@ -84,7 +84,10 @@ background.
   Edit writes a file together with whoever else has it open (the host keeps its Yjs document: `…/filedoc`); Git
   (⇧⌘G) with what's uncommitted, Stage and Commit; artifacts opened from the thread in tabs of their own.
 
-Not native yet: the terminal. Switch to the web view for those (View → Native or web thread). `SYNCPI_GPUI_NATIVE=1` or `0` overrides it.
+- terminals (ctrl-`): shells in the project's folder on this Mac, in tabs under the thread (+ for another; `!cmd` in
+  the composer runs a command in a new one). The host runs each shell; alacritty_terminal keeps the screen and it's
+  drawn as text with its colors. `cargo run --example terminal_check -- <thread id>` checks the plumbing without a
+  window. Switch to the web view for those (View → Native or web thread). `SYNCPI_GPUI_NATIVE=1` or `0` overrides it.
 
 ## Testing without taking the screen
 

@@ -66,6 +66,8 @@ pub enum ThreadEvent {
     Back,
     /// The changes chip in the status bar: the panel's Changes.
     Changes,
+    /// `!cmd` in the composer: run it in a new terminal.
+    Terminal(String),
 }
 
 pub struct ThreadView {
@@ -718,6 +720,12 @@ impl ThreadView {
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.composer.read(cx).value().trim().to_string();
         if text.is_empty() {
+            return;
+        }
+        // `!cmd`: a command for a new terminal on this Mac, not a message.
+        if let Some(command) = text.strip_prefix('!').map(str::trim).filter(|c| !c.is_empty()) {
+            cx.emit(ThreadEvent::Terminal(command.to_owned()));
+            self.composer.update(cx, |state, cx| state.set_value("", window, cx));
             return;
         }
         // What was written together goes out for everyone who wrote it (the server reads the draft's writers), and

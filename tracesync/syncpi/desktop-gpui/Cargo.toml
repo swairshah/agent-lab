@@ -5,6 +5,7 @@ edition = "2024"
 description = "SyncPi as a native GPUI app: native window, sidebar and menus; each thread is the web view, embedded"
 
 [dependencies]
+alacritty_terminal = "0.25"
 anyhow = "1"
 futures = "0.3"
 gpui = { version = "=0.2.2", default-features = false, features = ["runtime_shaders"] }
@@ -17,6 +18,8 @@ resvg = "=0.45.1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The terminal's socket to the host (ws://127.0.0.1, no TLS).
+tungstenite = "0.26"
 
 [profile.dev]
 debug = 0

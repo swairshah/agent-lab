@@ -224,6 +224,20 @@ impl Host {
         Ok(())
     }
 
+    /// A WebSocket to the host (a terminal: `/terminal/<id>/ws`), with the host's secret and origin, made non-blocking
+    /// so one thread can both read and write it.
+    pub fn socket(&self, path: &str) -> Result<tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>> {
+        use tungstenite::client::IntoClientRequest;
+        let mut request = format!("{}{path}", self.origin.replacen("http", "ws", 1)).into_client_request()?;
+        request.headers_mut().insert("authorization", format!("Bearer {}", self.secret).parse()?);
+        request.headers_mut().insert("origin", self.origin.parse()?);
+        let (mut socket, _) = tungstenite::connect(request)?;
+        if let tungstenite::stream::MaybeTlsStream::Plain(stream) = socket.get_mut() {
+            stream.set_nonblocking(true)?;
+        }
+        Ok(socket)
+    }
+
     pub fn catalog(&self) -> Result<Catalog> {
         Ok(serde_json::from_value(self.get("/api/sessions")?)?)
     }

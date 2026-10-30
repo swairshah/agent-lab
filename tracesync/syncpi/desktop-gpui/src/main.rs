@@ -17,6 +17,7 @@ mod panel;
 mod prose;
 mod settings;
 mod sidebar;
+mod terminal;
 mod theme;
 mod thread;
 
@@ -94,6 +95,9 @@ pub struct Desktop {
     /// Each thread's side thread (this person's, /side), once opened, and whether it's the one shown.
     sides: HashMap<String, Entity<ThreadView>>,
     _subscriptions: Vec<Subscription>,
+    /// Terminals under a native thread (terminal.rs), by thread, with the one shown; and whether they're shown.
+    terminals: HashMap<String, (Vec<Entity<terminal::TerminalView>>, usize)>,
+    terminal_open: bool,
     /// The panel beside a native thread (panel.rs), one per thread, and whether it's open.
     panels: HashMap<String, Entity<panel::PanelView>>,
     panel_open: bool,
@@ -149,6 +153,8 @@ impl Desktop {
             threads: HashMap::new(),
             sides: HashMap::new(),
             _subscriptions: Vec::new(),
+            terminals: HashMap::new(),
+            terminal_open: false,
             panels: HashMap::new(),
             panel_open: false,
             asides: HashMap::new(),
@@ -598,6 +604,7 @@ impl Desktop {
                 panel.show_changes(cx);
                 same
             }, window, cx),
+            ThreadEvent::Terminal(command) => this.new_terminal(Some(command.clone()), window, cx),
             ThreadEvent::Back => {
                 this.aside = None;
                 if let Some(main) = this.threads.get(&thread) {
@@ -743,6 +750,98 @@ impl Desktop {
             panel.update(cx, |panel, cx| panel.set_artifacts(artifacts, cx));
         }
         Some(panel)
+    }
+
+    /// A new terminal for the open thread (running `command` when given), shown.
+    fn new_terminal(&mut self, command: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.active.clone() else { return self.toast("Open a thread first.", true, cx) };
+        let host = self.host.clone();
+        let view = cx.new(|cx| terminal::TerminalView::new(host, &id, command, cx));
+        view.read(cx).focus(window);
+        let (list, shown) = self.terminals.entry(id).or_default();
+        list.push(view);
+        *shown = list.len() - 1;
+        self.terminal_open = true;
+        cx.notify();
+    }
+
+    /// ctrl-`: the terminals, shown or hidden (the first one made when there's none).
+    fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.native {
+            return self.toast("Switch to the native thread (View) for this.", true, cx);
+        }
+        let Some(id) = self.active.clone() else { return };
+        if self.terminals.get(&id).is_none_or(|(list, _)| list.is_empty()) {
+            return self.new_terminal(None, window, cx);
+        }
+        self.terminal_open = !self.terminal_open;
+        if self.terminal_open
+            && let Some((list, shown)) = self.terminals.get(&id)
+        {
+            list[*shown].read(cx).focus(window);
+        } else {
+            self.focus_thread(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// The terminals under the thread: their tabs, + for another, and the one shown.
+    fn terminal_pane(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let id = self.active.clone()?;
+        let (list, shown) = self.terminals.get(&id).filter(|(l, _)| self.terminal_open && !l.is_empty())?;
+        let p = palette(cx);
+        let mut tabs = div().h(px(32.)).flex_none().flex().items_center().gap_1().px_2().border_t_1().border_b_1().border_color(p.rule).bg(p.surface);
+        for (n, view) in list.iter().enumerate() {
+            let on = n == *shown;
+            let (pick, close) = (id.clone(), id.clone());
+            tabs = tabs.child(
+                div()
+                    .id(SharedString::from(format!("terminal-tab-{n}")))
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .py(px(3.))
+                    .rounded(px(5.))
+                    .text_size(sz(12.))
+                    .cursor_pointer()
+                    .when(on, |d| d.bg(p.sunken).text_color(p.ink))
+                    .when(!on, |d| d.text_color(p.muted))
+                    .child(div().max_w(px(180.)).truncate().child(view.read(cx).title.clone()))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("terminal-close-{n}")))
+                            .child(gpui_component::Icon::new(gpui_component::IconName::Close).size(px(11.)))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                if let Some((list, shown)) = this.terminals.get_mut(&close) {
+                                    list.remove(n);
+                                    *shown = (*shown).min(list.len().saturating_sub(1));
+                                    if list.is_empty() {
+                                        this.terminal_open = false;
+                                        this.focus_thread(window, cx);
+                                    }
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if let Some((list, shown)) = this.terminals.get_mut(&pick) {
+                            *shown = n;
+                            list[n].read(cx).focus(window);
+                        }
+                        cx.notify();
+                    })),
+            );
+        }
+        let button = |id: &'static str, icon: gpui_component::IconName, tip: &'static str| {
+            div().id(id).p(px(4.)).rounded(px(5.)).text_color(p.muted).cursor_pointer().hover(|s| s.bg(p.sunken).text_color(p.ink)).child(gpui_component::Icon::new(icon).size(px(13.))).tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tip).build(window, cx))
+        };
+        tabs = tabs
+            .child(button("terminal-new", gpui_component::IconName::Plus, "New terminal").on_click(cx.listener(|this, _, window, cx| this.new_terminal(None, window, cx))))
+            .child(div().flex_1())
+            .child(button("terminal-hide", gpui_component::IconName::ChevronDown, "Hide (ctrl-`)").on_click(cx.listener(|this, _, window, cx| this.toggle_terminal(window, cx))));
+        Some(div().h(px(280.)).flex_none().flex().flex_col().child(tabs).child(div().flex_1().min_h_0().child(list[*shown].clone())).into_any_element())
     }
 
     /// Opens the panel on what `with` shows; the same command again closes it.
@@ -901,6 +1000,7 @@ impl Desktop {
                     false
                 }, window, cx);
             }
+            "view.terminal" => self.toggle_terminal(window, cx),
             "file.comment" => self.toast("Pick lines by their numbers in a file's tab, then write the comment under them.", false, cx),
             "app.settings" => self.open_settings(settings::Section::General, window, cx),
             "view.people" => self.open_settings(settings::Section::People, window, cx),
@@ -966,10 +1066,11 @@ impl Desktop {
                 Some(view) => {
                     let panel = self.panel_open.then(|| self.active.as_ref().and_then(|id| self.panels.get(id).cloned())).flatten();
                     let wide = panel.as_ref().is_some_and(|p| p.read(cx).tree_open);
+                    let terminals = self.terminal_pane(cx);
                     div()
                         .size_full()
                         .flex()
-                        .child(div().flex_1().min_w_0().h_full().child(view.clone()))
+                        .child(div().flex_1().min_w_0().h_full().flex().flex_col().child(div().flex_1().min_h_0().child(view.clone())).children(terminals))
                         .children(panel.map(|panel| div().w(px(if wide { 820. } else { 600. })).flex_none().h_full().border_l_1().border_color(palette(cx).rule).child(panel)))
                         .into_any_element()
                 }
