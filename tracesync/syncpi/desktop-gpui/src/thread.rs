@@ -55,6 +55,7 @@ fn eid(s: String) -> ElementId {
 thread_local! {
     static TEST_FIND: Cell<bool> = const { Cell::new(false) };
     static TEST_SEND: Cell<bool> = const { Cell::new(false) };
+    static TEST_COMMENT: Cell<bool> = const { Cell::new(false) };
 }
 
 /// What a thread view asks of the app: show this person's side thread, or go back to the thread.
@@ -89,6 +90,9 @@ pub struct ThreadView {
     /// Each item's row in the list, last frame: Find scrolls to its match's.
     row_of: std::collections::HashMap<String, usize>,
     focus: FocusHandle,
+    /// A comment being written on a message's text: the message's key, the quoted text, the block its box goes under.
+    comment: Option<(String, String, String)>,
+    comment_input: Entity<InputState>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -107,12 +111,20 @@ impl ThreadView {
             "Message the agent. Enter for a new line, ⌘↩ to send; /side, /queue, /steer, /stop"
         };
         let composer = cx.new(|cx| InputState::new(window, cx).multi_line(true).auto_grow(1, 14).placeholder(placeholder));
-        let subscriptions = vec![cx.subscribe_in(&composer, window, |this, _, event, window, cx| {
-            // Enter starts a new line; ⌘↩ sends, as in the web view.
-            if let InputEvent::PressEnter { secondary: true } = event {
-                this.submit(window, cx);
-            }
-        })];
+        let comment_input = cx.new(|cx| InputState::new(window, cx).multi_line(true).auto_grow(1, 8).placeholder("Comment on this. ⌘↩ to send"));
+        let subscriptions = vec![
+            cx.subscribe_in(&composer, window, |this, _, event, window, cx| {
+                // Enter starts a new line; ⌘↩ sends, as in the web view.
+                if let InputEvent::PressEnter { secondary: true } = event {
+                    this.submit(window, cx);
+                }
+            }),
+            cx.subscribe_in(&comment_input, window, |this, _, event, window, cx| {
+                if let InputEvent::PressEnter { secondary: true } = event {
+                    this.send_comment(window, cx);
+                }
+            }),
+        ];
         // The host's stream, read on a thread of its own; each event reaches the view on the main thread. It ends
         // when the view goes (its receiver with it), and starts again when the host's connection drops.
         let (events, mut received) = futures::channel::mpsc::unbounded::<Value>();
@@ -151,6 +163,8 @@ impl ThreadView {
             find: None,
             row_of: Default::default(),
             focus: cx.focus_handle(),
+            comment: None,
+            comment_input,
             _subscriptions: subscriptions,
         }
     }
@@ -245,6 +259,142 @@ impl ThreadView {
             self.list.scroll_to_reveal_item(row);
         }
         cx.notify();
+    }
+
+    /// Keys while the thread itself has focus (a press on a message's text put the caret there, as in Delta): arrows
+    /// move the caret (Shift selects), Enter comments on the selection (or the caret's line), Esc clears.
+    fn thread_key(&mut self, key: &Keystroke, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if key.modifiers.alt || key.modifiers.control || (key.modifiers.platform && key.key != "enter") {
+            return false;
+        }
+        match key.key.as_str() {
+            "up" | "down" | "left" | "right" => match crate::cursor::key(&key.key, key.modifiers.shift) {
+                crate::cursor::Moved::No => return false,
+                crate::cursor::Moved::Yes => {}
+                crate::cursor::Moved::Out => self.focus_composer(window, cx),
+            },
+            "enter" => {
+                let Some(quote) = crate::cursor::quote() else { return false };
+                self.open_comment(quote, window, cx);
+            }
+            "escape" => crate::cursor::clear(),
+            _ => return false,
+        }
+        cx.notify();
+        true
+    }
+
+    fn open_comment(&mut self, quote: (String, String, String), window: &mut Window, cx: &mut Context<Self>) {
+        crate::cursor::reveal_box(&quote.2);
+        self.comment = Some(quote);
+        self.comment_input.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn close_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.comment = None;
+        window.focus(&self.focus);
+        cx.notify();
+    }
+
+    /// ⌘↩ in the comment box: the comment goes out at once, as in the web view, quoting the text it's on, with whatever
+    /// is written in the composer.
+    fn send_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((message, excerpt, _)) = self.comment.clone() else { return };
+        let note = self.comment_input.read(cx).value().trim().to_owned();
+        if note.is_empty() {
+            return;
+        }
+        let written = self.composer.read(cx).value().trim().to_owned();
+        let mut submit = json!({
+            "type": "submit",
+            "requestId": request_id(),
+            "text": written,
+            "mode": "interrupt",
+            "where": "device",
+            "comments": [{ "path": "", "start": 0, "end": 0, "excerpt": excerpt, "text": note, "message": message }],
+        });
+        if self.conv == "side" {
+            submit["conv"] = json!("side");
+        }
+        self.send(submit, cx);
+        self.composer.update(cx, |state, cx| state.set_value("", window, cx));
+        crate::cursor::clear();
+        self.comment = None;
+        self.focus_composer(window, cx);
+        cx.notify();
+    }
+
+    /// The box under the text being commented on: the quote, the comment, Cancel and Comment.
+    fn comment_box(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        let quote = self.comment.as_ref().map(|c| c.1.clone()).unwrap_or_default();
+        let shown: String = if quote.chars().count() > 160 { quote.chars().take(160).collect::<String>() + "…" } else { quote };
+        let button = |id: &'static str, label: &'static str, primary: bool| {
+            div()
+                .id(id)
+                .px_2()
+                .py(px(3.))
+                .rounded(px(5.))
+                .text_size(sz(12.5))
+                .cursor_pointer()
+                .when(primary, |d| d.bg(p.accent).text_color(p.accent_ink))
+                .when(!primary, |d| d.text_color(p.muted).hover(|s| s.bg(p.sunken).text_color(p.ink)))
+                .child(label)
+        };
+        div()
+            .relative()
+            .my_1()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_2()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(p.rule_strong)
+            .bg(p.raised)
+            .shadow_sm()
+            // Just opened: scroll it into view, with a little room below.
+            .child(
+                canvas(
+                    |_, _, _| {},
+                    |bounds, _, window, _| {
+                        if !crate::cursor::take_reveal_box() {
+                            return;
+                        }
+                        if let Some(list) = crate::cursor::scroll() {
+                            let view = list.viewport_bounds();
+                            let below = bounds.bottom() + px(40.) - view.bottom();
+                            if below > px(0.) {
+                                list.scroll_by(below);
+                                window.refresh();
+                            }
+                        }
+                    },
+                )
+                .absolute()
+                .inset_0(),
+            )
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" {
+                    this.close_comment(window, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(div().pl_2().border_l_2().border_color(p.accent).text_size(sz(13.)).text_color(p.ink_2).child(shown))
+            .child(Input::new(&self.comment_input).appearance(false).w_full().text_size(sz(14.)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(div().flex_1())
+                    .child(button("comment-cancel", "Cancel", false).on_click(cx.listener(|this, _, window, cx| this.close_comment(window, cx))))
+                    .child(button("comment-send", "Comment", true).on_click(cx.listener(|this, _, window, cx| this.send_comment(window, cx)))),
+            )
+            .into_any_element()
     }
 
     fn command(&mut self, action: &RunCommand, window: &mut Window, cx: &mut Context<Self>) {
@@ -485,20 +635,26 @@ impl ThreadView {
         let name = self.name_of(&text(item, "memberId"), item["author"].as_str().unwrap_or("someone").to_owned());
         let color = theme::person_color(&name, p.dark);
         let body = text(item, "text");
+        // The comments first, then what was written with them, as Delta shows it (thread-view.ts #user).
+        let comments: Vec<Value> = item["comments"].as_array().cloned().unwrap_or_default();
+        let mut content = div().flex_1().min_w_0().flex().flex_col().gap_2().text_size(sz(15.)).line_height(sz(LINE));
+        if !comments.is_empty() {
+            let mut cards = div().flex().flex_col().gap_2();
+            for c in &comments {
+                cards = cards.child(comment_card(c, &name, p));
+            }
+            content = content.child(cards);
+        }
+        if !body.is_empty() {
+            content = content.child(message::render(&format!("user-{key}"), &keep_breaks(&body), window, cx));
+        }
         div()
             .w(px(content_width() + AVATAR + GAP))
             .flex()
             .items_start()
             .gap(px(12.))
             .child(div().flex_none().text_size(sz(13.5)).line_height(sz(LINE)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(name))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_size(sz(15.))
-                    .line_height(sz(LINE))
-                    .child(message::render(&format!("user-{key}"), &keep_breaks(&body), window, cx)),
-            )
+            .child(content)
             .into_any_element()
     }
 
@@ -724,11 +880,35 @@ impl Render for ThreadView {
             self.composer.update(cx, |state, cx| state.set_value(text, window, cx));
             self.submit(window, cx);
         }
+        // Tests comment on a message's text once the thread has loaded (SYNCPI_GPUI_TEST_COMMENT=<quoted>|<comment>),
+        // as selecting it, pressing Enter, writing and pressing ⌘↩ would.
+        if let Ok(spec) = std::env::var("SYNCPI_GPUI_TEST_COMMENT")
+            && let Some((quoted, note)) = spec.split_once('|')
+            && self.conv == "main"
+            && !TEST_COMMENT.get()
+            && let Some(item) = self.items.iter().find(|i| i["kind"] == "assistant" && text(i, "text").contains(quoted))
+        {
+            TEST_COMMENT.set(true);
+            self.comment = Some((text(item, "key"), quoted.to_owned(), String::new()));
+            self.comment_input.update(cx, |state, cx| state.set_value(note.to_owned(), window, cx));
+            self.send_comment(window, cx);
+        }
         let main = self.main.clone();
         let items = std::mem::take(&mut self.items);
-        // The text cursor in messages (cursor.rs, prose.rs): not focused here; no comments on messages yet.
-        crate::cursor::set_marks(Default::default(), p.removed);
-        crate::cursor::begin(p.accent.opacity(0.22), p.accent, false, None, &self.list);
+        // Comments people made on messages' text, shown there, inline (cursor.rs, prose.rs), as in Delta.
+        let mut marks: std::collections::HashMap<String, Vec<crate::cursor::Mark>> = Default::default();
+        for item in items.iter().filter(|i| i["kind"] == "user") {
+            let author = self.name_of(&text(item, "memberId"), item["author"].as_str().unwrap_or("someone").to_owned());
+            for c in item["comments"].as_array().into_iter().flatten() {
+                if let Some(message) = c["message"].as_str() {
+                    marks.entry(message.to_owned()).or_default().push(crate::cursor::Mark { excerpt: text(c, "excerpt"), note: text(c, "text"), author: author.clone() });
+                }
+            }
+        }
+        crate::cursor::set_marks(marks, p.removed);
+        // The thread's text cursor: the caret shows while the thread has focus; the comment box under its block.
+        let after = self.comment.as_ref().map(|c| (c.2.clone(), self.comment_box(&p, cx)));
+        crate::cursor::begin(p.accent.opacity(0.22), p.accent, self.focus.is_focused(window), after, &self.list);
         // Find's matches, painted in the messages' text (prose.rs); the colors of the web view's (--find).
         let query = self.query(cx);
         crate::cursor::set_find(self.find.as_ref().filter(|_| !query.is_empty()).map(|f| crate::cursor::Find {
@@ -848,6 +1028,23 @@ impl Render for ThreadView {
             .font_family(theme::SANS)
             .key_context("ThreadView")
             .track_focus(&self.focus)
+            // A press on a message's text put the caret there (prose.rs): the thread takes focus.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    if crate::cursor::take_click() {
+                        this.comment = None;
+                        window.focus(&this.focus);
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_mouse_up(MouseButton::Left, |_, _, _| crate::cursor::release())
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if this.focus.is_focused(window) && this.comment.is_none() && this.thread_key(&event.keystroke, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
             .on_action(cx.listener(|this, action: &RunCommand, window, cx| this.command(action, window, cx)))
             .child(self.side_banner(&p, cx))
             .child(self.find_bar(&p, cx))
@@ -865,6 +1062,44 @@ impl Render for ThreadView {
 }
 
 impl EventEmitter<ThreadEvent> for ThreadView {}
+
+/// A comment someone sent (thread-view.ts #comment): on part of a message, its quote and the note; on lines of a
+/// file, where, the first lines and the note.
+fn comment_card(c: &Value, name: &str, p: &Palette) -> AnyElement {
+    let card = div().flex().flex_col().gap(px(6.)).p(px(10.)).rounded(px(8.)).border_1().border_color(p.rule).bg(p.raised).text_size(sz(13.5)).line_height(relative(1.45));
+    let note = div()
+        .flex()
+        .items_start()
+        .gap_2()
+        .child(div().flex_none().text_size(sz(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(theme::person_color(name, p.dark)).child(name.to_owned()))
+        .child(div().flex_1().min_w_0().text_color(p.ink).child(text(c, "text")));
+    if c["message"].is_string() {
+        return card
+            .child(div().text_size(sz(11.5)).text_color(p.muted).child("On a message"))
+            .child(div().pl(px(10.)).border_l_2().border_color(p.rule_strong).text_color(p.ink_2).child(text(c, "excerpt")))
+            .child(note)
+            .into_any_element();
+    }
+    let start = c["start"].as_u64().unwrap_or(0);
+    let end = c["end"].as_u64().unwrap_or(start);
+    let place = if start == end { format!("{}:{start}", text(c, "path")) } else { format!("{}:{start}-{end}", text(c, "path")) };
+    let excerpt = text(c, "excerpt");
+    let lines: Vec<&str> = excerpt.split('\n').collect();
+    let mut code = div().flex().flex_col().px(px(8.)).py(px(6.)).rounded(px(6.)).bg(p.code).font_family(MONO).text_size(sz(12.)).line_height(relative(1.5));
+    for (n, line) in lines.iter().take(6).enumerate() {
+        code = code.child(
+            div()
+                .flex()
+                .gap_3()
+                .child(div().w(px(28.)).flex_none().text_right().text_color(p.faint).child((start + n as u64).to_string()))
+                .child(div().flex_1().min_w_0().whitespace_nowrap().overflow_hidden().child(if line.is_empty() { " ".to_owned() } else { (*line).to_owned() })),
+        );
+    }
+    if lines.len() > 6 {
+        code = code.child(div().text_color(p.faint).child(format!("{} more lines", lines.len() - 6)));
+    }
+    card.child(div().font_family(MONO).text_size(sz(12.)).text_color(p.accent).child(place)).child(code).child(note).into_any_element()
+}
 
 fn request_id() -> String {
     format!("{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos())

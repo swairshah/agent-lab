@@ -53,7 +53,11 @@ background.
 - side threads: /side [new] [question] opens this person's side thread (the host streams it with `?conv=side`), with
   its banner, Start over and Back; the composer also takes /queue, /steer and /stop, on whichever thread it's in.
 
-Not native yet: comments, drafts written together, the inbox, settings. Switch back to the web view for those. `SYNCPI_GPUI_NATIVE=1` starts in native mode.
+- comments on messages: a press on a message's text puts the thread's caret there (arrows move it, Shift selects),
+  Enter opens a comment box under the selection, ⌘↩ sends it at once with what's in the composer. Comments people
+  made show where they were made (the text marked, the note under it) and as cards on the message that sent them.
+
+Not native yet: drafts written together, the inbox, settings. Switch back to the web view for those. `SYNCPI_GPUI_NATIVE=1` starts in native mode.
 
 ## Testing without taking the screen
 
@@ -61,7 +65,7 @@ Not native yet: comments, drafts written together, the inbox, settings. Switch b
 of it on screen, and GPUI stops drawing a window macOS reports as covered, so the corner stays above other windows.
 `SYNCPI_GPUI_TEST_OPEN=html|svg|image|markdown` opens the first artifact of that kind, as a click on its Open would.
 `SYNCPI_GPUI_TEST_FIND=<text>` searches for it once the thread has loaded, and `SYNCPI_GPUI_TEST_SEND=<text>` sends
-it from the composer. `SYNCPI_FAUX=1` runs the host with the
+it from the composer; `SYNCPI_GPUI_TEST_COMMENT=<quoted>|<comment>` comments on the first reply with that text. `SYNCPI_FAUX=1` runs the host with the
 scripted model; `SYNCPI_HOME` points at a test home; `SYNCPI_GPUI_THEME=dark`
 (or `light`) overrides the system's appearance. Capture the window with
 `screencapture -x -o -l <window id>`.
