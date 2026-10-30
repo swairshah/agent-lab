@@ -6,10 +6,12 @@ mod artifact;
 mod citations;
 mod cursor;
 mod diagram;
+mod dialogs;
 mod host;
 mod icons;
 mod keymap;
 mod message;
+mod palette;
 mod prose;
 mod sidebar;
 mod theme;
@@ -29,13 +31,36 @@ use std::{
     time::Duration,
 };
 use theme::{palette, sz};
+use dialogs::{Ask, Confirm, Dialog, open_url};
+use palette::{PaletteEvent, PaletteView, Tab, Target};
+use serde::{Deserialize, Serialize};
+use std::time::Instant;
 use thread::{ThreadEvent, ThreadView};
 
 /// Thread pages kept loaded, so going back to a recent one is instant (as the Tauri app's shell keeps them).
 const KEEP: usize = 4;
 
-/// The commands the app itself handles; every other shortcut belongs to the thread's page.
-const NATIVE: &[&str] = &["thread.new", "project.add", "thread.next", "thread.previous", "view.sidebar", "app.quit"];
+/// The commands the app itself handles when a thread is its web page; that page has the rest.
+const SHELL: &[&str] = &["thread.new", "project.add", "thread.next", "thread.previous", "view.sidebar", "app.quit"];
+
+/// What the app remembers between runs (~/.syncpi/desktop-gpui.json): text size, light or dark, the name to join
+/// threads as, the last preview address.
+#[derive(Serialize, Deserialize, Default)]
+struct Prefs {
+    zoom: Option<f32>,
+    theme: Option<String>,
+    name: Option<String>,
+    preview: Option<String>,
+    /// Threads drawn natively (the default), or as the web view.
+    web: Option<bool>,
+}
+
+fn prefs_path() -> std::path::PathBuf {
+    std::env::var_os("SYNCPI_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".syncpi"))
+        .join("desktop-gpui.json")
+}
 
 pub struct Desktop {
     pub host: Host,
@@ -58,10 +83,19 @@ pub struct Desktop {
     threads: HashMap<String, Entity<ThreadView>>,
     /// Each thread's side thread (this person's, /side), once opened, and whether it's the one shown.
     sides: HashMap<String, Entity<ThreadView>>,
-    in_side: bool,
     _subscriptions: Vec<Subscription>,
     /// What the panel beside a native thread shows (an artifact opened from it), and its webview when it has one.
     panel: Option<(artifact::Shown, Option<Entity<WebView>>)>,
+    /// The setup and land agents' threads, once opened, by thread; and which of them (or the side thread) is shown.
+    asides: HashMap<(String, &'static str), Entity<ThreadView>>,
+    aside: Option<&'static str>,
+    palette: Option<Entity<PaletteView>>,
+    dialog: Option<Dialog>,
+    /// A short note at the bottom of the window, and whether it's an error; it goes after a few seconds.
+    toast: Option<(String, bool, Instant)>,
+    prefs: Prefs,
+    /// The sidebar lists archived threads instead (⌘Y).
+    archives: bool,
 }
 
 impl Desktop {
@@ -91,12 +125,18 @@ impl Desktop {
             inbox: Arc::new(Mutex::new(Vec::new())),
             sidebar_open: true,
             error: None,
-            native: std::env::var("SYNCPI_GPUI_NATIVE").as_deref() == Ok("1"),
+            native: true,
             threads: HashMap::new(),
             sides: HashMap::new(),
-            in_side: false,
             _subscriptions: Vec::new(),
             panel: None,
+            asides: HashMap::new(),
+            aside: None,
+            palette: None,
+            dialog: None,
+            toast: None,
+            prefs: std::fs::read(prefs_path()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default(),
+            archives: false,
         };
         // The thread list every second and a half, as the Tauri shell polls it; page messages every tick.
         cx.spawn_in(window, async move |this, cx| {
@@ -118,11 +158,15 @@ impl Desktop {
             }
         })
         .detach();
-        cx.observe_window_appearance(window, |_, window, cx| {
-            theme::apply(dark(window), 1., Some(window), cx);
-            cx.notify();
-        })
-        .detach();
+        cx.observe_window_appearance(window, |this, window, cx| this.apply_theme(window, cx)).detach();
+        let mut this = this;
+        // Threads are native unless the web view was chosen (View → Web thread); SYNCPI_GPUI_NATIVE=0 or 1 for tests.
+        this.native = match std::env::var("SYNCPI_GPUI_NATIVE").as_deref() {
+            Ok("0") => false,
+            Ok(_) => true,
+            Err(_) => this.prefs.web != Some(true),
+        };
+        this.apply_theme(window, cx);
         this
     }
 
@@ -157,8 +201,258 @@ impl Desktop {
         }
     }
 
+    fn save_prefs(&self) {
+        if let Ok(bytes) = serde_json::to_vec_pretty(&self.prefs) {
+            let path = prefs_path();
+            let _ = std::fs::create_dir_all(path.parent().unwrap());
+            let _ = std::fs::write(path, bytes);
+        }
+    }
+
+    fn is_dark(&self, window: &Window) -> bool {
+        match self.prefs.theme.as_deref() {
+            Some("dark") => true,
+            Some("light") => false,
+            _ => dark(window),
+        }
+    }
+
+    fn apply_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        theme::apply(self.is_dark(window), self.prefs.zoom.unwrap_or(1.), Some(window), cx);
+        cx.notify();
+    }
+
+    /// ⌘+ / ⌘− / ⌘0: text size, by tenths, kept between runs (no note about it, as asked).
+    fn zoom(&mut self, by: f32, window: &mut Window, cx: &mut Context<Self>) {
+        let zoom = if by == 0. { 1. } else { ((self.prefs.zoom.unwrap_or(1.) + by) * 10.).round().clamp(8., 15.) / 10. };
+        self.prefs.zoom = Some(zoom);
+        self.save_prefs();
+        self.apply_theme(window, cx);
+    }
+
+    pub fn toast(&mut self, text: impl Into<String>, error: bool, cx: &mut Context<Self>) {
+        self.toast = Some((text.into(), error, Instant::now()));
+        cx.notify();
+    }
+
+    /// The thread view shown: the thread's, or its side, setup or land thread.
+    fn shown_view(&self) -> Option<Entity<ThreadView>> {
+        let id = self.active.as_ref()?;
+        let aside = match self.aside {
+            Some("side") => self.sides.get(id).cloned(),
+            Some(conv) => self.asides.get(&(id.clone(), conv)).cloned(),
+            None => None,
+        };
+        aside.or_else(|| self.threads.get(id).cloned())
+    }
+
+    /// The thread's own view (not an aside), for what goes to the whole thread.
+    fn main_view(&self) -> Option<Entity<ThreadView>> {
+        self.threads.get(self.active.as_ref()?).cloned()
+    }
+
+    pub fn focus_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(view) = self.shown_view() {
+            view.update(cx, |view, cx| view.focus_composer(window, cx));
+        }
+    }
+
+    pub fn post_to_thread(&mut self, message: Value, cx: &mut Context<Self>) {
+        match self.main_view() {
+            Some(view) => view.update(cx, |view, cx| view.post(message, cx)),
+            None => self.toast("Open a thread first.", true, cx),
+        }
+    }
+
+    pub fn decorate(&mut self, id: &str, patch: Value, cx: &mut Context<Self>) {
+        let host = self.host.clone();
+        let id = id.to_owned();
+        cx.spawn(async move |this, cx| {
+            let done = cx.background_executor().spawn(async move { host.post(&format!("/api/sessions/{id}/decorate"), &patch).and_then(|_| host.catalog()) }).await;
+            let _ = this.update(cx, |this, cx| match done {
+                Ok(catalog) => {
+                    this.catalog = catalog;
+                    cx.notify();
+                }
+                Err(e) => this.toast(e.to_string(), true, cx),
+            });
+        })
+        .detach();
+    }
+
+    /// A request to the open thread's host route, with a note before and after.
+    fn thread_verb(&mut self, verb: &'static str, body: Value, before: Option<&'static str>, after: Option<&'static str>, cx: &mut Context<Self>) {
+        let Some(id) = self.active.clone() else { return self.toast("Open a thread first.", true, cx) };
+        if let Some(note) = before {
+            self.toast(note, false, cx);
+        }
+        let host = self.host.clone();
+        cx.spawn(async move |this, cx| {
+            let done = cx.background_executor().spawn(async move { host.post(&format!("/api/sessions/{id}/{verb}"), &body) }).await;
+            let _ = this.update(cx, |this, cx| match done {
+                Ok(_) => {
+                    if let Some(note) = after {
+                        this.toast(note, false, cx);
+                    }
+                }
+                Err(e) => this.toast(e.to_string(), true, cx),
+            });
+        })
+        .detach();
+    }
+
+    fn open_palette(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
+        let (model, thinking) = self.main_view().map(|v| v.read(cx).model()).unwrap_or_default();
+        if tab == Tab::Models && self.main_view().is_some_and(|v| v.read(cx).role() != "admin") {
+            return self.toast("Only admins can change the model.", true, cx);
+        }
+        let threads = self
+            .catalog
+            .sessions
+            .iter()
+            .filter(|t| !t.archived)
+            .map(|t| palette::ThreadRow { id: t.id.clone(), title: t.shown_title(), project: t.name.clone(), recent: t.last_opened.unwrap_or(t.created_at) })
+            .collect();
+        let (host, thread) = (self.host.clone(), self.active.clone().filter(|id| self.thread(id).is_some_and(|t| t.ready())));
+        let view = cx.new(|cx| PaletteView::new(tab, threads, thread, model, thinking, host, window, cx));
+        let subscription = cx.subscribe_in(&view, window, |this, _, event, window, cx| {
+            match event {
+                PaletteEvent::Close => {}
+                PaletteEvent::Run(target, thinking) => {
+                    let (target, thinking) = (target.clone(), thinking.clone());
+                    this.palette = None;
+                    match target {
+                        Target::Command(id) => return this.run(&RunCommand { id: id.into() }, window, cx),
+                        Target::Thread(id) => return this.show(&id, window, cx),
+                        Target::File(path) => this.open_file(path, window, cx),
+                        Target::Model(model) => this.post_to_thread(json!({ "type": "configure", "model": model, "thinkingLevel": thinking }), cx),
+                    }
+                }
+            }
+            this.palette = None;
+            this.focus_thread(window, cx);
+            cx.notify();
+        });
+        self._subscriptions.push(subscription);
+        self.palette = Some(view);
+        cx.notify();
+    }
+
+    /// A project file, from the palette: in the panel, as Markdown when it is, else as code.
+    fn open_file(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.active.clone() else { return };
+        let host = self.host.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let query: String = url_escape(&path);
+            let read = cx.background_executor().spawn(async move { host.get(&format!("/api/sessions/{id}/file?path={query}")) }).await;
+            let _ = this.update_in(cx, |this, window, cx| match read {
+                Ok(value) => {
+                    let content = value["text"].as_str().unwrap_or_default().to_owned();
+                    let shown = if artifact::kind_of_path(&path) == artifact::Kind::Markdown {
+                        artifact::Shown::Markdown { title: path.clone(), content }
+                    } else {
+                        let language = path.rsplit('.').next().unwrap_or("").to_owned();
+                        artifact::Shown::Markdown { title: path.clone(), content: format!("```{language}\n{content}\n```") }
+                    };
+                    this.open_panel(shown, window, cx);
+                }
+                Err(e) => this.toast(e.to_string(), true, cx),
+            });
+        })
+        .detach();
+    }
+
+    /// Share (⇧⌘S): a new invite link to the thread, shown to copy.
+    fn share(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.active.clone() else { return self.toast("Open a thread first.", true, cx) };
+        let host = self.host.clone();
+        cx.spawn(async move |this, cx| {
+            let made = cx
+                .background_executor()
+                .spawn(async move {
+                    let before = host.get(&format!("/api/sessions/{id}/native"))?["lastInvite"]["url"].clone();
+                    host.post(&format!("/api/sessions/{id}/send"), &json!({ "type": "invite" }))?;
+                    for _ in 0..40 {
+                        std::thread::sleep(Duration::from_millis(150));
+                        let invite = host.get(&format!("/api/sessions/{id}/native"))?["lastInvite"].clone();
+                        if invite["url"].is_string() && invite["url"] != before {
+                            return Ok(invite);
+                        }
+                    }
+                    anyhow::bail!("The thread's server didn't make a link. Only admins can share a thread.")
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| match made {
+                Ok(invite) => {
+                    let role = invite["invite"]["role"].as_str().unwrap_or("editor");
+                    this.dialog = Some(Dialog::Link {
+                        title: "Share this thread".into(),
+                        url: invite["url"].as_str().unwrap_or_default().to_owned(),
+                        detail: format!("Anyone with this link joins as {} {role}, with `syncpi --url <link>` or Join a shared thread in the app.", if role.starts_with(['a', 'e']) { "an" } else { "a" }),
+                    });
+                    cx.notify();
+                }
+                Err(e) => this.toast(e.to_string(), true, cx),
+            });
+        })
+        .detach();
+    }
+
+    /// The thread's branches (/tree): asked of the server, then listed.
+    fn branches(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.active.clone() else { return };
+        self.post_to_thread(json!({ "type": "branches" }), cx);
+        let host = self.host.clone();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(600)).await;
+            let read = cx.background_executor().spawn(async move { host.get(&format!("/api/sessions/{id}/native")) }).await;
+            let _ = this.update(cx, |this, cx| match read {
+                Ok(v) => {
+                    this.dialog = Some(Dialog::Branches { list: v["branches"].as_array().cloned().unwrap_or_default(), current: v["currentBranch"].as_i64().unwrap_or(0) });
+                    cx.notify();
+                }
+                Err(e) => this.toast(e.to_string(), true, cx),
+            });
+        })
+        .detach();
+    }
+
+    /// Shows the setup or land agent's thread (or the side thread), natively, over the thread.
+    fn open_aside(&mut self, conv: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.active.clone() else { return };
+        if !self.native {
+            return self.toast("Switch to the native thread (View) for this.", true, cx);
+        }
+        if conv == "side" {
+            if !self.sides.contains_key(&id) {
+                let side = self.thread_view(&id, "side", window, cx);
+                self.sides.insert(id.clone(), side);
+            }
+        } else if !self.asides.contains_key(&(id.clone(), conv)) {
+            let view = self.thread_view(&id, conv, window, cx);
+            self.asides.insert((id.clone(), conv), view);
+        }
+        self.aside = Some(conv);
+        self.focus_thread(window, cx);
+        cx.notify();
+    }
+
     /// Takes the pages' messages, and loads the waiting page once the cookie is set.
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Tests run commands once the thread is open (SYNCPI_GPUI_TEST_COMMAND=id,id…), as their shortcuts would.
+        if let Ok(commands) = std::env::var("SYNCPI_GPUI_TEST_COMMAND")
+            && !TEST_COMMAND.get()
+            && self.main_view().is_some_and(|v| !v.read(cx).role().is_empty())
+        {
+            TEST_COMMAND.set(true);
+            for id in commands.split(',') {
+                self.run(&RunCommand { id: id.trim().to_owned().into() }, window, cx);
+            }
+        }
+        if self.toast.as_ref().is_some_and(|(_, error, at)| at.elapsed() > Duration::from_secs(if *error { 6 } else { 3 })) {
+            self.toast = None;
+            cx.notify();
+        }
         if self.cookie.is_some() && self.cookie_ready.load(Ordering::SeqCst) {
             self.cookie = None;
             if let Some(id) = self.active.clone() {
@@ -203,7 +497,7 @@ impl Desktop {
     pub fn show(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.active.as_deref() != Some(id) {
             self.panel = None;
-            self.in_side = false;
+            self.aside = None;
         }
         self.active = Some(id.to_owned());
         for (page_id, page) in &self.pages {
@@ -240,18 +534,12 @@ impl Desktop {
         let thread = id.to_owned();
         let subscription = cx.subscribe_in(&view, window, move |this, _, event, window, cx| match event {
             ThreadEvent::Side => {
-                if !this.sides.contains_key(&thread) {
-                    let side = this.thread_view(&thread, "side", window, cx);
-                    this.sides.insert(thread.clone(), side);
+                if this.active.as_deref() == Some(thread.as_str()) {
+                    this.open_aside("side", window, cx);
                 }
-                this.in_side = true;
-                if let Some(side) = this.sides.get(&thread) {
-                    side.update(cx, |side, cx| side.focus_composer(window, cx));
-                }
-                cx.notify();
             }
             ThreadEvent::Back => {
-                this.in_side = false;
+                this.aside = None;
                 if let Some(main) = this.threads.get(&thread) {
                     main.update(cx, |main, cx| main.focus_composer(window, cx));
                 }
@@ -448,7 +736,7 @@ impl Desktop {
     }
 
     fn step(&mut self, by: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let order: Vec<String> = sidebar::groups(&self.catalog).into_iter().flat_map(|g| g.threads.into_iter().map(|t| t.id)).collect();
+        let order: Vec<String> = sidebar::groups(&self.catalog, false).into_iter().flat_map(|g| g.threads.into_iter().map(|t| t.id)).collect();
         if order.is_empty() {
             return;
         }
@@ -457,24 +745,125 @@ impl Desktop {
         self.show(&order[next].clone(), window, cx);
     }
 
-    fn run(&mut self, action: &RunCommand, window: &mut Window, cx: &mut Context<Self>) {
-        match action.id.as_ref() {
+    /// Every command (src/shared/keymap.json), from its shortcut, the menus or the palette.
+    pub fn run(&mut self, action: &RunCommand, window: &mut Window, cx: &mut Context<Self>) {
+        let id = action.id.to_string();
+        // A thread shown as its web page has its own commands.
+        if !self.native && !SHELL.contains(&id.as_str()) && !id.starts_with("app.") && id != "view.native" {
+            return;
+        }
+        let thread = self.active.clone().unwrap_or_default();
+        let current = self.thread(&thread).cloned();
+        let editor = |this: &mut Self, cx: &mut Context<Self>| -> bool {
+            let role = this.main_view().map(|v| v.read(cx).role()).unwrap_or_default();
+            if role == "viewer" {
+                this.toast("Viewers can't do that; ask an admin to make you an editor.", true, cx);
+            }
+            role != "viewer"
+        };
+        match id.as_str() {
+            "palette.all" => self.open_palette(Tab::All, window, cx),
+            "palette.commands" => self.open_palette(Tab::Commands, window, cx),
+            "palette.files" => self.open_palette(Tab::Files, window, cx),
+            "palette.threads" => self.open_palette(Tab::Threads, window, cx),
+            "agent.model" => self.open_palette(Tab::Models, window, cx),
+            "app.keymap" => {
+                self.dialog = Some(Dialog::Keymap);
+                cx.notify();
+            }
+            "app.zoomIn" => self.zoom(0.1, window, cx),
+            "app.zoomOut" => self.zoom(-0.1, window, cx),
+            "app.zoomReset" => self.zoom(0., window, cx),
+            "app.theme" => {
+                self.prefs.theme = Some(if self.is_dark(window) { "light" } else { "dark" }.into());
+                self.save_prefs();
+                self.apply_theme(window, cx);
+            }
+            "app.quit" => cx.quit(),
             "thread.new" => self.new_thread(None, window, cx),
             "project.add" => self.new_project(window, cx),
+            "thread.join" => self.join("", window, cx),
             "thread.next" => self.step(1, window, cx),
             "thread.previous" => self.step(-1, window, cx),
+            "thread.share" => self.share(cx),
+            "thread.archives" => {
+                self.archives = !self.archives;
+                cx.notify();
+            }
             "view.sidebar" => {
                 self.sidebar_open = !self.sidebar_open;
                 cx.notify();
             }
             "view.native" => {
                 self.native = !self.native;
+                self.prefs.web = Some(!self.native);
+                self.save_prefs();
                 if let Some(id) = self.active.clone() {
                     self.show(&id, window, cx);
                 }
             }
-            "app.quit" => cx.quit(),
-            _ => {}
+            _ if current.is_none() => self.toast("Open a thread first.", true, cx),
+            "thread.rename" => self.ask("Rename thread", "Title", &current.as_ref().unwrap().shown_title(), "Rename", "", Ask::Rename(thread), window, cx),
+            "thread.title" => self.thread_verb("title", json!({}), Some("Writing a title…"), None, cx),
+            "thread.pin" => self.decorate(&thread, json!({ "pinned": !current.as_ref().unwrap().pinned }), cx),
+            "thread.bookmark" => {
+                let on = !current.as_ref().unwrap().bookmarked;
+                self.toast(if on { "Bookmarked" } else { "Bookmark removed" }, false, cx);
+                self.decorate(&thread, json!({ "bookmarked": on }), cx);
+            }
+            "thread.archive" => {
+                let archived = !current.as_ref().unwrap().archived;
+                self.decorate(&thread, json!({ "archived": archived }), cx);
+                if archived {
+                    self.step(1, window, cx);
+                }
+            }
+            "thread.tags" => self.ask("Tags", "Tags, separated by commas", &current.as_ref().unwrap().tags.join(", "), "Save", "", Ask::Tags(thread), window, cx),
+            "project.sync" => self.thread_verb("sync", json!({}), Some("Syncing…"), Some("Project synchronized"), cx),
+            "project.reveal" => self.thread_verb("reveal", json!({ "editor": false }), None, None, cx),
+            "project.zed" => self.thread_verb("reveal", json!({ "editor": true }), None, None, cx),
+            "project.update" => self.thread_verb("update", json!({}), Some("Updating the server…"), Some("Server updated"), cx),
+            "project.preview" => {
+                let last = self.prefs.preview.clone().unwrap_or_else(|| "http://localhost:3000".into());
+                self.ask("Preview", "Address", &last, "Open", "Opens in your browser.", Ask::Preview, window, cx);
+            }
+            "project.web" => {
+                let host = self.host.clone();
+                cx.spawn(async move |this, cx| {
+                    let link = cx.background_executor().spawn(async move { host.get(&format!("/api/sessions/{thread}/weblink")) }).await;
+                    let _ = this.update(cx, |this, cx| match link {
+                        Ok(v) => open_url(v["url"].as_str().unwrap_or_default()),
+                        Err(e) => this.toast(e.to_string(), true, cx),
+                    });
+                })
+                .detach();
+            }
+            "agent.stop" => {
+                if let Some(view) = self.shown_view() {
+                    view.update(cx, |view, cx| view.stop(cx));
+                }
+            }
+            "agent.compact" if editor(self, cx) => self.confirm(Confirm::Compact, cx),
+            "agent.newContext" => {
+                if self.main_view().is_some_and(|v| v.read(cx).role() != "admin") {
+                    return self.toast("Only admins can start a new context.", true, cx);
+                }
+                self.confirm(Confirm::NewContext, cx);
+            }
+            "agent.branches" => self.branches(cx),
+            "agent.setup" => self.open_aside("setup", window, cx),
+            "agent.side" => self.open_aside("side", window, cx),
+            "agent.landThread" => self.open_aside("land", window, cx),
+            "agent.land" if editor(self, cx) => {
+                self.post_to_thread(json!({ "type": "land", "where": "device" }), cx);
+                self.open_aside("land", window, cx);
+            }
+            "agent.compact" | "agent.land" => {}
+            other => {
+                if let Some(command) = keymap::command(other) {
+                    self.toast(format!("{} isn't in the native app yet.", command.title), true, cx);
+                }
+            }
         }
     }
 
@@ -520,7 +909,7 @@ impl Desktop {
             None => div().size_full().into_any_element(),
             Some(t) if t.status.as_deref() == Some("failed") => state("Setup failed".into(), t.error.clone().unwrap_or_default()),
             Some(t) if !t.ready() => state("Preparing the thread".into(), t.step.clone().unwrap_or_else(|| "Starting".into())),
-            Some(t) if self.native => match (if self.in_side { self.sides.get(&t.id) } else { None }).or_else(|| self.threads.get(&t.id)) {
+            Some(_) if self.native => match self.shown_view() {
                 Some(view) => div()
                     .size_full()
                     .flex()
@@ -535,6 +924,15 @@ impl Desktop {
             },
         }
     }
+}
+
+thread_local! {
+    static TEST_COMMAND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A query string's value, escaped.
+fn url_escape(value: &str) -> String {
+    value.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~/".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 
 /// Dark when the system is (SYNCPI_GPUI_THEME=dark or light overrides it, for tests).
@@ -553,7 +951,29 @@ impl Render for Desktop {
             self.open_panel(shown, window, cx);
         }
         let p = palette(cx);
+        let dialog = self.dialog_view(cx);
+        let toast = self.toast.as_ref().map(|(text, error, _)| {
+            div()
+                .absolute()
+                .bottom(px(28.))
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .px_3()
+                        .py(px(7.))
+                        .rounded(px(8.))
+                        .bg(if *error { p.removed } else { p.ink })
+                        .text_color(p.paper)
+                        .text_size(sz(13.))
+                        .shadow_md()
+                        .child(text.clone()),
+                )
+        });
         div()
+            .relative()
             .size_full()
             .flex()
             .bg(p.paper)
@@ -563,6 +983,9 @@ impl Render for Desktop {
             .on_action(cx.listener(|this, action: &RunCommand, window, cx| this.run(action, window, cx)))
             .when(self.sidebar_open, |d| d.child(sidebar::render(self, window, cx)))
             .child(div().flex_1().h_full().min_w_0().child(self.main_pane(window, cx)))
+            .children(self.palette.clone())
+            .children(dialog)
+            .children(toast)
     }
 }
 
@@ -573,17 +996,20 @@ fn main() -> anyhow::Result<()> {
     app.run(move |cx| {
         gpui_component::init(cx);
         theme::load_fonts(cx);
+        // Every command's shortcut. Find belongs to a native thread (a thread's web page keeps its own); Esc stops
+        // the agent only outside text fields, which use it themselves.
         let bindings: Vec<KeyBinding> = keymap::commands()
             .into_iter()
-            .filter(|c| NATIVE.contains(&c.id.as_str()))
-            .filter_map(|c| Some(KeyBinding::new(&c.keys?, RunCommand { id: c.id.into() }, None)))
-            .chain([
-                KeyBinding::new("cmd-q", RunCommand { id: "app.quit".into() }, None),
-                // Find in a native thread; a thread's web page keeps its own.
-                KeyBinding::new("cmd-f", RunCommand { id: "find.open".into() }, Some("ThreadView")),
-                KeyBinding::new("cmd-g", RunCommand { id: "find.next".into() }, Some("ThreadView")),
-                KeyBinding::new("cmd-shift-g", RunCommand { id: "find.previous".into() }, Some("ThreadView")),
-            ])
+            .filter_map(|c| {
+                let keys = c.keys?;
+                let context = match c.id.as_str() {
+                    id if id.starts_with("find.") => Some("ThreadView"),
+                    "agent.stop" => Some("ThreadView && !Input"),
+                    _ => None,
+                };
+                Some(KeyBinding::new(&keys, RunCommand { id: c.id.into() }, context))
+            })
+            .chain([KeyBinding::new("cmd-q", RunCommand { id: "app.quit".into() }, None)])
             .collect();
         cx.bind_keys(bindings);
         cx.on_action(|action: &RunCommand, cx| {
@@ -596,8 +1022,14 @@ fn main() -> anyhow::Result<()> {
             MenuItem::action(title, RunCommand { id: id.to_owned().into() })
         };
         cx.set_menus(vec![
-            Menu { name: "SyncPi".into(), items: vec![MenuItem::action("Quit SyncPi", RunCommand { id: "app.quit".into() })] },
-            Menu { name: "File".into(), items: vec![item("project.add"), item("thread.new")] },
+            Menu {
+                name: "SyncPi".into(),
+                items: vec![item("app.keymap"), MenuItem::separator(), MenuItem::action("Quit SyncPi", RunCommand { id: "app.quit".into() })],
+            },
+            Menu {
+                name: "File".into(),
+                items: vec![item("project.add"), item("thread.new"), item("thread.join"), MenuItem::separator(), item("thread.share"), item("thread.rename"), item("thread.archive")],
+            },
             // The thread's page is a native webview: these reach it as the standard Edit commands.
             Menu {
                 name: "Edit".into(),
@@ -611,11 +1043,37 @@ fn main() -> anyhow::Result<()> {
             Menu {
                 name: "View".into(),
                 items: vec![
+                    item("palette.all"),
+                    item("palette.commands"),
+                    item("palette.threads"),
+                    item("palette.files"),
+                    MenuItem::separator(),
                     item("view.sidebar"),
-                    MenuItem::action("Native thread (preview)", RunCommand { id: "view.native".into() }),
+                    item("thread.archives"),
+                    item("app.theme"),
+                    item("app.zoomIn"),
+                    item("app.zoomOut"),
+                    item("app.zoomReset"),
+                    MenuItem::action("Native or web thread", RunCommand { id: "view.native".into() }),
                     MenuItem::separator(),
                     item("thread.next"),
                     item("thread.previous"),
+                ],
+            },
+            Menu {
+                name: "Agent".into(),
+                items: vec![
+                    item("agent.stop"),
+                    item("agent.model"),
+                    item("agent.side"),
+                    MenuItem::separator(),
+                    item("agent.compact"),
+                    item("agent.newContext"),
+                    item("agent.branches"),
+                    MenuItem::separator(),
+                    item("agent.land"),
+                    item("agent.landThread"),
+                    item("agent.setup"),
                 ],
             },
         ]);
@@ -650,7 +1108,6 @@ fn main() -> anyhow::Result<()> {
                 ..Default::default()
             },
             move |window, cx| {
-                theme::apply(dark(window), 1., Some(window), cx);
                 let view = cx.new(|cx| Desktop::new(host, window, cx));
                 cx.new(|cx| Root::new(view, window, cx))
             },

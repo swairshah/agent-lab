@@ -125,6 +125,8 @@ impl ThreadView {
     pub fn new(id: String, host: Host, conv: &'static str, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let placeholder = if conv == "side" {
             "Ask about the thread. Only you see this. ⌘↩ to send"
+        } else if conv == "land" {
+            "Tell the land agent something. ⌘↩ to send"
         } else {
             "Message the agent. Enter for a new line, ⌘↩ to send; /side, /queue, /steer, /stop"
         };
@@ -360,8 +362,8 @@ impl ThreadView {
             "where": "device",
             "comments": [{ "path": "", "start": 0, "end": 0, "excerpt": excerpt, "text": note, "message": message }],
         });
-        if self.conv == "side" {
-            submit["conv"] = json!("side");
+        if self.conv != "main" {
+            submit["conv"] = json!(self.conv);
         }
         self.send(submit, cx);
         self.composer.update(cx, |state, cx| state.set_value("", window, cx));
@@ -708,7 +710,7 @@ impl ThreadView {
             }
             None => ("", text.clone()),
         };
-        let mut conv = if self.conv == "side" { json!("side") } else { Value::Null };
+        let mut conv = if self.conv == "main" { Value::Null } else { json!(self.conv) };
         match command {
             "stop" => self.stop(cx),
             "side" => {
@@ -755,16 +757,60 @@ impl ThreadView {
         }
     }
 
-    fn stop(&mut self, cx: &mut Context<Self>) {
+    pub fn stop(&mut self, cx: &mut Context<Self>) {
         let mut message = json!({ "type": "abort" });
-        if self.conv == "side" {
-            message["conv"] = json!("side");
+        if self.conv == "side" || self.conv == "land" {
+            message["conv"] = json!(self.conv);
         }
         self.send(message, cx);
     }
 
-    /// Over a side thread: whose it is, Start over (fork it again from the thread as it is now), Back.
+    /// A message to the thread's server, from the app (a model change, compacting, landing…).
+    pub fn post(&self, message: Value, cx: &mut Context<Self>) {
+        self.send(message, cx);
+    }
+
+    /// The thread's model and thinking level.
+    pub fn model(&self) -> (String, String) {
+        (text(&self.main, "model"), text(&self.main, "thinkingLevel"))
+    }
+
+    pub fn role(&self) -> String {
+        text(&self.meta, "role")
+    }
+
+    /// Over a side thread: whose it is, Start over (fork it again from the thread as it is now), Back. Over the setup
+    /// or land agent's thread: what it is, Back.
     fn side_banner(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        if self.conv == "setup" || self.conv == "land" {
+            let what = if self.conv == "setup" { "The setup agent's thread: how this project's environment was prepared" } else { "The land agent's thread: getting this thread's changes onto main" };
+            return div()
+                .h(px(38.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap_2()
+                .pl(px(LEFT))
+                .pr_2()
+                .border_b_1()
+                .border_color(p.rule)
+                .bg(p.sunken)
+                .text_size(sz(12.5))
+                .child(div().flex_1().text_color(p.ink_2).child(what))
+                .child(
+                    div()
+                        .id("aside-back")
+                        .px_2()
+                        .py(px(3.))
+                        .rounded(px(5.))
+                        .text_color(p.ink_2)
+                        .cursor_pointer()
+                        .hover(|s| s.bg(p.rule).text_color(p.ink))
+                        .child("Back to the thread")
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(ThreadEvent::Back))),
+                )
+                .into_any_element();
+        }
         if self.conv != "side" {
             return div().into_any_element();
         }
@@ -1253,6 +1299,9 @@ impl Render for ThreadView {
         }
         let viewer = self.meta["me"]["role"] == "viewer";
         let with = self.draft_with(&p, cx);
+        if self.conv == "setup" {
+            rows.push(div().mt(px(18.)).text_size(sz(13.)).text_color(p.muted).child("The setup agent works on its own; its thread is here to read.").into_any_element());
+        } else {
         rows.push(
             div()
                 .mt(px(18.))
@@ -1267,6 +1316,7 @@ impl Render for ThreadView {
                 })
                 .into_any_element(),
         );
+        }
         // The list follows its rows: new ones are measured from the old last row (the composer).
         let count = rows.len();
         if self.list.item_count() != count {

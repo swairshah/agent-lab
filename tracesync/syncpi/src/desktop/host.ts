@@ -103,7 +103,8 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     // state, the order of its items and only the items changed since the last (every item has a rev), and who's here.
     // `?conv=side`: this person's side thread instead.
     if (verb === 'stream' && req.method === 'GET') {
-      const conv = url.searchParams.get('conv') === 'side' ? 'side' : 'main';
+      const asked = url.searchParams.get('conv');
+      const conv = asked === 'side' || asked === 'setup' || asked === 'land' ? asked : 'main';
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
       // By object, not key: a reconnect draws the thread again from scratch (new items, revs from 0), all resent.
       const sent = new WeakMap<object, number>();
@@ -142,7 +143,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     if (verb === 'drafts-sent' && req.method === 'GET') return json(res, { sent: live.sentDrafts });
     if (verb === 'send' && req.method === 'POST') {
       const message = await input(req);
-      if (!['submit', 'abort', 'side', 'invite', 'invites', 'revoke', 'setRole', 'remove', 'rename', 'compact', 'new', 'branches', 'fork', 'switchBranch', 'configure'].includes(message.type)) throw new Error('Unknown session command');
+      if (!['submit', 'abort', 'side', 'land', 'invite', 'invites', 'revoke', 'setRole', 'remove', 'rename', 'compact', 'new', 'branches', 'fork', 'switchBranch', 'configure'].includes(message.type)) throw new Error('Unknown session command');
       if (message.type === 'submit' && (typeof message.text !== 'string' || typeof message.requestId !== 'string')) throw new Error('A message and request ID are required');
       live.send(message as ClientMessage); return json(res, { ok: true });
     }

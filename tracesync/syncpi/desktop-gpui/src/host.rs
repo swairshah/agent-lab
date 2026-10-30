@@ -46,6 +46,10 @@ pub struct Thread {
     pub archived: bool,
     #[serde(default)]
     pub pinned: bool,
+    #[serde(default)]
+    pub bookmarked: bool,
+    #[serde(default)]
+    pub tags: Vec<String>,
     #[serde(default, rename = "createdAt")]
     pub created_at: f64,
     #[serde(default, rename = "lastOpened")]
@@ -72,10 +76,27 @@ pub struct Defaults {
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct Identity {
+    #[serde(default)]
+    pub name: String,
+}
+
+/// Joining a thread whose server asks this person to sign in first: the page to open, and what it should show.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Login {
+    pub url: String,
+    pub check: String,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct Catalog {
     pub sessions: Vec<Thread>,
     #[serde(default)]
     pub defaults: Defaults,
+    #[serde(default)]
+    pub identity: Identity,
+    #[serde(default)]
+    pub login: Option<Login>,
 }
 
 #[derive(Clone)]
