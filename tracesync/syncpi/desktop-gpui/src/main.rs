@@ -815,7 +815,7 @@ impl Desktop {
     /// sent when it changes, so others can follow them.
     fn share_view(&mut self, cx: &mut Context<Self>) {
         let (Some(id), Some(shown)) = (self.active.clone(), self.shown_view()) else { return };
-        let panel = self.panel_open.then(|| self.panels.get(&id).and_then(|p| p.read(cx).shown_file())).flatten();
+        let panel = self.panel_open.then(|| self.panels.get(&id).and_then(|p| p.read(cx).shown())).flatten();
         let mut view = json!({ "conv": self.aside.unwrap_or("main"), "panel": panel });
         if let Some(at) = shown.read(cx).top_key() {
             view["at"] = json!(at);
@@ -855,11 +855,17 @@ impl Desktop {
             });
         }
         match view["panel"].as_str() {
-            Some(path) => {
-                let path = path.to_owned();
-                let same = self.panel_open && self.active.as_ref().and_then(|id| self.panels.get(id)).is_some_and(|p| p.read(cx).shown_file().as_deref() == Some(path.as_str()));
-                if !same {
-                    self.open_file(path, window, cx);
+            Some(shown) => {
+                let shown = shown.to_owned();
+                let same = self.panel_open && self.active.as_ref().and_then(|id| self.panels.get(id)).is_some_and(|p| p.read(cx).shown().as_deref() == Some(shown.as_str()));
+                if same {
+                } else if shown == "changes" {
+                    self.toggle_panel(false, |panel, cx| {
+                        panel.show_changes(cx);
+                        false
+                    }, window, cx);
+                } else {
+                    self.open_file(shown, window, cx);
                 }
             }
             None if self.panel_open => {

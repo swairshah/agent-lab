@@ -81,7 +81,7 @@ pub struct PanelView {
     webview: Option<(String, Entity<WebView>)>,
     worker: std::sync::mpsc::Sender<Job>,
     /// Text that arrived for an editor (path, text), set on the next frame.
-    pending_text: Option<(String, String)>,
+    pending_text: HashMap<String, String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -147,14 +147,16 @@ impl PanelView {
             comment,
             webview: None,
             worker,
-            pending_text: None,
+            pending_text: HashMap::new(),
             _subscriptions: subscriptions,
         }
     }
 
-    /// The file shown, if a file's tab is (for others following this person).
-    pub fn shown_file(&self) -> Option<String> {
+    /// What the panel shows, as follow.ts names it for others following this person: "changes", a file's path, or
+    /// nothing they can follow.
+    pub fn shown(&self) -> Option<String> {
         match &self.active {
+            Tab::Changes => Some("changes".into()),
             Tab::File(path) => Some(path.clone()),
             _ => None,
         }
@@ -422,8 +424,10 @@ impl PanelView {
     /// has every write from here), and who else is in it.
     fn poll_editors(&mut self, cx: &mut Context<Self>) {
         for tab in &self.tabs {
-            let Some(editor) = &tab.editing else { continue };
-            let (host, id, path, writes) = (self.host.clone(), self.id.clone(), tab.path.clone(), editor.writes);
+            if tab.editing.is_none() {
+                continue;
+            }
+            let (host, id, path) = (self.host.clone(), self.id.clone(), tab.path.clone());
             cx.spawn(async move |this, cx| {
                 let query = crate::url_escape(&path);
                 let now = cx.background_executor().spawn(async move { host.get(&format!("/api/sessions/{id}/filedoc?path={query}")) }).await;
@@ -431,14 +435,15 @@ impl PanelView {
                 let _ = this.update(cx, |this, cx| {
                     let Some(editor) = this.tabs.iter_mut().find(|t| t.path == path).and_then(|t| t.editing.as_mut()) else { return };
                     editor.others = now["writers"].as_array().into_iter().flatten().filter_map(|w| w["name"].as_str().map(str::to_owned)).collect();
-                    if !now["ready"].as_bool().unwrap_or(false) || now["seq"].as_u64().unwrap_or(0) < writes {
+                    // Only once the host has every write from here, counted as they are now (one typed while this
+                    // was asked for makes the answer stale).
+                    if !now["ready"].as_bool().unwrap_or(false) || now["seq"].as_u64().unwrap_or(0) < editor.writes {
                         return;
                     }
                     let remote = now["text"].as_str().unwrap_or_default().to_owned();
                     if !editor.ready || (remote != editor.written && editor.input.read(cx).value() == editor.written.as_str()) {
-                        editor.ready = true;
-                        editor.written = remote.clone();
-                        this.pending_text = Some((path.clone(), remote));
+                        // Set on the next frame (it needs the window); marked ready and written only then.
+                        this.pending_text.insert(path.clone(), remote);
                         cx.notify();
                     }
                 });
@@ -911,8 +916,20 @@ impl PanelView {
 impl PanelView {
     /// Text that arrived for an editor, set on the next frame (setting it needs the window).
     fn apply_pending(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((path, text)) = self.pending_text.take() else { return };
-        let Some(editor) = self.tabs.iter_mut().find(|t| t.path == path).and_then(|t| t.editing.as_mut()) else { return };
+        for (path, text) in std::mem::take(&mut self.pending_text) {
+            let Some(editor) = self.tabs.iter_mut().find(|t| t.path == path).and_then(|t| t.editing.as_mut()) else { continue };
+            // Typed in since the text arrived: what's typed wins, and the next poll brings the rest.
+            if editor.ready && editor.input.read(cx).value() != editor.written.as_str() {
+                continue;
+            }
+            Self::set_editor_text(editor, text, window, cx);
+        }
+    }
+
+    fn set_editor_text(editor: &mut Editor, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        // Written first: setting the value reports a change, which must not go back to the host as typing.
+        editor.ready = true;
+        editor.written = text.clone();
         let cursor = editor.input.read(cx).cursor().min(text.len());
         let mut at = cursor;
         while !text.is_char_boundary(at) {

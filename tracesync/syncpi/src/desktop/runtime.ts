@@ -219,7 +219,8 @@ export class LiveSession {
     return { text, ready: entry.ready, seq: entry.seq, writers };
   }
   /** Drafts sent to the agent since the native app last looked: owner, and who sent it. */
-  sentDrafts: { owner: string; by: string }[] = [];
+  sentDrafts: { owner: string; by: string; n: number }[] = [];
+  #sentCount = 0;
   draft(owner: string) {
     let entry = this.drafts.get(owner);
     if (entry === undefined) {
@@ -298,7 +299,7 @@ export class LiveSession {
         const entry = this.draft(m.owner);
         entry.name = m.name;
         if (m.update !== undefined) Y.applyUpdate(entry.doc, fromBase64(m.update), 'remote');
-        if (m.sent !== undefined) { entry.tagged.clear(); this.sentDrafts.push({ owner: m.owner, by: m.sent }); this.sentDrafts = this.sentDrafts.slice(-20); }
+        if (m.sent !== undefined) { entry.tagged.clear(); this.sentDrafts.push({ owner: m.owner, by: m.sent, n: ++this.#sentCount }); this.sentDrafts = this.sentDrafts.slice(-20); }
       }
       if (m.type === 'view' && m.memberId !== this.native.me?.id) { if (m.view === null) this.views.delete(m.memberId); else this.views.set(m.memberId, { name: m.name, view: m.view }); }
       if (m.type === 'marks') { if (m.marks.length === 0) this.marks.delete(m.key); else this.marks.set(m.key, m.marks); }

@@ -114,7 +114,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       const push = () => {
         timer = undefined;
         const { items, ...state } = live.native[conv].state;
-        const meta = { me: live.native.me, members: live.native.members, online: live.native.online, target: live.native.target, role: live.role, drafts: conv === 'main' ? live.draftsNow() : [], sent: live.sentDrafts.length, marks: Object.fromEntries(live.marks), views: Object.fromEntries(live.views), connection: live.conn.state };
+        const meta = { me: live.native.me, members: live.native.members, online: live.native.online, target: live.native.target, role: live.role, drafts: conv === 'main' ? live.draftsNow() : [], sentDrafts: live.sentDrafts, marks: Object.fromEntries(live.marks), views: Object.fromEntries(live.views), connection: live.conn.state };
         const who = JSON.stringify(meta);
         if (state.rev === rev && who === people) return;
         rev = state.rev;

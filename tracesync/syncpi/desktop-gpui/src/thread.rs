@@ -166,6 +166,8 @@ pub struct ThreadView {
     /// has, so a stream event from before a write doesn't take back what was just typed).
     written: String,
     writes: u64,
+    /// The newest draft-sent count (the host's) when a draft was joined: one sent after it ends the joining.
+    joined_after: u64,
     attachments: Vec<Attachment>,
     /// Messages sent from here the server hasn't acknowledged yet (request id, text, files): shown "sending…".
     pending: Vec<(String, String, Vec<String>)>,
@@ -281,6 +283,7 @@ impl ThreadView {
             joined: None,
             written: String::new(),
             writes: 0,
+            joined_after: 0,
             attachments: vec![],
             pending: vec![],
             completion: None,
@@ -298,7 +301,7 @@ impl ThreadView {
         }
         self.items = event["keys"].as_array().into_iter().flatten().filter_map(|k| by_key.remove(k.as_str()?)).collect();
         self.main = event["state"].clone();
-        self.meta = json!({ "me": event["me"], "members": event["members"], "online": event["online"], "target": event["target"], "role": event["role"], "marks": event["marks"], "views": event["views"], "connection": event["connection"] });
+        self.meta = json!({ "me": event["me"], "members": event["members"], "online": event["online"], "target": event["target"], "role": event["role"], "marks": event["marks"], "views": event["views"], "connection": event["connection"], "sentDrafts": event["sentDrafts"] });
         self.drafts = event["drafts"].as_array().cloned().unwrap_or_default();
         let acknowledged: HashSet<String> = self.items.iter().filter_map(|i| i["requestId"].as_str().map(str::to_owned)).collect();
         self.pending.retain(|(id, _, _)| !acknowledged.contains(id));
@@ -644,8 +647,9 @@ impl ThreadView {
         }
         let owner = self.draft_owner();
         let draft = self.drafts.iter().find(|d| text(d, "owner") == owner).cloned();
-        // A draft you joined was sent or cleared: back to yours.
-        if self.joined.is_some() && draft.as_ref().is_none_or(|d| text(d, "text").is_empty()) {
+        // A draft you joined was sent: back to yours. (Emptied while it's rewritten isn't sent: it stays joined.)
+        let sent = self.joined.as_ref().is_some_and(|owner| self.sent_drafts().any(|(o, n)| o == *owner && n > self.joined_after));
+        if sent {
             self.joined = None;
             self.written = String::new();
             self.composer.update(cx, |state, cx| state.set_value("", window, cx));
@@ -681,10 +685,16 @@ impl ThreadView {
         });
     }
 
+    /// Drafts sent to the agent, as the host numbers them: (whose, the number).
+    fn sent_drafts(&self) -> impl Iterator<Item = (String, u64)> + '_ {
+        self.meta["sentDrafts"].as_array().into_iter().flatten().map(|s| (text(s, "owner"), s["n"].as_u64().unwrap_or(0)))
+    }
+
     /// Write together: the composer writes `owner`'s draft with them; yours waits as you left it.
     pub fn join_draft(&mut self, owner: String, window: &mut Window, cx: &mut Context<Self>) {
         let Some(draft) = self.drafts.iter().find(|d| text(d, "owner") == owner) else { return };
         let body = text(draft, "text");
+        self.joined_after = self.sent_drafts().map(|(_, n)| n).max().unwrap_or(0);
         self.joined = Some(owner);
         self.written = body.clone();
         self.composer.update(cx, |state, cx| {

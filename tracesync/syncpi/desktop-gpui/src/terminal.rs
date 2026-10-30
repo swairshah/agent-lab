@@ -56,6 +56,9 @@ pub struct TerminalView {
     /// The shell's exit, or why it couldn't start.
     ended: Arc<Mutex<Option<String>>>,
     changed: Arc<AtomicBool>,
+    /// Set when the view goes: its socket closes, and with it the host's shell. (The terminal's own replies keep a
+    /// sender to the socket's thread alive, so the channel alone wouldn't say so.)
+    closed: Arc<AtomicBool>,
     /// The terminal's area, as last laid out, and the columns and lines it was sized to.
     area: Rc<Cell<Option<Bounds<Pixels>>>>,
     size: (usize, usize),
@@ -68,11 +71,12 @@ impl TerminalView {
         let term = Arc::new(Mutex::new(Term::new(Config::default(), &Size { columns: 100, lines: 24 }, Listener(out.clone()))));
         let ended = Arc::new(Mutex::new(None));
         let changed = Arc::new(AtomicBool::new(true));
+        let closed = Arc::new(AtomicBool::new(false));
         if let Some(command) = &command {
             let _ = out.send(json!({ "data": format!("{command}\r") }).to_string());
         }
         // The socket, on a thread of its own: what arrives goes through the terminal's parser; what's typed goes out.
-        let (screen, done, dirty, path) = (term.clone(), ended.clone(), changed.clone(), format!("/terminal/{id}/ws"));
+        let (screen, done, dirty, gone, path) = (term.clone(), ended.clone(), changed.clone(), closed.clone(), format!("/terminal/{id}/ws"));
         std::thread::spawn(move || {
             let mut socket = match host.socket(&path) {
                 Ok(socket) => socket,
@@ -84,6 +88,11 @@ impl TerminalView {
             };
             let mut parser: Processor = Processor::new();
             loop {
+                if gone.load(Ordering::SeqCst) {
+                    let _ = socket.close(None);
+                    let _ = socket.flush();
+                    return;
+                }
                 let mut idle = true;
                 match socket.read() {
                     Ok(tungstenite::Message::Text(text)) => {
@@ -153,6 +162,7 @@ impl TerminalView {
             focus: cx.focus_handle(),
             ended,
             changed,
+            closed,
             area: Rc::new(Cell::new(None)),
             size: (100, 24),
         }
@@ -377,5 +387,6 @@ impl Render for TerminalView {
 impl Drop for TerminalView {
     fn drop(&mut self) {
         self.changed.store(false, Ordering::SeqCst);
+        self.closed.store(true, Ordering::SeqCst);
     }
 }
