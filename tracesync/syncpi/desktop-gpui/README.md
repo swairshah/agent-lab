@@ -24,14 +24,25 @@ Nothing in the web app or the host changed for this.
 A webview is a native view above GPUI's drawing, so nothing GPUI draws can sit over a thread: dialogs are the
 system's (the folder picker, "Where should this project run?").
 
-## Next (step 2): the thread, native
+## Step 2, in progress: the thread, native
 
-Piece by piece, from the host's snapshot of a thread (`/api/sessions/<id>/native`) and its `send` route, as the
-earlier native app did (tag `gpui-desktop-final`): messages and Markdown, tool rows and diffs, then the composer,
-then Find. The webview stays only for what isn't native yet (HTML previews, Mermaid, comments on graphics).
+View → Native thread (preview) draws threads natively (`src/thread.rs`), from the host's snapshot of a thread
+(`/api/sessions/<id>/native`, polled while it's on screen) and its `send` route, as the earlier native app did (tag
+`gpui-desktop-final`, whose Markdown, code, Mermaid and text-cursor modules it reuses):
+
+- a person's message on one line, their name in their color, then what they wrote;
+- the agent's replies as Markdown (lists, code highlighted with tree-sitter, Mermaid) under the model's mark, with
+  thinking as one line that opens;
+- a tool call as one quiet line that opens to its output, an edit open with its diff, a run of quiet calls as one
+  line ("Ran 1 command, read 1 file");
+- notices, the composer as the last row (⌘↩ sends, as in the web view), and a status bar with Stop.
+
+Not native yet: artifacts (HTML previews, images, the side panel), comments, side threads, Find, drafts written
+together, the inbox, settings. Switch back to the web view for those. `SYNCPI_GPUI_NATIVE=1` starts in native mode.
 
 ## Testing without taking the screen
 
-`SYNCPI_GPUI_WINDOW=x,y,w,h` places the window and opens it without focus (macOS keeps at least a corner of it on
-screen); `SYNCPI_FAUX=1` runs the host with the scripted model; `SYNCPI_HOME` points at a test home. Capture the
-window with `screencapture -x -o -l <window id>`.
+`SYNCPI_GPUI_WINDOW=x,y,w,h` places the window and opens it without focus, as a floating panel: macOS keeps a corner
+of it on screen, and GPUI stops drawing a window macOS reports as covered, so the corner stays above other windows.
+`SYNCPI_FAUX=1` runs the host with the scripted model; `SYNCPI_HOME` points at a test home. Capture the window with
+`screencapture -x -o -l <window id>`.

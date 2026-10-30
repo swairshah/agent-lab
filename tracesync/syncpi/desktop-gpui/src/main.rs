@@ -2,11 +2,17 @@
 // natively as Delta draws everything; each thread is still the web view (src/web), embedded in a webview, until
 // its parts are made native one by one. The app runs the same local host as the Tauri app (dist/desktop-host.mjs),
 // which serves the thread pages and keeps their connections, file sync and tools.
+mod citations;
+mod cursor;
+mod diagram;
 mod host;
 mod icons;
 mod keymap;
+mod message;
+mod prose;
 mod sidebar;
 mod theme;
+mod thread;
 
 use gpui::{prelude::FluentBuilder, *};
 use gpui_component::{Root, webview::WebView, wry};
@@ -22,6 +28,7 @@ use std::{
     time::Duration,
 };
 use theme::{palette, sz};
+use thread::ThreadView;
 
 /// Thread pages kept loaded, so going back to a recent one is instant (as the Tauri app's shell keeps them).
 const KEEP: usize = 4;
@@ -45,6 +52,9 @@ pub struct Desktop {
     inbox: Arc<Mutex<Vec<(String, String)>>>,
     sidebar_open: bool,
     pub error: Option<String>,
+    /// Threads drawn natively (View → Native thread), instead of their web pages: one view per thread opened.
+    native: bool,
+    threads: HashMap<String, Entity<ThreadView>>,
 }
 
 impl Desktop {
@@ -74,6 +84,8 @@ impl Desktop {
             inbox: Arc::new(Mutex::new(Vec::new())),
             sidebar_open: true,
             error: None,
+            native: std::env::var("SYNCPI_GPUI_NATIVE").as_deref() == Ok("1"),
+            threads: HashMap::new(),
         };
         // The thread list every second and a half, as the Tauri shell polls it; page messages every tick.
         cx.spawn_in(window, async move |this, cx| {
@@ -127,9 +139,10 @@ impl Desktop {
                 self.show(&id, window, cx);
             }
         }
-        // A thread whose setup finished gets its page.
+        // A thread whose setup finished gets its page (or native view).
         if let Some(id) = self.active.clone() {
             self.ensure_page(&id, window, cx);
+            self.ensure_thread(&id, window, cx);
         }
     }
 
@@ -179,11 +192,12 @@ impl Desktop {
     pub fn show(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.active = Some(id.to_owned());
         for (page_id, page) in &self.pages {
-            if page_id != id {
+            if page_id != id || self.native {
                 page.update(cx, |p, _| p.hide());
             }
         }
         self.ensure_page(id, window, cx);
+        self.ensure_thread(id, window, cx);
         let host = self.host.clone();
         let id = id.to_owned();
         cx.background_executor()
@@ -194,8 +208,21 @@ impl Desktop {
         cx.notify();
     }
 
+    /// The native view of a thread, when threads are drawn natively; only the one shown is polled often.
+    fn ensure_thread(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        for (thread_id, view) in &self.threads {
+            view.read(cx).shown.set(self.native && thread_id == id);
+        }
+        if !self.native || self.threads.contains_key(id) || !self.thread(id).is_some_and(|t| t.ready()) {
+            return;
+        }
+        let host = self.host.clone();
+        let view = cx.new(|cx| ThreadView::new(id.to_owned(), host, window, cx));
+        self.threads.insert(id.to_owned(), view);
+    }
+
     fn ensure_page(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if self.cookie.is_some() || !self.thread(id).is_some_and(|t| t.ready()) {
+        if self.native || self.cookie.is_some() || !self.thread(id).is_some_and(|t| t.ready()) {
             return;
         }
         if let Some(index) = self.pages.iter().position(|(p, _)| p == id) {
@@ -319,6 +346,12 @@ impl Desktop {
                 self.sidebar_open = !self.sidebar_open;
                 cx.notify();
             }
+            "view.native" => {
+                self.native = !self.native;
+                if let Some(id) = self.active.clone() {
+                    self.show(&id, window, cx);
+                }
+            }
             "app.quit" => cx.quit(),
             _ => {}
         }
@@ -366,6 +399,10 @@ impl Desktop {
             None => div().size_full().into_any_element(),
             Some(t) if t.status.as_deref() == Some("failed") => state("Setup failed".into(), t.error.clone().unwrap_or_default()),
             Some(t) if !t.ready() => state("Preparing the thread".into(), t.step.clone().unwrap_or_else(|| "Starting".into())),
+            Some(t) if self.native => match self.threads.get(&t.id) {
+                Some(view) => div().size_full().child(view.clone()).into_any_element(),
+                None => state("Opening".into(), String::new()),
+            },
             Some(t) => match self.pages.iter().find(|(id, _)| *id == t.id) {
                 Some((_, page)) => div().size_full().child(page.clone()).into_any_element(),
                 None => state("Opening".into(), String::new()),
@@ -430,7 +467,16 @@ fn main() -> anyhow::Result<()> {
                     MenuItem::os_action("Select All", RunCommand { id: "edit.selectAll".into() }, OsAction::SelectAll),
                 ],
             },
-            Menu { name: "View".into(), items: vec![item("view.sidebar"), MenuItem::separator(), item("thread.next"), item("thread.previous")] },
+            Menu {
+                name: "View".into(),
+                items: vec![
+                    item("view.sidebar"),
+                    MenuItem::action("Native thread (preview)", RunCommand { id: "view.native".into() }),
+                    MenuItem::separator(),
+                    item("thread.next"),
+                    item("thread.previous"),
+                ],
+            },
         ]);
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
@@ -452,6 +498,9 @@ fn main() -> anyhow::Result<()> {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(720.), px(480.))),
                 focus: !background,
+                // Placed for a test: above other windows, so the corner left on screen keeps it drawing (GPUI stops
+                // drawing a window macOS reports as covered), without ever taking focus.
+                kind: if background { WindowKind::PopUp } else { WindowKind::Normal },
                 titlebar: Some(TitlebarOptions {
                     title: Some("SyncPi".into()),
                     appears_transparent: true,

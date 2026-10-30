@@ -190,7 +190,15 @@ pub fn apply(dark: bool, zoom: f32, mut window: Option<&mut Window>, cx: &mut Ap
     c.scrollbar = transparent_black();
     c.scrollbar_thumb = p.rule_strong;
     c.scrollbar_thumb_hover = p.muted;
+    DARK.store(dark, std::sync::atomic::Ordering::Relaxed);
     cx.set_global(p);
+}
+
+/// Whether the theme now is dark, for code that has no `App` at hand (people's colors in prose.rs).
+static DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn dark_mode() -> bool {
+    DARK.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 pub fn palette(cx: &App) -> Palette {
