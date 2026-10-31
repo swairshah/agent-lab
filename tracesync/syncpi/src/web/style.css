@@ -121,7 +121,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 /* Clipped, not hidden: nothing (a scrollIntoView, a caret) can scroll the frame itself, only the panes inside it. */
 #app { height: 100%; display: flex; flex-direction: column; overflow: clip; }
 .topbar { display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--rule); background: var(--paper); }
-.session-name { margin: 0; font: 500 14px/1 var(--sans); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.session-name { margin: 0; font: 500 14px/1.4 var(--sans); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .conn { font: 500 10.5px/1 var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--warn); }
 .conn:empty { display: none; }
 .conn[data-state="removed"] { color: var(--removed); }
