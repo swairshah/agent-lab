@@ -858,5 +858,6 @@ select:not([multiple]) { appearance: none; -webkit-appearance: none; padding-rig
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23a9afbb' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); } }
 :root[data-theme="dark"] { --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23a9afbb' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
 
-/* 16px keeps iOS from zooming into a field when it's focused. */
-@media (pointer: coarse) { input, textarea, select { font-size: max(16px, 1em); } }
+/* iOS zooms the page into a field whose text is under 16px when it's focused, and leaves it zoomed; every field is
+   16px on a touch screen, whatever more specific rule it has (the composer's is 15px). */
+@media (pointer: coarse) { input, textarea, select { font-size: 16px !important; } }
