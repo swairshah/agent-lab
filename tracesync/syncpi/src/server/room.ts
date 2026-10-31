@@ -41,6 +41,7 @@ import { DRAFT_LIMITS, draftText, fileKey, fromBase64, patchText, toBase64, Y } 
 import { type DeviceClient, Devices } from "./devices.ts";
 import { PiTurns, type TurnClient } from "./pi-turns.ts";
 import { RECORDINGS } from "./remote-tools.ts";
+import { terminal } from "./terminal.ts";
 import { context, Session } from "./session.ts";
 import { StateFile, type StoredMember, token } from "./state.ts";
 
@@ -816,6 +817,21 @@ export class Room {
 		return this.state.memberByToken(value);
 	}
 
+	/**
+	 * Whether this member gets a terminal in the browser: on a session's VM, only its admins, since that's a shell on
+	 * the VM. Not for a session on someone's own machine.
+	 */
+	terminalFor(member: StoredMember): boolean {
+		return this.state.value.vm !== undefined && this.state.value.auth !== "pi" && atLeast(member, "admin");
+	}
+
+	/** A terminal for this member's browser (see terminalFor), in the project's folder. */
+	terminal(ws: WebSocket, member: StoredMember): void {
+		if (!this.terminalFor(member)) return void ws.close(4003, "no terminal for you here");
+		const env = Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined && !e[0].startsWith("SYNCPI_")));
+		terminal(ws, ["bash", "-l"], { cwd: this.session.workdir, env, onInput: () => (this.#lastActive = Date.now()) });
+	}
+
 	async connect(ws: WebSocket, member: StoredMember, kind: "cli" | "web"): Promise<void> {
 		const client: Client = { member, kind, ws, watches: {}, files: new Set() };
 		this.#clients.add(client);
@@ -1046,7 +1062,7 @@ export class Room {
 		this.#lastActive = Date.now();
 
 		if (req.method === "GET" && path === "/api/info") {
-			return json(res, 200, { id: state.value.id, name: state.value.name, url: state.value.url, workdir: state.value.workdir, vm: state.value.vm, me: { id: member.id, name: member.name, role: member.role } });
+			return json(res, 200, { id: state.value.id, name: state.value.name, url: state.value.url, workdir: state.value.workdir, vm: state.value.vm, me: { id: member.id, name: member.name, role: member.role }, terminal: this.terminalFor(member) });
 		}
 		if (req.method === "POST" && path === "/api/title") {
             if (!atLeast(member, "admin")) return json(res, 403, { error: "only admins can generate thread titles" });

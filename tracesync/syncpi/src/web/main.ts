@@ -62,6 +62,17 @@ async function main(): Promise<void> {
 	document.documentElement.classList.toggle("embedded", embedded);
 	// In the app: one of its threads, beside the sidebar (shell.ts). The shell runs what spans threads.
 	const app = shell();
+	// Links open in a new tab (in the app, in the browser). The thread is an editable region, for its text cursor, and
+	// browsers don't follow links in one; a WebView doesn't open new windows at all.
+	document.addEventListener("click", (event) => {
+		const link = (event.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
+		if (link === null || event.defaultPrevented || event.button !== 0 || link.hasAttribute("download") || !/^(https?|mailto):/i.test(link.href)) return;
+		// A drag that selected text and ended on a link isn't a click on it.
+		if (getSelection()?.isCollapsed === false) return;
+		event.preventDefault();
+		if (app !== undefined) app.openUrl(link.href);
+		else window.open(link.href, "_blank", "noopener");
+	});
 	const threadId = app ? (BASE.match(/\/session\/([A-Za-z0-9_-]+)\//)?.[1] ?? "") : "";
 	if (app) {
 		applyZoom(document);
@@ -101,12 +112,21 @@ async function main(): Promise<void> {
 	};
 	const panel = new ArtifactPanel(session, loadImage, sendComment, loadFile);
 	// Terminals on this machine, in the app.
-	const terminals = app ? new Terminals(threadId) : undefined;
+	// Terminals: in the app, on this machine; in a browser, on the session's VM for its admins, when the server offers one.
+	const info = app ? undefined : ((await fetch("api/info", { headers: { authorization: `Bearer ${token}` } }).then((r) => r.json()).catch(() => ({}))) as { terminal?: boolean });
+	const remoteTerminal = () => {
+		const url = new URL("terminal", document.baseURI);
+		url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+		url.searchParams.set("token", token);
+		return new WebSocket(url);
+	};
+	const terminals = app ? new Terminals(() => new WebSocket(`${location.origin.replace(/^http/, "ws")}/terminal/${threadId}`), "zsh") : info?.terminal ? new Terminals(remoteTerminal, "bash") : undefined;
 	const git = app ? new Git(threadId, sendComment, toast) : undefined;
 	$("git-toggle").hidden = git === undefined;
 	$("terminal-toggle").hidden = terminals === undefined;
 	$("git-toggle").addEventListener("click", () => git?.toggle());
-	$("terminal-toggle").addEventListener("click", () => palette.handler("view.terminal")?.());
+	// Straight to the terminals: a browser's palette has no terminal command.
+	$("terminal-toggle").addEventListener("click", () => (session.role === "viewer" ? toast("Viewers can't run commands.", "error") : terminals?.toggle()));
 	const quotes = new QuoteComments($("thread"), sendComment, () => composer.focus());
 	// Up from the composer's first line moves the cursor into the thread, as in Delta.
 	$("input").addEventListener("keydown", (event) => {

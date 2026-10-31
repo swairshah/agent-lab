@@ -111,7 +111,6 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .screen { min-height: 100%; display: grid; place-items: center; padding: 24px 16px; }
 .card { width: min(440px, 100%); background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 28px; box-shadow: var(--shadow); }
 .card h1 { font: 400 30px/1.15 var(--serif); margin: 4px 0 10px; letter-spacing: -0.01em; }
-.card h1 em { color: var(--accent); }
 .card label { display: block; margin: 18px 0 6px; font: 500 11px/1 var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 .card input { width: 100%; }
 .card .button { margin-top: 14px; width: 100%; }
@@ -585,8 +584,15 @@ kbd { font: 500 11px/1 var(--mono); color: var(--muted); background: var(--sunke
 /* ---------- the app: threads in a sidebar beside the open thread (shell.html) ---------- */
 
 body.shell { overflow: hidden; }
-.shell-layout { height: 100vh; display: grid; grid-template-columns: 252px minmax(0, 1fr); }
+.shell-layout { position: relative; height: 100vh; display: grid; grid-template-columns: var(--sidebar-width, 240px) minmax(0, 1fr); }
 .sidebar-hidden .shell-layout { grid-template-columns: 0 minmax(0, 1fr); }
+/* The sidebar's right edge: drag to resize, double-click for the default width. */
+.sidebar-resize { position: absolute; top: 0; bottom: 0; left: calc(var(--sidebar-width, 240px) - 3px); width: 6px; cursor: col-resize; z-index: 5; }
+.sidebar-resize:hover, .resizing .sidebar-resize { background: linear-gradient(to right, transparent 2px, var(--rule-strong) 2px, var(--rule-strong) 4px, transparent 4px); }
+.sidebar-hidden .sidebar-resize { display: none; }
+/* While dragging, the threads' pages mustn't take the mouse. */
+.resizing { cursor: col-resize; user-select: none; }
+.resizing iframe { pointer-events: none; }
 .sidebar { display: flex; flex-direction: column; min-width: 0; overflow: hidden; background: var(--sunken); border-right: 1px solid var(--rule); }
 /* Room for the window's traffic lights (the title bar is drawn by the page). */
 .sidebar-head { display: flex; align-items: center; gap: 2px; height: 44px; padding: 0 8px 0 80px; flex: none; }
@@ -732,7 +738,6 @@ html.window-controls .topbar { padding-left: 84px; }
 
 /* The app, compact as Delta: a 32px title bar, a left-aligned thread with a narrow gutter, 24px avatars, tighter
    spacing between messages. A browser keeps the roomier, centered layout. */
-.shell-layout { grid-template-columns: 240px minmax(0, 1fr); }
 .sidebar-head { height: 32px; padding-left: 76px; }
 .sidebar-list { padding: 2px 6px 10px; }
 .sidebar-label { padding: 8px 8px 2px; font-size: 12px; }
@@ -844,3 +849,9 @@ html[data-desktop="true"] .statusbar { height: 30px; padding: 0 6px 0 16px; }
 .thread-shared { display: inline-flex; flex: none; }
 .thread-shared svg { width: 14px; height: 14px; color: var(--muted); }
 .thread-shared.online svg { color: var(--ok); }
+
+/* Dropdowns draw their own chevron, with room between it and the border. */
+select:not([multiple]) { appearance: none; -webkit-appearance: none; padding-right: 30px; background-image: var(--chevron); background-repeat: no-repeat; background-position: right 11px center; background-size: 10px 6px; }
+:root { --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b8579' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23a9afbb' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); } }
+:root[data-theme="dark"] { --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23a9afbb' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }

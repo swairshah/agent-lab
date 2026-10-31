@@ -95,11 +95,12 @@ server.on("upgrade", (req, socket, head) => {
 	const url = new URL(req.url ?? "/", "http://x");
 	void route(url.pathname)
 		.then((found) => {
-			const member = found?.rest === "/ws" ? found.room.member(url.searchParams.get("token") ?? undefined) : undefined;
+			const member = found?.rest === "/ws" || found?.rest === "/terminal" ? found.room.member(url.searchParams.get("token") ?? undefined) : undefined;
 			if (found === undefined || member === undefined) {
 				socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
 				return;
 			}
+			if (found.rest === "/terminal") return void wss.handleUpgrade(req, socket, head, (ws) => found.room.terminal(ws, member));
 			const kind = url.searchParams.get("client") === "cli" ? "cli" : "web";
 			wss.handleUpgrade(req, socket, head, (ws) => void found.room.connect(ws, member, kind));
 		})

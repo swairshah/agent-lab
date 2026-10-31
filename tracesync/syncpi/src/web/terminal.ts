@@ -1,12 +1,14 @@
-// Terminals in the app (ctrl-`): shells in the project's folder on this machine, in tabs under the thread. The app's
-// host runs each one (a PTY, src/desktop/host.ts) and streams it over a WebSocket; xterm draws it. `!cmd` in the
-// composer runs a command in a new one. Only in the app: a browser has no shell to give.
+// Terminals (ctrl-`): shells in tabs under the thread. In the app, in the project's folder on this machine: the app's
+// host runs each one (a PTY, src/desktop/host.ts). In a browser, on the session's VM for its admins
+// (src/server/terminal.ts). Either streams it over a WebSocket; xterm draws it. `!cmd` in the composer runs a command
+// in a new one.
 import { $, el } from "./dom.ts";
 
 type Tab = { id: number; title: string; view: HTMLElement; socket: WebSocket; closed: boolean; fit(): void; focus(): void; clear(): void; send(data: string): void };
 
 export class Terminals {
-	readonly #thread: string;
+	readonly #connect: () => WebSocket;
+	readonly #shell: string;
 	readonly #root = $("terminal");
 	readonly #tabs = $("terminal-tabs");
 	readonly #views = $("terminal-views");
@@ -14,8 +16,10 @@ export class Terminals {
 	#current = 0;
 	#next = 1;
 
-	constructor(thread: string) {
-		this.#thread = thread;
+	/** `connect` opens a new terminal's socket; `shell` names its tab until the shell sets a title. */
+	constructor(connect: () => WebSocket, shell: string) {
+		this.#connect = connect;
+		this.#shell = shell;
 		new ResizeObserver(() => this.#tab()?.fit()).observe(this.#views);
 		// Dragging the top edge sets the height.
 		$("terminal-resize").addEventListener("mousedown", (event) => {
@@ -77,11 +81,11 @@ export class Terminals {
 		const view = el("div", "terminal-view");
 		this.#views.append(view);
 		term.open(view);
-		const socket = new WebSocket(`${location.origin.replace(/^http/, "ws")}/terminal/${this.#thread}`);
+		const socket = this.#connect();
 		const id = this.#next++;
 		const tab: Tab = {
 			id,
-			title: command ? command.split(/\s+/)[0]! : "zsh",
+			title: command ? command.split(/\s+/)[0]! : this.#shell,
 			view,
 			socket,
 			closed: false,

@@ -530,7 +530,39 @@ window.syncpiCommand = (id: string) => {
 
 // ---------- wiring ----------
 
+const SIDEBAR_WIDTH = "syncpi-sidebar-width";
+function sidebarWidth(px?: number): void {
+	const root = document.documentElement.style;
+	if (px === undefined) root.removeProperty("--sidebar-width");
+	else root.setProperty("--sidebar-width", `${Math.round(Math.max(180, Math.min(520, px, innerWidth - 360)))}px`);
+}
+
+/** Dragging the sidebar's right edge sets its width, kept for next time; a double-click puts the default back. */
+function resizableSidebar(): void {
+	const saved = Number(storage.get(SIDEBAR_WIDTH));
+	if (saved > 0) sidebarWidth(saved);
+	const handle = $("sidebar-resize");
+	handle.addEventListener("mousedown", (event) => {
+		event.preventDefault();
+		document.body.classList.add("resizing");
+		const move = (e: MouseEvent) => sidebarWidth(e.clientX);
+		const up = () => {
+			document.body.classList.remove("resizing");
+			removeEventListener("mousemove", move);
+			removeEventListener("mouseup", up);
+			storage.set(SIDEBAR_WIDTH, String($("sidebar").offsetWidth));
+		};
+		addEventListener("mousemove", move);
+		addEventListener("mouseup", up);
+	});
+	handle.addEventListener("dblclick", () => {
+		sidebarWidth();
+		storage.remove(SIDEBAR_WIDTH);
+	});
+}
+
 function wire(): void {
+	resizableSidebar();
 	applyTheme(storage.get("syncpi-theme"));
 	applyZoom(document);
 	dragWindow($("sidebar").querySelector<HTMLElement>(".sidebar-head")!);
