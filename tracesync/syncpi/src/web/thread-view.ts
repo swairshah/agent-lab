@@ -713,8 +713,9 @@ export class ThreadView {
 			node.open = true;
 		} else if (artifacts.length > 0) {
 			for (const artifact of artifacts) body.append(artifactCard(artifact, { size: "inline", onOpen: this.#options.onOpenArtifact, loadImage: this.#options.loadImage, onComment: this.#options.onComment }));
-			// Changes are what people come to see: shown open.
-			node.open = true;
+			// Edits are what people come to see: shown open. A written file (and its preview) is a click away, so a run
+			// that writes a few files doesn't fill the thread with them.
+			node.open = diff !== undefined;
 		} else if (item.name === "read" && item.status === "done") {
 			const path = String(item.args.path ?? "");
 			body.append(el("div", "tool-note", kindOfPath(path) === "image" ? "image" : `${item.output.split("\n").length} lines`));

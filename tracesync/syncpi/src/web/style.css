@@ -861,3 +861,11 @@ select:not([multiple]) { appearance: none; -webkit-appearance: none; padding-rig
 /* iOS zooms the page into a field whose text is under 16px when it's focused, and leaves it zoomed; every field is
    16px on a touch screen, whatever more specific rule it has (the composer's is 15px). */
 @media (pointer: coarse) { input, textarea, select { font-size: 16px !important; } }
+
+/* A phone: a person's name above what they wrote, so the message gets the screen's width. */
+@media (max-width: 700px) {
+  .msg.msg-user { grid-template-columns: minmax(0, 1fr) auto; row-gap: 2px; }
+  .msg-user > .msg-who { grid-column: 1; grid-row: 1; }
+  .msg-user > .msg-meta { grid-column: 2; grid-row: 1; }
+  .msg-user > .msg-content { grid-column: 1 / -1; grid-row: 2; }
+}

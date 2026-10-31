@@ -7,7 +7,7 @@
 // thread is contenteditable for the cursor only: every edit is refused, and controls (buttons, cards, code, diffs)
 // are islands the cursor steps over.
 import type { LineComment } from "../shared/protocol.ts";
-import { el } from "./dom.ts";
+import { el, TOUCH } from "./dom.ts";
 
 const ICON = '<svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
 
@@ -22,6 +22,12 @@ export class QuoteComments {
 		this.#thread = thread;
 		this.#send = send;
 		// Down past the end of the thread goes back to the composer, as the thread and composer read as one text.
+		// On a touch screen the thread is plain text: an editable thread would put a cursor (and the keyboard) wherever a
+		// finger lands. A long press still selects text, and a selection still offers Comment.
+		if (TOUCH) {
+			this.#touch(thread);
+			return;
+		}
 		thread.addEventListener("keydown", (event) => {
 			if (event.key !== "ArrowDown" || event.shiftKey || event.target !== thread) return;
 			const selection = getSelection();
@@ -73,6 +79,23 @@ export class QuoteComments {
 			},
 			true,
 		);
+	}
+
+	/** On a touch screen: the Comment pill for a selection made by a long press, once the finger is up. */
+	#touch(thread: HTMLElement): void {
+		let down = false;
+		let settle: number | undefined;
+		// The pill follows the selection once it has settled with the finger up. Not sooner: tapping the pill itself
+		// clears the selection, and the tap must still reach the pill.
+		const later = () => {
+			clearTimeout(settle);
+			settle = window.setTimeout(() => !down && !this.#shown?.classList.contains("quote-box") && this.#update(), 250);
+		};
+		thread.addEventListener("touchstart", () => (down = true), { passive: true });
+		for (const type of ["touchend", "touchcancel"]) thread.addEventListener(type, () => ((down = false), later()), { passive: true });
+		// Scrolling never shows the pill.
+		thread.addEventListener("touchmove", () => clearTimeout(settle), { passive: true });
+		document.addEventListener("selectionchange", () => !this.#shown?.classList.contains("quote-box") && later());
 	}
 
 	/** Moves the cursor to the end of the thread's text, as Up from the composer's first line does. */
@@ -206,6 +229,8 @@ export class QuoteComments {
 
 	/** Removes the pill or box; `clear` also drops the text selection. */
 	#close(clear: boolean): void {
+		// On a phone, the keyboard goes away with the comment box rather than staying up for the page.
+		if (TOUCH && document.activeElement instanceof HTMLElement && this.#shown?.contains(document.activeElement)) document.activeElement.blur();
 		this.#shown?.remove();
 		this.#shown = undefined;
 		this.#quote = undefined;

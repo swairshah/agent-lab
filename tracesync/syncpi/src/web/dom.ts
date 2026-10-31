@@ -36,6 +36,9 @@ export function initials(name: string): string {
 	return ((parts[0]?.[0] ?? "?") + (parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? "") : "")).toUpperCase();
 }
 
+/** A touch screen and nothing finer (a phone, a tablet without a trackpad): no keyboard cursor, no hover. */
+export const TOUCH = matchMedia("(pointer: coarse)").matches && !matchMedia("(any-pointer: fine)").matches;
+
 /** localStorage that never throws (private windows, blocked storage). */
 export const storage = {
 	get(key: string): string | undefined {

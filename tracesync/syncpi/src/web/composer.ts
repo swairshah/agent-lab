@@ -10,7 +10,7 @@ import { parseInvite } from "../shared/commands.ts";
 import { draftText, fromBase64, isCommand, toBase64, Y } from "../shared/drafts.ts";
 import { mentioned } from "../shared/mentions.ts";
 import { ATTACHMENT_LIMITS, type Attachment, IMAGE_TYPES, type Role, type Where } from "../shared/protocol.ts";
-import { $, escapeHtml, storage } from "./dom.ts";
+import { $, escapeHtml, storage, TOUCH } from "./dom.ts";
 import { TextBinding } from "./text-binding.ts";
 import type { SessionClient } from "./session.ts";
 import type { Section } from "./settings.ts";
@@ -126,7 +126,6 @@ async function toAttachment(file: File): Promise<Attachment | string> {
 }
 
 /** A touch screen without a fine pointer: a phone or tablet. */
-const TOUCH = matchMedia("(pointer: coarse)").matches && !matchMedia("(any-pointer: fine)").matches;
 
 export class Composer {
 	readonly #c: CommandContext;
@@ -192,6 +191,8 @@ export class Composer {
 			this.submit();
 		});
 		$("send").addEventListener("click", () => this.submit());
+		// Send keeps the cursor (and on a phone, the keyboard) in the composer for the next message, as chat apps do.
+		$("send").addEventListener("mousedown", (event) => event.preventDefault());
 		$("attach").addEventListener("click", () => $<HTMLInputElement>("file-input").click());
 		$<HTMLInputElement>("file-input").addEventListener("change", (event) => {
 			const picker = event.target as HTMLInputElement;

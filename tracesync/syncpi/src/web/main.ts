@@ -20,7 +20,7 @@ import { BASE, signIn, TOKEN_KEY } from "./auth.ts";
 import { embedded, onHostAction, toHost } from "./bridge.ts";
 import { Composer } from "./composer.ts";
 import { Dialogs } from "./dialogs.ts";
-import { $, escapeHtml, initials, personColor, storage } from "./dom.ts";
+import { $, escapeHtml, initials, personColor, storage, TOUCH } from "./dom.ts";
 import { modelVendor } from "./icons.ts";
 import { Palette } from "./palette.ts";
 import { QuoteComments } from "./quote-comments.ts";
@@ -458,7 +458,7 @@ async function main(): Promise<void> {
 	$("branch-chip").addEventListener("click", () => settings.open("branches"));
 	// Clicking empty space in the conversation puts the cursor in the composer.
 	$("scroller").addEventListener("click", (event) => {
-		if (event.target === event.currentTarget && window.getSelection()?.isCollapsed) composer.focus();
+		if (!TOUCH && event.target === event.currentTarget && window.getSelection()?.isCollapsed) composer.focus();
 	});
 	// Roles are checked when a command runs, not when it was listed: a role can change while the palette is open.
 	const admin = (run: () => void) => () => (session.role === "admin" ? run() : toast("Only admins can do that."));
@@ -628,7 +628,8 @@ async function main(): Promise<void> {
 
 	updateComposer();
 	session.connect();
-	composer.focus();
+	// Ready to type on a computer; on a phone that would bring the keyboard up over a thread you came to read.
+	if (!TOUCH) composer.focus();
 }
 
 void main();
