@@ -27,10 +27,26 @@ From that definition the agent gets (`src/agent.ts`):
 
 | Tool | What it does |
 |---|---|
+| `use_element` | Opens an element in this conversation: its tools below are offered from now on, and it returns what `_read` would. People's screens get a tab for it, without moving to it |
+| `show_element` | The same, and puts it in front of people: their side panel opens on it, at the item it names (`about`), with a reason they see |
 | `calendar_read` | The element now, as text, and its version |
 | `calendar_<action>` | One per action, taking the action's arguments and the `version` it last read. Refused if the element changed since, with what changed, so the agent never changes what it has not seen |
 | `calendar_history` | Every change: version, time, who, what |
 | `calendar_revert` | Puts an earlier version back, as a new version, with a reason |
+
+**Many elements, opened when relevant.** An element switched on is *available*: the prompt section lists it in a line
+with its `description`, and its own tools are deferred (pi-durable's `deferred`), so the model is not offered them. It
+is *open* in a conversation once the agent calls `use_element` or `show_element` (the tool loads them with
+`control.addTools`), or a person opens it on the screen (`openElement`, which writes the same `modelTools` in one
+commit). Open is per conversation and lasts, also after a compaction. So `description` says when to use the element:
+it is what the agent reads to decide to open it.
+
+**What is on the screen** is each person's: the lab's side panel has a tab per open element, folds away, and keeps the
+tab, the fold and the tabs closed in the browser. The agent asks for attention in two ways: a change to an element not
+in front of someone puts a dot on its tab (and on the fold button while folded); `show_element` opens the panel on
+it. Showing is for when the element is the subject of the conversation, not for every change. A component marks each
+item's row with `data-item` so the page can point to one, and gets the item as `focus` when it must first bring it
+into view (the calendar turns to its day).
 
 People change the element through its component (`view.tsx`), which calls the same actions. So there is one way to
 change an element, and every change, whoever makes it, goes through it.
@@ -44,7 +60,7 @@ can be read back.
 - **In code** (`src/testing.ts`): `testElement(def)` gives the element a temporary store. `act` and `revert` change it
   as a person would; `callTool` runs one of its tools as the agent would (a real pi-durable Harness, a scripted model);
   `sectionText` is what the agent is told about it at its next step. See `src/elements/*/…test.ts`.
-- **In a chat** (`npm run lab -- --ui <ids>`): the elements on the right, the conversation on the left, each element
+- **In a chat** (`npm run lab -- --ui <ids>`): the elements open on the right, the conversation on the left, each element
   with its history and Put back. With the test model, `tool calendar_read {}` makes it call a tool; with a real model
   it is a real session.
 
@@ -81,7 +97,8 @@ How this maps onto `long-horizon-agent`, when we do it:
 - **Agent**: `elementsAgent(...)` gives one pi-durable extension per element, installed and removed like the app's
   extensions; a workspace switches elements on in Settings, as plugins are now. `ExtensionDef` can carry elements, so
   a plugin brings its own.
-- **Screen**: the side panel's tabs (Calendar, the file's checklist) become element components; WebSocket frames
+- **Screen**: the side panel's tabs (Calendar, the file's checklist) become element components, opened as in the lab
+  (an element's tab when it is open in the file's conversation; `show_element` sets the app's `showPanel`); WebSocket frames
   replace the lab's server-sent events; `ui.op` entries get a line in the thread view.
 - **Calendar and checklist**: today they are the app's own tables (`events`, `cases.checklist`) changed by its own
   tools. Moving them onto elements gives them versions, history and revert. They need their wake-ups and expiry
@@ -89,6 +106,9 @@ How this maps onto `long-horizon-agent`, when we do it:
 - **Checks**: `ext:check` gains an element check (actions named, summaries written, a view, a test).
 
 Open questions:
+
+- **Closing**: an element stays open in a conversation once opened. A long conversation that touched many elements
+  offers all their tools; it may need to close those not used for a while (a `modelTools` remove).
 
 - **Snapshots**: every version keeps the whole state. Fine for a calendar; a large element needs snapshots every N
   versions with the actions replayed between.

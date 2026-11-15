@@ -1,6 +1,6 @@
 // The calendar on the screen, in the app's look: a compact month (a dot on days with entries), the selected day's
 // entries, and what is coming up. Adding, marking done and cancelling go through the element's actions.
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { TimeField } from "../../ui/pickers.tsx";
 import type { ElementViewProps } from "../../view.ts";
 import type { Calendar as State, CalendarEntry } from "./element.ts";
@@ -9,12 +9,17 @@ const iso = (d: Date) => d.toISOString().slice(0, 10);
 const dayLabel = (date: string, today: string) => `${new Date(`${date}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}${date === today ? " · Today" : ""}`;
 const when = (e: CalendarEntry) => `${new Date(`${e.date}T12:00:00Z`).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" })}${e.time ? ` · ${e.time}` : ""}`;
 
-export function CalendarView({ state, act }: ElementViewProps<State>) {
+export function CalendarView({ state, act, focus }: ElementViewProps<State>) {
 	const today = iso(new Date());
 	const [month, setMonth] = useState(() => today.slice(0, 7));
 	const [selected, setSelected] = useState(today);
 	const [title, setTitle] = useState("");
 	const [time, setTime] = useState("");
+	// An entry the agent pointed to: turn to its day, where the page finds its row.
+	useEffect(() => {
+		const date = state.entries.find((e) => e.id === focus?.item)?.date;
+		if (date) (setMonth(date.slice(0, 7)), setSelected(date));
+	}, [focus?.key]);
 	const live = state.entries.filter((e) => e.state !== "cancelled");
 	const on = (date: string) => live.filter((e) => e.date === date).sort((a, b) => (a.time ?? "").localeCompare(b.time ?? ""));
 	const [y, m] = month.split("-").map(Number) as [number, number];
@@ -29,7 +34,7 @@ export function CalendarView({ state, act }: ElementViewProps<State>) {
 		if (await act("add_event", { title, date: selected, ...(time ? { time } : {}) })) (setTitle(""), setTime(""));
 	};
 	const entry = (e: CalendarEntry, withDate: boolean) => (
-		<li class="event" key={e.id}>
+		<li class="event" key={e.id} data-item={e.id}>
 			<span class={`event-dot${e.state === "scheduled" ? " tone-scheduled" : ""}`} />
 			<div class="event-main">
 				<div class="event-title">{e.title}</div>

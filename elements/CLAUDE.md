@@ -9,7 +9,9 @@ the screen.
 - An element is defined once in `src/elements/<id>/element.ts`: its state, its named actions (pure functions from the
   state and arguments to the next state, each with a one-line summary), and a text view for the agent.
 - From that, the agent gets tools (`src/agent.ts`): `<id>_read`, one per action (each takes the `version` it last read
-  and is refused if the element changed since), `<id>_history`, `<id>_revert`. A prompt section tells it, at every
+  and is refused if the element changed since), `<id>_history`, `<id>_revert`. These are deferred: it gets them once
+  the element is open in its conversation, by `use_element`, `show_element` (also opens people's panel on it) or a
+  person opening it. Until then the prompt section lists it in a line with its `description`. That section tells it, at every
   step, what people changed since it last looked.
 - Every change, by a person or the agent, is a numbered version with who made it (`src/store.ts`). Nothing is
   overwritten; a revert is a new version.

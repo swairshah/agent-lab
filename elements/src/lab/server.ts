@@ -7,8 +7,14 @@
 //     the agent learns of it from the "what changed" section at its next step;
 //   - a person's change to an action marked `wakes` also messages the agent (a `ui.wake` input), so it acts on it now.
 //
+// Which elements are on the screen: those open in the conversation (their tools offered to the agent), by the agent's
+// use_element or show_element, or by a person opening one (POST …/open). show_element is a tool call, so the page
+// learns of it from the transcript and opens the panel on it. Which tab each person has in front of them, and whether
+// their panel is folded, is theirs (the page keeps it), not the conversation's.
+//
 // HTTP: GET / (the page), GET /api/state, GET /api/transcript, POST /api/message, POST /api/stop, GET /api/events (server-sent events),
-// GET /api/elements/:id/history, POST /api/elements/:id/act, POST /api/elements/:id/revert, POST /api/elements/:id/enable.
+// GET /api/elements/:id/history, POST /api/elements/:id/act, POST /api/elements/:id/revert, POST /api/elements/:id/enable,
+// POST /api/elements/:id/open.
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { join } from "node:path";
@@ -19,7 +25,7 @@ import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
 import { type Conversation, createRegistry, defineExtension, type Extension, Harness, section, watchEvents } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { elementsAgent, toolNames } from "../agent.ts";
+import { elementsAgent, openElement, toolNames } from "../agent.ts";
 import type { Actor, ElementDef } from "../element.ts";
 import { ElementStore, Refused } from "../store.ts";
 
@@ -81,7 +87,7 @@ export async function startLab(options: LabOptions) {
 		name: "lab",
 		sections: [
 			section("role", () =>
-				"You work with people on a shared screen. The elements on it (below) are theirs as much as yours: change one only when asked or when your task needs it, read it first, and say in a line what you changed. If a change is refused because the element changed, read it again and decide.",
+				"You work with people on a shared screen. The elements (below) are theirs as much as yours: change one only when asked or when your task needs it, read it first, and say in a line what you changed. If a change is refused because the element changed, read it again and decide. Show an element when it is what you are talking about with them; otherwise leave their screen as it is.",
 			),
 		],
 	});
@@ -159,13 +165,17 @@ export async function startLab(options: LabOptions) {
 	}
 
 	async function state() {
+		const offered = new Set((await root.agent(context)).tools.map((t) => t.name));
 		return {
 			busy,
 			model: faux ? "test model" : options.model,
 			elements: await Promise.all(
 				store.elements().map(async (def) => {
 					const { version, state } = await store.read(SCOPE, def.id);
-					return { id: def.id, title: def.title, description: def.description, on: on.has(def.id), version, state, view: def.view(state, { now: Date.now() }), tools: toolNames(def) };
+					// Who made the last change, so a person's screen marks only what someone else changed.
+					const last = (await store.history(SCOPE, def.id, { limit: 1 }))[0];
+					const changedBy = last === undefined ? undefined : last.actor.kind === "agent" ? "agent" : last.actor.name;
+					return { id: def.id, title: def.title, description: def.description, on: on.has(def.id), open: on.has(def.id) && offered.has(`${def.id}_read`), version, changedBy, state, view: def.view(state, { now: Date.now() }), tools: toolNames(def) };
 				}),
 			),
 		};
@@ -223,7 +233,7 @@ export async function startLab(options: LabOptions) {
 				await root.submit({ type: "input", content: `[${who.kind === "person" ? who.name : ""}] ${text}`, whenBusy: "followUp", entry: { kind: "lab.message", data: { name: who.kind === "person" ? who.name : "", text, at: Date.now() } as never } }, context);
 				return json(res, 200, { ok: true });
 			}
-			const match = /^\/api\/elements\/([a-z0-9_]+)\/(history|act|revert|enable)$/.exec(path);
+			const match = /^\/api\/elements\/([a-z0-9_]+)\/(history|act|revert|enable|open)$/.exec(path);
 			if (match) {
 				const [, id, what] = match as unknown as [string, string, string];
 				const def = store.def(id);
@@ -233,6 +243,13 @@ export async function startLab(options: LabOptions) {
 					if (b.on === true) on.add(def.id);
 					else on.delete(def.id);
 					sync();
+					tell("element", { element: def.id });
+					return json(res, 200, await state());
+				}
+				// A person opened it on the screen: the agent can work on what they are looking at.
+				if (what === "open") {
+					if (!on.has(def.id)) return json(res, 400, { error: `${def.title} is switched off. Switch it on first.` });
+					await openElement(root, [def]);
 					tell("element", { element: def.id });
 					return json(res, 200, await state());
 				}

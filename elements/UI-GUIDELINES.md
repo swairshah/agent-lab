@@ -140,6 +140,9 @@ lab's own classes start with `lab-`. A state goes in an attribute, not a bare cl
 
 ## Elements in particular
 
+- Each item's row carries `data-item` with the item's id, so the page can point to it when the agent shows it. If the
+  item may be out of view (another month, a folded group), the component brings it in when it gets `focus`.
+
 - A component changes its element only through `act`: the same actions the agent calls. It never changes its state
   directly, so every change is a version with who made it.
 - It shows the element's state, not the version or the history: the page around it (the lab, the app's panel) shows

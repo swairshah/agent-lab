@@ -17,7 +17,7 @@ export function ChecklistView({ state, act }: ElementViewProps<State>) {
 	const done = state.items.filter((i) => i.state === "done").length;
 
 	const row = (item: ChecklistItem) => (
-		<li class={`check-row${item.state === "done" ? " check-verified" : item.state === "blocked" ? " check-blocked" : ""}`} key={item.id}>
+		<li class={`check-row${item.state === "done" ? " check-verified" : item.state === "blocked" ? " check-blocked" : ""}`} key={item.id} data-item={item.id}>
 			<button type="button" class="check-mark" aria-label={item.state === "done" ? `Reopen ${item.title}` : `Mark ${item.title} done`} onClick={() => void act("set_item", { id: item.id, state: item.state === "done" ? "open" : "done" })}>
 				{item.state === "done" ? CHECK : item.state === "blocked" ? "!" : null}
 			</button>
