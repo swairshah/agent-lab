@@ -9,14 +9,13 @@
 //   - a component's classes are the base's or its own, and it sets no colors inline.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { appDir, chatCss } from "./sync.ts";
+import { appDir, SYNCED } from "./sync.ts";
 
 export type UiResult = { file: string; errors: string[]; warnings: string[] };
 
 const APP_DIR = appDir();
 const APP_STYLE = APP_DIR === undefined ? "long-horizon-agent/src/web/style.css" : `${APP_DIR}/src/web/style.css`;
 const BASE = "src/ui/base.css";
-const CHAT = "src/ui/chat.css";
 const MAX_MS = 300;
 
 /** The custom properties of each token block: light, dark by preference, dark by choice. */
@@ -101,7 +100,7 @@ export function checkUi(): UiResult[] {
 	const results: UiResult[] = [];
 	const baseCss = readFileSync(BASE, "utf8");
 	// The base's classes and the app's conversation's (chat.css) may be used anywhere.
-	const base = new Set([...classesIn(baseCss), ...classesIn(readFileSync(CHAT, "utf8"))]);
+	const base = new Set([...classesIn(baseCss), ...Object.keys(SYNCED).flatMap((file) => [...classesIn(readFileSync(file, "utf8"))])]);
 
 	// The tokens are the app's.
 	const tokens: UiResult = { file: BASE, errors: [], warnings: [] };
@@ -124,11 +123,13 @@ export function checkUi(): UiResult[] {
 	}
 	results.push(tokens);
 
-	// The conversation is the app's, as it is now.
-	const chat: UiResult = { file: CHAT, errors: [], warnings: [] };
-	if (APP_DIR === undefined) chat.warnings.push("The app was not found, so the conversation's styles could not be compared with its own.");
-	else if (readFileSync(CHAT, "utf8") !== chatCss(APP_DIR)) chat.errors.push("It is not the app's conversation as it is now: run npm run sync:ui.");
-	results.push(chat);
+	// The conversation and the pickers are the app's, as they are now.
+	for (const [file, make] of Object.entries(SYNCED)) {
+		const synced: UiResult = { file, errors: [], warnings: [] };
+		if (APP_DIR === undefined) synced.warnings.push("The app was not found, so these styles could not be compared with its own.");
+		else if (!existsSync(file) || readFileSync(file, "utf8") !== make(APP_DIR)) synced.errors.push("It is not the app's as it is now: run npm run sync:ui.");
+		results.push(synced);
+	}
 
 	for (const id of readdirSync("src/elements", { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name)) {
 		const dir = join("src/elements", id);

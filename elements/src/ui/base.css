@@ -146,3 +146,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .event-meta { font-size: 12px; color: var(--muted); }
 .event-actions { display: flex; flex-wrap: wrap; gap: 2px; margin: 4px 0 0 -8px; }
 .event-actions .text-button { font-size: 12.5px; color: var(--accent); }
+
+/* ---------- the time field's way back to no time (the field and wheels are the app's: pickers.css) ---------- */
+
+.picker-foot { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--rule); text-align: center; }

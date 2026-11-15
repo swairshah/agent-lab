@@ -104,6 +104,7 @@ Use the base's classes (`src/ui/base.css`, the app's own rules) before writing a
 | A checklist | `ul.checklist > li.check-row` with a `.check-mark` button, `.check-main`, `.check-title`, `.check-note`; the row's state as `.check-verified`, `.check-waiting` or `.check-blocked` |
 | A list of dated entries | `ul.event-list > li.event` with `.event-dot` (`.tone-scheduled` for one still to come), `.event-main`, `.event-title`, `.event-meta`, `.event-actions` |
 | A pill to pick | `.chip` |
+| A time of day | `TimeField` (`src/ui/pickers.tsx`, the app's): a field that opens hour, minute and AM/PM wheels. Never the browser's own `<input type="time">` or date picker |
 | A passing message | `.toast`; `data-tone="error"` when something was refused |
 | Quiet text | `.muted`, `.small` |
 
@@ -150,7 +151,7 @@ lab's own classes start with `lab-`. A state goes in an attribute, not a bare cl
 `npm run check:ui` (and `npm test`) fails when:
 
 - a token in `src/ui/base.css` differs from the app's, or one is missing or extra;
-- `src/ui/chat.css` is not the app's conversation as it is now (run `npm run sync:ui`);
+- `src/ui/chat.css` or `src/ui/pickers.css` is not the app's as it is now (run `npm run sync:ui`);
 - an element's `view.css` or the lab's `lab.css` writes a color (hex, rgb, hsl, …) or names a font;
 - a transition or animation takes over 300ms, or eases in;
 - a stylesheet defines a class without its prefix (`el-<id>-`, `lab-`) that is not one of the base's;

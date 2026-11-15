@@ -31,6 +31,21 @@ function rules(css: string, starts: string[]): string {
 		.join("\n");
 }
 
+/** The app's date and time fields (ui/pickers.tsx): the field, its popover and the time wheels. */
+export function pickersCss(dir: string): string {
+	const app = readFileSync(`${dir}/src/web/app.css`, "utf8");
+	return [
+		"/* The app's date and time fields (long-horizon-agent/src/web/app.css), written by `npm run sync:ui`.",
+		" * Do not edit: change the app, then sync. `npm run check:ui` fails when this differs from the app's. */",
+		"",
+		rules(app, [".picker", "@keyframes picker-in", ".wheels", ".wheel"]).replace(/^\.picker-pop \.calendar-.*\n?/gm, ""),
+		"",
+	].join("\n");
+}
+
+/** Every file of the app's styles the lab takes, and how each is made. */
+export const SYNCED: Record<string, (dir: string) => string> = { "src/ui/chat.css": (dir) => chatCss(dir), "src/ui/pickers.css": (dir) => pickersCss(dir) };
+
 export function chatCss(dir: string): string {
 	const style = readFileSync(`${dir}/src/web/style.css`, "utf8");
 	const app = readFileSync(`${dir}/src/web/app.css`, "utf8");

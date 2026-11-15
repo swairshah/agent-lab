@@ -19,3 +19,5 @@
 .el-calendar-empty { padding: 6px 8px; }
 .el-calendar-add { display: flex; gap: 6px; margin-top: 8px; }
 .el-calendar-add input:first-child { flex: 1; }
+/* The time field sits at the right of the row: its popover opens leftward, inside the panel. */
+.el-calendar-add .picker-pop { left: auto; right: 0; }

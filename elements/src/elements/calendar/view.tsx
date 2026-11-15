@@ -1,6 +1,7 @@
 // The calendar on the screen, in the app's look: a compact month (a dot on days with entries), the selected day's
 // entries, and what is coming up. Adding, marking done and cancelling go through the element's actions.
 import { useState } from "preact/hooks";
+import { TimeField } from "../../ui/pickers.tsx";
 import type { ElementViewProps } from "../../view.ts";
 import type { Calendar as State, CalendarEntry } from "./element.ts";
 
@@ -97,7 +98,7 @@ export function CalendarView({ state, act }: ElementViewProps<State>) {
 			<ul class="event-list">{on(selected).length > 0 ? on(selected).map((e) => entry(e, false)) : <li class="muted small el-calendar-empty">Nothing on this day.</li>}</ul>
 			<form class="el-calendar-add" onSubmit={add}>
 				<input value={title} placeholder="Add a reminder on this day…" aria-label="What is due" onInput={(e) => setTitle((e.target as HTMLInputElement).value)} />
-				<input type="time" value={time} aria-label="Time" onInput={(e) => setTime((e.target as HTMLInputElement).value)} />
+				<TimeField value={time} onChange={setTime} optional />
 				<button type="submit" class="button">
 					Add
 				</button>
