@@ -1,11 +1,12 @@
-// The calendar on the screen: a month, the selected day's entries, and what is coming up. Adding, marking done and
-// cancelling go through the element's actions.
+// The calendar on the screen, in the app's look: a compact month (a dot on days with entries), the selected day's
+// entries, and what is coming up. Adding, marking done and cancelling go through the element's actions.
 import { useState } from "preact/hooks";
 import type { ElementViewProps } from "../../view.ts";
 import type { Calendar as State, CalendarEntry } from "./element.ts";
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
-const label = (date: string) => new Date(`${date}T12:00:00Z`).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+const dayLabel = (date: string, today: string) => `${new Date(`${date}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}${date === today ? " · Today" : ""}`;
+const when = (e: CalendarEntry) => `${new Date(`${e.date}T12:00:00Z`).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" })}${e.time ? ` · ${e.time}` : ""}`;
 
 export function CalendarView({ state, act }: ElementViewProps<State>) {
 	const today = iso(new Date());
@@ -26,49 +27,81 @@ export function CalendarView({ state, act }: ElementViewProps<State>) {
 		if (title.trim() === "") return;
 		if (await act("add_event", { title, date: selected, ...(time ? { time } : {}) })) (setTitle(""), setTime(""));
 	};
-	const row = (e: CalendarEntry) => (
-		<li class={`cal-entry ${e.state}`} key={e.id}>
-			<span class="cal-dot" />
-			<span class="cal-text">
-				<span class="cal-title">{e.title}</span>
-				<span class="cal-meta">{[e.id, e.time, e.state === "done" ? "done" : "", e.note].filter(Boolean).join(" · ")}</span>
-			</span>
-			{e.state === "scheduled" ? (
-				<span class="cal-actions">
-					<button type="button" class="link" onClick={() => void act("complete_event", { id: e.id })}>Done</button>
-					<button type="button" class="link danger" onClick={() => void act("cancel_event", { id: e.id })}>Cancel</button>
-				</span>
-			) : null}
+	const entry = (e: CalendarEntry, withDate: boolean) => (
+		<li class="event" key={e.id}>
+			<span class={`event-dot${e.state === "scheduled" ? " tone-scheduled" : ""}`} />
+			<div class="event-main">
+				<div class="event-title">{e.title}</div>
+				<div class="event-meta">{[withDate ? when(e) : e.time, e.state === "done" ? "Done" : "", e.note].filter(Boolean).join(" · ") || "Scheduled"}</div>
+				{e.state === "scheduled" && !withDate ? (
+					<div class="event-actions">
+						<button type="button" class="text-button" onClick={() => void act("complete_event", { id: e.id })}>Mark done</button>
+						<button type="button" class="text-button" onClick={() => void act("cancel_event", { id: e.id })}>Cancel it</button>
+					</div>
+				) : null}
+			</div>
 		</li>
 	);
 
 	return (
-		<div class="cal">
-			<div class="cal-head">
-				<b>{first.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" })}</b>
-				<span class="spacer" />
-				<button type="button" class="link" onClick={() => shift(-1)} aria-label="Earlier month">‹</button>
-				<button type="button" class="link" onClick={() => (setMonth(today.slice(0, 7)), setSelected(today))}>Today</button>
-				<button type="button" class="link" onClick={() => shift(1)} aria-label="Later month">›</button>
+		<div class="el-calendar">
+			<div class="el-calendar-top">
+				<div class="el-calendar-month">
+					<div class="el-calendar-head">
+						<span class="el-calendar-name">{first.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" })}</span>
+						<span class="spacer" />
+						<button type="button" class="icon-button small" aria-label="Earlier month" onClick={() => shift(-1)}>
+							<svg viewBox="0 0 20 20">
+								<path d="m12 5-5 5 5 5" />
+							</svg>
+						</button>
+						<button type="button" class="el-calendar-today" onClick={() => (setMonth(today.slice(0, 7)), setSelected(today))}>
+							Today
+						</button>
+						<button type="button" class="icon-button small" aria-label="Later month" onClick={() => shift(1)}>
+							<svg viewBox="0 0 20 20">
+								<path d="m8 5 5 5-5 5" />
+							</svg>
+						</button>
+					</div>
+					<div class="el-calendar-grid" role="grid">
+						{["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
+							<span class="el-calendar-weekday" key={i}>
+								{d}
+							</span>
+						))}
+						{days.map((d) => (
+							<button
+								type="button"
+								key={d}
+								role="gridcell"
+								aria-selected={d === selected}
+								aria-label={`${d}, ${on(d).length} entries`}
+								class="el-calendar-day"
+								data-outside={d.slice(0, 7) !== month || undefined}
+								data-today={d === today || undefined}
+								data-entries={on(d).length > 0 || undefined}
+								onClick={() => setSelected(d)}
+							>
+								{Number(d.slice(8))}
+							</button>
+						))}
+					</div>
+				</div>
+				<div class="el-calendar-upcoming">
+					<p class="section-label">Coming up</p>
+					<ul class="event-list">{upcoming.length > 0 ? upcoming.map((e) => entry(e, true)) : <li class="muted small el-calendar-empty">Nothing scheduled.</li>}</ul>
+				</div>
 			</div>
-			<div class="cal-grid">
-				{["S", "M", "T", "W", "T", "F", "S"].map((d, i) => <span class="cal-wd" key={i}>{d}</span>)}
-				{days.map((d) => (
-					<button type="button" key={d} class={`cal-day${d.slice(0, 7) !== month ? " out" : ""}${d === today ? " today" : ""}${d === selected ? " sel" : ""}`} onClick={() => setSelected(d)}>
-						{Number(d.slice(8))}
-						{on(d).length > 0 ? <i /> : null}
-					</button>
-				))}
-			</div>
-			<p class="label">{label(selected)}</p>
-			<ul class="cal-list">{on(selected).length > 0 ? on(selected).map(row) : <li class="muted">Nothing on this day.</li>}</ul>
-			<form class="inline-form" onSubmit={add}>
-				<input value={title} placeholder="Add on this day…" onInput={(e) => setTitle((e.target as HTMLInputElement).value)} />
-				<input type="time" value={time} onInput={(e) => setTime((e.target as HTMLInputElement).value)} />
-				<button type="submit" class="button">Add</button>
+			<p class="section-label el-calendar-day-label">{dayLabel(selected, today)}</p>
+			<ul class="event-list">{on(selected).length > 0 ? on(selected).map((e) => entry(e, false)) : <li class="muted small el-calendar-empty">Nothing on this day.</li>}</ul>
+			<form class="el-calendar-add" onSubmit={add}>
+				<input value={title} placeholder="Add a reminder on this day…" aria-label="What is due" onInput={(e) => setTitle((e.target as HTMLInputElement).value)} />
+				<input type="time" value={time} aria-label="Time" onInput={(e) => setTime((e.target as HTMLInputElement).value)} />
+				<button type="submit" class="button">
+					Add
+				</button>
 			</form>
-			<p class="label">Coming up</p>
-			<ul class="cal-list">{upcoming.length > 0 ? upcoming.map((e) => <li class="cal-entry" key={e.id}><span class="cal-dot" /><span class="cal-text"><span class="cal-title">{e.title}</span><span class="cal-meta">{label(e.date)}{e.time ? ` · ${e.time}` : ""}</span></span></li>) : <li class="muted">Nothing scheduled.</li>}</ul>
 		</div>
 	);
 }

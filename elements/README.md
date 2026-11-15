@@ -6,7 +6,8 @@ change, with every change a version anyone can read, attribute and revert.
 
 ```bash
 npm install
-npm test                                   # each element alone: its actions, its tools, its history
+npm test                                   # each element alone (its actions, tools, history), and the look check
+npm run check:ui                           # the elements and the lab keep the app's look (UI-GUIDELINES.md)
 npm run lab -- --ui calendar,checklist     # a local chat with only those elements (the test model)
 npm run lab -- --ui calendar --model anthropic/claude-sonnet-5.5    # a real model (OPENROUTER_API_KEY in .env)
 ```
@@ -62,9 +63,12 @@ The element's history points back into the transcript: an agent's change carries
 
 1. `src/elements/<id>/element.ts`: `defineElement({ id, title, description, initial, view, actions })`. Write each
    action's `apply` as a pure function that throws, in plain words, when the change cannot be made.
-2. `view.tsx`: a component taking `{ state, version, act }` (`src/view.ts`) that changes the element only through `act`.
+2. `view.tsx`: a component taking `{ state, version, act }` (`src/view.ts`) that changes the element only through `act`,
+   built from the base's classes, and `view.css` for its own layout only, with classes starting `el-<id>-`. Follow
+   [UI-GUIDELINES.md](UI-GUIDELINES.md): it is the app's look, written down.
 3. A test with `testElement`.
 4. List it in `src/elements/index.ts` and `src/lab/web/views.ts`, then try it: `npm run lab -- --ui <id>`.
+5. `npm run check:ui` (also in `npm test`): its look keeps the app's.
 
 ## Going into the app
 

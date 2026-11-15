@@ -72,17 +72,19 @@ function Lab() {
 
 	return (
 		<div class="lab">
-			<header class="bar">
+			<header class="lab-bar">
 				<b>Element lab</b>
 				<span class="muted">{model}</span>
 				<span class="spacer" />
 				{elements.map((e) => (
-					<label class="chip" key={e.id} title={e.description}>
-						<input type="checkbox" checked={e.on} onChange={() => void api("POST", `/api/elements/${e.id}/enable`, { on: !e.on }).then(loadState)} />
+					<span class="lab-toggle" key={e.id} title={e.description}>
+						<button type="button" class="switch" role="switch" aria-checked={e.on} aria-label={`${e.on ? "Turn off" : "Turn on"} ${e.title}`} onClick={() => void api("POST", `/api/elements/${e.id}/enable`, { on: !e.on }).then(loadState)}>
+							<span class="switch-knob" />
+						</button>
 						{e.title}
-					</label>
+					</span>
 				))}
-				<label class="you">
+				<label class="lab-you">
 					You are
 					<input
 						value={name}
@@ -98,27 +100,31 @@ function Lab() {
 					/>
 				</label>
 			</header>
-			<main class="body">
+			<main class="lab-body">
 				<Chat items={items} busy={busy} name={name} elements={elements} flash={flash} faux={model === "test model"} onError={say} />
-				<aside class="panels">
-					{on.length === 0 ? <p class="muted pad">No element is on. Switch one on above.</p> : null}
+				<aside class="lab-panels">
+					{on.length === 0 ? <p class="muted lab-pad">No element is on. Switch one on above.</p> : null}
 					{on.map((e) => {
 						const View = VIEWS[e.id];
 						return (
-							<section class="panel" key={e.id}>
-								<div class="panel-head">
+							<section class="lab-panel" key={e.id}>
+								<div class="lab-panel-head">
 									<b>{e.title}</b>
-									<span class="version">v{e.version}</span>
+									<span class="lab-version">v{e.version}</span>
 									<span class="spacer" />
 									<History element={e} name={name} refresh={versions} onRevert={say} onShow={showInChat} />
 								</div>
-								{View ? <View state={e.state as never} version={e.version} act={act(e)} /> : <pre class="pad">{e.view}</pre>}
+								{View ? <View state={e.state as never} version={e.version} act={act(e)} /> : <pre class="lab-pad">{e.view}</pre>}
 							</section>
 						);
 					})}
 				</aside>
 			</main>
-			{toast ? <div class="toast" role="status">{toast}</div> : null}
+			{toast ? (
+				<div class="toast" data-tone="error" role="status">
+					{toast}
+				</div>
+			) : null}
 		</div>
 	);
 }
@@ -143,12 +149,12 @@ function History(props: { element: ElementInfo; name: string; refresh: number; o
 				{open ? "Hide history" : "History"}
 			</button>
 			{open ? (
-				<ol class="history">
+				<ol class="lab-history">
 					{ops.length === 0 ? <li class="muted">No changes yet.</li> : null}
 					{ops.map((op, i) => (
-						<li key={op.version} class={op.action === "revert" ? "revert" : ""}>
+						<li key={op.version} class={op.action === "revert" ? "lab-history-revert" : ""}>
 							<span class="version">v{op.version}</span>
-							<span class="h-text">
+							<span class="lab-history-text">
 								<span>{op.summary}</span>
 								<span class="muted">
 									{op.actor.kind === "agent" ? "the agent" : op.actor.name} · {time(op.at)}
@@ -169,7 +175,7 @@ function History(props: { element: ElementInfo; name: string; refresh: number; o
 					{ops.length > 0 ? (
 						<li>
 							<span class="version">v0</span>
-							<span class="h-text muted">Empty</span>
+							<span class="lab-history-text muted">Empty</span>
 							<button type="button" class="link" onClick={() => void putBack(0)}>Put back</button>
 						</li>
 					) : null}
@@ -197,33 +203,33 @@ function Chat(props: { items: Item[]; busy: boolean; name: string; elements: Ele
 	};
 
 	return (
-		<section class="chat">
-			<div class="thread" ref={box}>
-				{props.items.length === 0 ? <p class="muted pad">Ask the agent to do something with the elements on the right, or change them yourself and ask it what changed.</p> : null}
+		<section class="lab-chat">
+			<div class="lab-thread" ref={box}>
+				{props.items.length === 0 ? <p class="muted lab-pad">Ask the agent to do something with the elements on the right, or change them yourself and ask it what changed.</p> : null}
 				{props.items.map((item) => {
 					switch (item.type) {
 						case "person":
 							return (
-								<div class="msg person" key={`p${item.id}`}>
+								<div class="lab-msg lab-person" key={`p${item.id}`}>
 									<b>{item.name}</b>
 									<span>{item.text}</span>
 								</div>
 							);
 						case "agent":
 							return (
-								<div class="msg agent" key={`a${item.id}`}>
+								<div class="lab-msg lab-agent" key={`a${item.id}`}>
 									{item.text}
 								</div>
 							);
 						case "op":
 							return (
-								<div class="op" key={`o${item.id}`}>
-									<b>{item.name}</b> changed {item.title}: {item.summary} <span class="version">v{item.version}</span>
+								<div class="lab-op" key={`o${item.id}`}>
+									<b>{item.name}</b> changed {item.title}: {item.summary} <span class="lab-version">v{item.version}</span>
 								</div>
 							);
 						case "wake":
 							return (
-								<div class="op wake" key={`w${item.id}`}>
+								<div class="lab-op lab-wake" key={`w${item.id}`}>
 									The agent was told: {item.text}
 								</div>
 							);
@@ -241,11 +247,11 @@ function Chat(props: { items: Item[]; busy: boolean; name: string; elements: Ele
 											? `Looked at ${element?.title}'s history`
 											: `${element?.title ?? item.name}: ${String(details.summary ?? item.result.text.slice(0, 120))}`;
 							return (
-								<details class={`tool${item.result?.isError ? " error" : ""}${props.flash === item.id ? " flash" : ""}`} id={`tool-${item.id}`} key={item.id}>
+								<details class={`lab-tool${item.result?.isError ? " lab-error" : ""}${props.flash === item.id ? " lab-flash" : ""}`} id={`tool-${item.id}`} key={item.id}>
 									<summary>
-										<span class="tool-mark">{item.result?.isError ? "✕" : action === "read" || action === "history" ? "○" : "●"}</span>
+										<span class="lab-tool-mark">{item.result?.isError ? "✕" : action === "read" || action === "history" ? "○" : "●"}</span>
 										{line}
-										{details.version !== undefined && !item.result?.isError && action !== "read" && action !== "history" ? <span class="version">v{String(details.version)}</span> : null}
+										{details.version !== undefined && !item.result?.isError && action !== "read" && action !== "history" ? <span class="lab-version">v{String(details.version)}</span> : null}
 									</summary>
 									<pre>{`${item.name} ${JSON.stringify(item.args)}\n\n${item.result?.text ?? ""}`}</pre>
 								</details>
@@ -253,10 +259,10 @@ function Chat(props: { items: Item[]; busy: boolean; name: string; elements: Ele
 						}
 					}
 				})}
-				{props.busy ? <div class="muted working">Working…</div> : null}
+				{props.busy ? <div class="muted lab-working">Working…</div> : null}
 			</div>
 			<form
-				class="composer"
+				class="lab-composer"
 				onSubmit={(event) => {
 					event.preventDefault();
 					void send();

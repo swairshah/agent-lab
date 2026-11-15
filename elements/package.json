@@ -11,7 +11,8 @@
     "build": "node build.mjs",
     "lab": "node build.mjs && node --env-file-if-exists=.env scripts/lab.ts",
     "test": "node --test 'src/**/*.test.ts'",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check:ui": "node scripts/check-ui.ts"
   },
   "dependencies": {
     "@earendil-works/chord": "1.4.0",
