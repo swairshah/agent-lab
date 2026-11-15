@@ -1,13 +1,14 @@
 # Agent elements
 
-UI elements that people and the agent share, worked out apart from the app (`../long-horizon-agent`) before they go
+UI elements that people and the agent share, worked out apart from the app (`~/work/buisn/long-horizon-agent`) before they go
 into it. An element is something on the screen, such as a calendar or a checklist, that both people and the agent
 change, with every change a version anyone can read, attribute and revert.
 
 ```bash
 npm install
 npm test                                   # each element alone (its actions, tools, history), and the look check
-npm run check:ui                           # the elements and the lab keep the app's look (UI-GUIDELINES.md)
+npm run check:ui                           # the elements and the lab keep the app's look (UI-GUIDELINES.md); finds the
+                                           # app at ~/work/buisn/long-horizon-agent, or set LONG_HORIZON_AGENT
 npm run lab -- --ui calendar,checklist     # a local chat with only those elements (the test model)
 npm run lab -- --ui calendar --model anthropic/claude-sonnet-5.5    # a real model (OPENROUTER_API_KEY in .env)
 ```

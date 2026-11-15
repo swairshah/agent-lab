@@ -1,6 +1,6 @@
 # UI guidelines
 
-An element is built here and then goes into the app (`../long-horizon-agent`). It has to look and read as if it had
+An element is built here and then goes into the app (`~/work/buisn/long-horizon-agent`). It has to look and read as if it had
 always been there. These are the app's rules, written down. `npm run check:ui` checks the ones a program can check (and
 `npm test` runs it); the rest are checked by reading the screen against this page.
 

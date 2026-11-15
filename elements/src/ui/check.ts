@@ -11,7 +11,11 @@ import { join } from "node:path";
 
 export type UiResult = { file: string; errors: string[]; warnings: string[] };
 
-const APP_STYLE = "../long-horizon-agent/src/web/style.css";
+/** The app's stylesheet: LONG_HORIZON_AGENT names the app's folder; otherwise it is looked for where it usually is. */
+const APP_STYLE = [process.env.LONG_HORIZON_AGENT, "../../../buisn/long-horizon-agent", "../long-horizon-agent"]
+	.filter((dir): dir is string => dir !== undefined && dir !== "")
+	.map((dir) => `${dir.replace(/\/+$/, "")}/src/web/style.css`)
+	.find((file) => existsSync(file)) ?? "long-horizon-agent/src/web/style.css";
 const BASE = "src/ui/base.css";
 const MAX_MS = 300;
 
@@ -100,7 +104,7 @@ export function checkUi(): UiResult[] {
 
 	// The tokens are the app's.
 	const tokens: UiResult = { file: BASE, errors: [], warnings: [] };
-	if (!existsSync(APP_STYLE)) tokens.warnings.push(`The app is not at ${APP_STYLE}, so the tokens could not be compared with it.`);
+	if (!existsSync(APP_STYLE)) tokens.warnings.push("The app (long-horizon-agent) was not found, so the tokens could not be compared with its own. Set LONG_HORIZON_AGENT to its folder.");
 	else {
 		const app = tokenBlocks(readFileSync(APP_STYLE, "utf8"));
 		const ours = tokenBlocks(baseCss);
