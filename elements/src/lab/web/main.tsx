@@ -396,11 +396,6 @@ function Chat(props: { items: Item[]; busy: boolean; name: string; model: string
 						Stop
 					</button>
 				) : null}
-				<span class="spacer" />
-				<span class="status-item" id="model-chip" title={props.model}>
-					{/claude|anthropic/i.test(props.model) ? <span dangerouslySetInnerHTML={{ __html: ANTHROPIC }} /> : null}
-					{props.model}
-				</span>
 			</footer>
 		</main>
 	);
