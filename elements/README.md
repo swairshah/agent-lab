@@ -9,6 +9,7 @@ npm install
 npm test                                   # each element alone (its actions, tools, history), and the look check
 npm run check:ui                           # the elements and the lab keep the app's look (UI-GUIDELINES.md); finds the
                                            # app at ~/work/buisn/long-horizon-agent, or set LONG_HORIZON_AGENT
+npm run sync:ui                            # takes the app's conversation styles again, after the app changes
 npm run lab -- --ui calendar,checklist     # a local chat with only those elements (the test model)
 npm run lab -- --ui calendar --model anthropic/claude-sonnet-5.5    # a real model (OPENROUTER_API_KEY in .env)
 ```

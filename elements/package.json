@@ -12,18 +12,21 @@
     "lab": "node build.mjs && node --env-file-if-exists=.env scripts/lab.ts",
     "test": "node --test 'src/**/*.test.ts'",
     "typecheck": "tsc --noEmit",
-    "check:ui": "node scripts/check-ui.ts"
+    "check:ui": "node scripts/check-ui.ts",
+    "sync:ui": "node scripts/sync-ui.ts"
   },
   "dependencies": {
     "@earendil-works/chord": "1.4.0",
     "@earendil-works/pi-ai": "1.4.0",
     "@earendil-works/pi-durable": "1.4.0",
     "preact": "^10.26.0",
-    "typebox": "1.3.27"
+    "typebox": "1.3.27",
+    "marked": "^15.0.12"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "esbuild": "^0.28.2",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "@lobehub/icons-static-svg": "^1.101.0"
   }
 }

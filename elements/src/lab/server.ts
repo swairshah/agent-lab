@@ -7,7 +7,7 @@
 //     the agent learns of it from the "what changed" section at its next step;
 //   - a person's change to an action marked `wakes` also messages the agent (a `ui.wake` input), so it acts on it now.
 //
-// HTTP: GET / (the page), GET /api/state, GET /api/transcript, POST /api/message, GET /api/events (server-sent events),
+// HTTP: GET / (the page), GET /api/state, GET /api/transcript, POST /api/message, POST /api/stop, GET /api/events (server-sent events),
 // GET /api/elements/:id/history, POST /api/elements/:id/act, POST /api/elements/:id/revert, POST /api/elements/:id/enable.
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -211,6 +211,10 @@ export async function startLab(options: LabOptions) {
 			}
 			if (req.method === "GET" && path === "/api/state") return json(res, 200, await state());
 			if (req.method === "GET" && path === "/api/transcript") return json(res, 200, { items: await transcript(), busy });
+			if (req.method === "POST" && path === "/api/stop") {
+				await root.abort(context);
+				return json(res, 200, { ok: true });
+			}
 			if (req.method === "POST" && path === "/api/message") {
 				const b = await body(req);
 				const text = String(b.text ?? "").trim();

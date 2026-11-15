@@ -1,8 +1,12 @@
 // The lab's page: the conversation on the left, the elements that are on at the right, each with its history. Open it
 // in two windows with two names to see two people and the agent change the same element.
-import { render } from "preact";
+import anthropicMark from "@lobehub/icons-static-svg/icons/anthropic.svg";
+import { type JSX, render } from "preact";
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
+import { initials, personColor, renderMarkdown } from "./markdown.ts";
 import { VIEWS } from "./views.ts";
+
+const ANTHROPIC = anthropicMark as string;
 
 type Actor = { kind: "agent"; ref?: string } | { kind: "person"; id: string; name: string };
 type Op = { version: number; action: string; args: unknown; actor: Actor; summary: string; at: number };
@@ -101,7 +105,7 @@ function Lab() {
 				</label>
 			</header>
 			<main class="lab-body">
-				<Chat items={items} busy={busy} name={name} elements={elements} flash={flash} faux={model === "test model"} onError={say} />
+				<Chat items={items} busy={busy} name={name} model={model} elements={elements} flash={flash} faux={model === "test model"} onError={say} />
 				<aside class="lab-panels">
 					{on.length === 0 ? <p class="muted lab-pad">No element is on. Switch one on above.</p> : null}
 					{on.map((e) => {
@@ -185,13 +189,72 @@ function History(props: { element: ElementInfo; name: string; refresh: number; o
 	);
 }
 
-function Chat(props: { items: Item[]; busy: boolean; name: string; elements: ElementInfo[]; flash?: string; faux: boolean; onError: (text: string) => void }) {
+/** The agent's mark beside its rows, as the app shows it (chat/icons.ts). */
+function ModelAvatar(props: { model: string }) {
+	const anthropic = /claude|anthropic/i.test(props.model);
+	return anthropic ? <span class="avatar model-avatar" title={props.model} dangerouslySetInnerHTML={{ __html: ANTHROPIC }} /> : <span class="avatar model-avatar" title={props.model}>{(props.model.split("/").pop()?.[0] ?? "?").toUpperCase()}</span>;
+}
+
+function Avatar(props: { name: string }) {
+	return (
+		<span class="avatar" style={{ "--person": personColor(props.name) } as JSX.CSSProperties} title={props.name}>
+			{initials(props.name)}
+		</span>
+	);
+}
+
+type ToolItem = Extract<Item, { type: "tool" }>;
+
+/** A tool call in the app's words: what it did to which element, and the line under it. */
+function toolLine(tool: ToolItem, elements: ElementInfo[]): { verb: string; arg: string; status: "done" | "error" | "running" } {
+	const element = elements.find((e) => tool.name.startsWith(`${e.id}_`));
+	const action = element ? tool.name.slice(element.id.length + 1) : tool.name;
+	const what = element ? `the ${element.title.toLowerCase()}` : tool.name.replace(/_/g, " ");
+	const details = tool.result?.details ?? {};
+	const status = tool.result === undefined ? "running" : tool.result.isError ? "error" : "done";
+	const verb = action === "read" ? `Read ${what}` : action === "history" ? `Looked at the history of ${what}` : action === "revert" ? `Put back an earlier ${what}` : `Changed ${what}`;
+	const arg = status === "error" ? tool.result!.text.replace(/^Not (changed|reverted)\. /, "").split(". ")[0]! : action === "read" ? `version ${String(details.version ?? "")}` : String(details.summary ?? "");
+	return { verb: status === "error" ? `Did not work: ${verb.charAt(0).toLowerCase()}${verb.slice(1)}` : verb, arg, status };
+}
+
+function ToolRow(props: { tool: ToolItem; elements: ElementInfo[]; flash: boolean }) {
+	const { verb, arg, status } = toolLine(props.tool, props.elements);
+	return (
+		<details class={`fold tool tool-${status}${props.flash ? " lab-flash" : ""}`} id={`tool-${props.tool.id}`}>
+			<summary>
+				<span class="tool-verb">{verb}</span>
+				<span class="tool-arg">{arg}</span>
+			</summary>
+			<div class="tool-body">
+				<pre class="tool-output">{props.tool.result?.text ?? "…"}</pre>
+			</div>
+		</details>
+	);
+}
+
+/** Calls made one after another, with nothing said between them: one short row, as the app groups them ("Read the
+ *  file 3 times"). Which element each touched is in the row; each call is a click away. */
+function groupSummary(tools: ToolItem[], elements: ElementInfo[]): { verb: string; arg: string } {
+	const touched = [...new Set(tools.map((t) => elements.find((e) => t.name.startsWith(`${e.id}_`))?.title.toLowerCase()).filter(Boolean))];
+	const changed = tools.filter((t) => !/_(read|history)$/.test(t.name)).length;
+	const failed = tools.filter((t) => t.result?.isError).length;
+	const verb = changed === 0 ? `Read ${touched.length === 1 ? `the ${touched[0]}` : `${touched.length} elements`}` : `Made ${changed} ${changed === 1 ? "change" : "changes"}`;
+	return { verb, arg: [`${tools.length} steps on the ${touched.join(" and the ")}`, failed > 0 ? `${failed} did not work` : ""].filter(Boolean).join(" · ") };
+}
+
+function Chat(props: { items: Item[]; busy: boolean; name: string; model: string; elements: ElementInfo[]; flash?: string; faux: boolean; onError: (text: string) => void }) {
 	const [text, setText] = useState("");
-	const box = useRef<HTMLDivElement>(null);
+	const scroller = useRef<HTMLDivElement>(null);
+	const area = useRef<HTMLTextAreaElement>(null);
 	useLayoutEffect(() => {
-		box.current?.scrollTo({ top: box.current.scrollHeight });
+		scroller.current?.scrollTo({ top: scroller.current.scrollHeight });
 	}, [props.items.length, props.busy]);
-	const titleOf = (tool: string) => props.elements.find((e) => tool.startsWith(`${e.id}_`));
+	// The box grows with what is written in it, as the app's does.
+	useLayoutEffect(() => {
+		if (area.current === null) return;
+		area.current.style.height = "auto";
+		area.current.style.height = `${area.current.scrollHeight}px`;
+	}, [text]);
 	const send = async () => {
 		if (text.trim() === "") return;
 		try {
@@ -202,87 +265,144 @@ function Chat(props: { items: Item[]; busy: boolean; name: string; elements: Ele
 		}
 	};
 
+	// Consecutive tool calls make one row.
+	const rows: (Item | { type: "group"; tools: ToolItem[] })[] = [];
+	for (const item of props.items) {
+		const last = rows.at(-1);
+		if (item.type === "tool" && last !== undefined && (last.type === "tool" || last.type === "group")) {
+			if (last.type === "group") last.tools.push(item);
+			else rows[rows.length - 1] = { type: "group", tools: [last, item] };
+		} else rows.push(item);
+	}
+
 	return (
-		<section class="lab-chat">
-			<div class="lab-thread" ref={box}>
-				{props.items.length === 0 ? <p class="muted lab-pad">Ask the agent to do something with the elements on the right, or change them yourself and ask it what changed.</p> : null}
-				{props.items.map((item) => {
-					switch (item.type) {
-						case "person":
-							return (
-								<div class="lab-msg lab-person" key={`p${item.id}`}>
-									<b>{item.name}</b>
-									<span>{item.text}</span>
-								</div>
-							);
-						case "agent":
-							return (
-								<div class="lab-msg lab-agent" key={`a${item.id}`}>
-									{item.text}
-								</div>
-							);
-						case "op":
-							return (
-								<div class="lab-op" key={`o${item.id}`}>
-									<b>{item.name}</b> changed {item.title}: {item.summary} <span class="lab-version">v{item.version}</span>
-								</div>
-							);
-						case "wake":
-							return (
-								<div class="lab-op lab-wake" key={`w${item.id}`}>
-									The agent was told: {item.text}
-								</div>
-							);
-						case "tool": {
-							const element = titleOf(item.name);
-							const action = element ? item.name.slice(element.id.length + 1) : item.name;
-							const details = item.result?.details ?? {};
-							const line = !item.result
-								? `${element?.title ?? ""} ${action}…`
-								: item.result.isError
-									? `${element?.title ?? item.name}: ${item.result.text.split(". ").slice(0, 2).join(". ")}`
-									: action === "read"
-										? `Read ${element?.title} (v${String(details.version)})`
-										: action === "history"
-											? `Looked at ${element?.title}'s history`
-											: `${element?.title ?? item.name}: ${String(details.summary ?? item.result.text.slice(0, 120))}`;
-							return (
-								<details class={`lab-tool${item.result?.isError ? " lab-error" : ""}${props.flash === item.id ? " lab-flash" : ""}`} id={`tool-${item.id}`} key={item.id}>
-									<summary>
-										<span class="lab-tool-mark">{item.result?.isError ? "✕" : action === "read" || action === "history" ? "○" : "●"}</span>
-										{line}
-										{details.version !== undefined && !item.result?.isError && action !== "read" && action !== "history" ? <span class="lab-version">v{String(details.version)}</span> : null}
-									</summary>
-									<pre>{`${item.name} ${JSON.stringify(item.args)}\n\n${item.result?.text ?? ""}`}</pre>
-								</details>
-							);
+		<main class="center">
+			<div class="scroller" ref={scroller}>
+				<div class="thread">
+					{props.items.length === 0 ? <p class="notice">Ask the agent to do something with the elements at the right, or change them yourself and ask it what changed.</p> : null}
+					{rows.map((row, i) => {
+						switch (row.type) {
+							case "person":
+								return (
+									<article class="msg msg-user" key={`p${row.id}`} style={{ "--person": personColor(row.name) } as JSX.CSSProperties}>
+										<span class="msg-who">
+											<span class="author">{row.name}</span>
+										</span>
+										<div class="msg-content">
+											<div class="msg-body prose" dangerouslySetInnerHTML={{ __html: renderMarkdown(row.text, { breaks: true }) }} />
+										</div>
+										<div class="msg-meta" />
+									</article>
+								);
+							case "agent":
+								return (
+									<article class="msg msg-agent" key={`a${row.id}`}>
+										<ModelAvatar model={props.model} />
+										<div class="msg-content">
+											<div class="msg-body prose" dangerouslySetInnerHTML={{ __html: renderMarkdown(row.text) }} />
+										</div>
+									</article>
+								);
+							case "op":
+								return (
+									<p class="notice" key={`o${row.id}`}>
+										{row.name} changed the {row.title.toLowerCase()}: {row.summary}
+									</p>
+								);
+							case "wake":
+								return (
+									<div class="wake" key={`w${row.id}`}>
+										<svg viewBox="0 0 20 20" aria-hidden="true">
+											<circle cx="10" cy="10" r="7" />
+											<path d="M10 6.5V10l2.5 1.5" />
+										</svg>
+										<div>
+											<span class="wake-kind">On the screen</span>
+											<span class="wake-text">{row.text}</span>
+										</div>
+									</div>
+								);
+							case "tool":
+								return (
+									<article class="msg msg-agent" key={row.id}>
+										<ModelAvatar model={props.model} />
+										<div class="msg-content">
+											<ToolRow tool={row} elements={props.elements} flash={props.flash === row.id} />
+										</div>
+									</article>
+								);
+							case "group":
+								return (
+									<article class="msg msg-agent" key={`g${i}-${row.tools[0]!.id}`}>
+										<ModelAvatar model={props.model} />
+										<div class="msg-content">
+											<details class="fold tool" open={row.tools.some((t) => t.id === props.flash)}>
+												<summary>
+													<span class="tool-verb">{groupSummary(row.tools, props.elements).verb}</span>
+													<span class="tool-arg">{groupSummary(row.tools, props.elements).arg}</span>
+												</summary>
+												<div class="tool-body">
+													{row.tools.map((t) => (
+														<ToolRow key={t.id} tool={t} elements={props.elements} flash={props.flash === t.id} />
+													))}
+												</div>
+											</details>
+										</div>
+									</article>
+								);
 						}
-					}
-				})}
-				{props.busy ? <div class="muted lab-working">Working…</div> : null}
-			</div>
-			<form
-				class="lab-composer"
-				onSubmit={(event) => {
-					event.preventDefault();
-					void send();
-				}}
-			>
-				<textarea
-					rows={2}
-					value={text}
-					placeholder={props.faux ? 'Write to the agent. The test model calls a tool when you write: tool calendar_read {}' : "Write to the agent…"}
-					onInput={(event) => setText((event.target as HTMLTextAreaElement).value)}
-					onKeyDown={(event) => {
-						if (event.key === "Enter" && !event.shiftKey) {
-							event.preventDefault();
-							void send();
-						}
+					})}
+				</div>
+				<form
+					class="msg composer"
+					onSubmit={(event) => {
+						event.preventDefault();
+						void send();
 					}}
-				/>
-				<button type="submit" class="button primary">Send</button>
-			</form>
-		</section>
+				>
+					<Avatar name={props.name} />
+					<div class="composer-main">
+						<div class="composer-row">
+							<textarea
+								ref={area}
+								rows={1}
+								value={text}
+								aria-label="Message"
+								placeholder={props.busy ? "Tell the agent something while it works…" : props.faux ? "Write to the agent… (the test model calls a tool for: tool calendar_read {})" : "Write to the agent…"}
+								onInput={(event) => setText((event.target as HTMLTextAreaElement).value)}
+								onKeyDown={(event) => {
+									if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+										event.preventDefault();
+										void send();
+									}
+								}}
+							/>
+							<button type="submit" class="icon-button small send" title="Send (Enter)" aria-label="Send (Enter)" disabled={text.trim() === ""}>
+								<svg viewBox="0 0 20 20">
+									<path d="M10 15.5v-11M5.5 9 10 4.5 14.5 9" />
+								</svg>
+							</button>
+						</div>
+					</div>
+				</form>
+			</div>
+			<footer class="statusbar">
+				<span class="status-item activity" data-busy={props.busy}>
+					<span class="spinner" />
+					{props.busy ? "Working" : ""}
+				</span>
+				{props.busy ? (
+					<button type="button" class="status-button status-item" title="Stop the agent" onClick={() => void api("POST", "/api/stop").catch((e: Error) => props.onError(e.message))}>
+						Stop
+					</button>
+				) : null}
+				<span class="spacer" />
+				<span class="status-item" id="model-chip" title={props.model}>
+					{/claude|anthropic/i.test(props.model) ? <span dangerouslySetInnerHTML={{ __html: ANTHROPIC }} /> : null}
+					{props.model}
+				</span>
+			</footer>
+		</main>
 	);
 }
 

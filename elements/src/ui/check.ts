@@ -1,6 +1,7 @@
 // Whether the elements and the lab keep the app's look (UI-GUIDELINES.md): `npm run check:ui`, and `npm test` runs it.
 //
-//   - the tokens in src/ui/base.css are the app's, value for value (long-horizon-agent/src/web/style.css);
+//   - the tokens in src/ui/base.css are the app's, value for value (long-horizon-agent/src/web/style.css), and
+//     src/ui/chat.css is the app's conversation as it is now (npm run sync:ui writes it);
 //   - an element's view.css and the lab's lab.css use the tokens: no colors of their own, no fonts of their own;
 //   - motion is short and eases out: transitions and animations at most 300ms, never ease-in;
 //   - each stylesheet's own classes are its own: el-<id>- in an element, lab- in the lab, so nothing collides when an
@@ -8,15 +9,14 @@
 //   - a component's classes are the base's or its own, and it sets no colors inline.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { appDir, chatCss } from "./sync.ts";
 
 export type UiResult = { file: string; errors: string[]; warnings: string[] };
 
-/** The app's stylesheet: LONG_HORIZON_AGENT names the app's folder; otherwise it is looked for where it usually is. */
-const APP_STYLE = [process.env.LONG_HORIZON_AGENT, "../../../buisn/long-horizon-agent", "../long-horizon-agent"]
-	.filter((dir): dir is string => dir !== undefined && dir !== "")
-	.map((dir) => `${dir.replace(/\/+$/, "")}/src/web/style.css`)
-	.find((file) => existsSync(file)) ?? "long-horizon-agent/src/web/style.css";
+const APP_DIR = appDir();
+const APP_STYLE = APP_DIR === undefined ? "long-horizon-agent/src/web/style.css" : `${APP_DIR}/src/web/style.css`;
 const BASE = "src/ui/base.css";
+const CHAT = "src/ui/chat.css";
 const MAX_MS = 300;
 
 /** The custom properties of each token block: light, dark by preference, dark by choice. */
@@ -100,7 +100,8 @@ function checkView(file: string, prefix: string, base: Set<string>, own: Set<str
 export function checkUi(): UiResult[] {
 	const results: UiResult[] = [];
 	const baseCss = readFileSync(BASE, "utf8");
-	const base = classesIn(baseCss);
+	// The base's classes and the app's conversation's (chat.css) may be used anywhere.
+	const base = new Set([...classesIn(baseCss), ...classesIn(readFileSync(CHAT, "utf8"))]);
 
 	// The tokens are the app's.
 	const tokens: UiResult = { file: BASE, errors: [], warnings: [] };
@@ -122,6 +123,12 @@ export function checkUi(): UiResult[] {
 		}
 	}
 	results.push(tokens);
+
+	// The conversation is the app's, as it is now.
+	const chat: UiResult = { file: CHAT, errors: [], warnings: [] };
+	if (APP_DIR === undefined) chat.warnings.push("The app was not found, so the conversation's styles could not be compared with its own.");
+	else if (readFileSync(CHAT, "utf8") !== chatCss(APP_DIR)) chat.errors.push("It is not the app's conversation as it is now: run npm run sync:ui.");
+	results.push(chat);
 
 	for (const id of readdirSync("src/elements", { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name)) {
 		const dir = join("src/elements", id);

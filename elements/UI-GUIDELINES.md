@@ -70,6 +70,25 @@ Weights are 400, 500 and 600. Nothing is bold for emphasis in a row; the title i
 - **No stat strips.** No row of big numbers with small labels under them. Say a count in a sentence ("3 of 16 done") or
   show it as a mark per item.
 
+## The conversation
+
+The conversation is the app's, not one made to look like it. `src/ui/chat.css` is the app's own thread, message box
+and status bar rules, written by `npm run sync:ui` from the app's stylesheets (do not edit it; change the app and sync).
+The lab draws it with the app's markup:
+
+| Row | Markup |
+|---|---|
+| A person's message | `article.msg.msg-user` with `--person` (their color), `.msg-who > .author`, `.msg-content > .msg-body.prose` (markdown) |
+| The agent's reply | `article.msg.msg-agent` with the model's mark (`.avatar.model-avatar`) and `.msg-body.prose` |
+| A tool call | in an agent row, `details.fold.tool.tool-<done|error|running>` with `.tool-verb` (what it did, in words) and `.tool-arg` (on what); the raw result folded in `.tool-body > pre.tool-output` |
+| Calls one after another | one row: a short verb ("Made 2 changes") and what they touched ("5 steps on the calendar and the checklist") |
+| A person's change on the screen | `.notice`, the app's centred line: "Ada changed the calendar: …" |
+| What woke the agent | `.wake` with `.wake-kind` and `.wake-text` |
+| The message box | the next row of the thread: `form.msg.composer` with the person's avatar, a growing `textarea` and a send icon button |
+| Under it | `footer.statusbar`: Working with a spinner and Stop while the agent works, the model at the right |
+
+A tool call is said in words ("Changed the calendar", "Read the checklist"), never as its tool name.
+
 ## Building blocks
 
 Use the base's classes (`src/ui/base.css`, the app's own rules) before writing anything:
@@ -131,6 +150,7 @@ lab's own classes start with `lab-`. A state goes in an attribute, not a bare cl
 `npm run check:ui` (and `npm test`) fails when:
 
 - a token in `src/ui/base.css` differs from the app's, or one is missing or extra;
+- `src/ui/chat.css` is not the app's conversation as it is now (run `npm run sync:ui`);
 - an element's `view.css` or the lab's `lab.css` writes a color (hex, rgb, hsl, …) or names a font;
 - a transition or animation takes over 300ms, or eases in;
 - a stylesheet defines a class without its prefix (`el-<id>-`, `lab-`) that is not one of the base's;
