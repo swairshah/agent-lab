@@ -377,6 +377,13 @@ function Chat(props: { items: Item[]; busy: boolean; name: string; model: string
 									}
 								}}
 							/>
+							{props.busy ? (
+								<button type="button" class="icon-button small" title="Stop the agent" aria-label="Stop the agent" onClick={() => void api("POST", "/api/stop").catch((e: Error) => props.onError(e.message))}>
+									<svg viewBox="0 0 20 20">
+										<rect x="6" y="6" width="8" height="8" rx="1.5" />
+									</svg>
+								</button>
+							) : null}
 							<button type="submit" class="icon-button small send" title="Send (Enter)" aria-label="Send (Enter)" disabled={text.trim() === ""}>
 								<svg viewBox="0 0 20 20">
 									<path d="M10 15.5v-11M5.5 9 10 4.5 14.5 9" />
@@ -386,17 +393,6 @@ function Chat(props: { items: Item[]; busy: boolean; name: string; model: string
 					</div>
 				</form>
 			</div>
-			<footer class="statusbar">
-				<span class="status-item activity" data-busy={props.busy}>
-					<span class="spinner" />
-					{props.busy ? "Working" : ""}
-				</span>
-				{props.busy ? (
-					<button type="button" class="status-button status-item" title="Stop the agent" onClick={() => void api("POST", "/api/stop").catch((e: Error) => props.onError(e.message))}>
-						Stop
-					</button>
-				) : null}
-			</footer>
 		</main>
 	);
 }
