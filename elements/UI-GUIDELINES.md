@@ -85,7 +85,7 @@ The lab draws it with the app's markup:
 | A person's change on the screen | `.notice`, the app's centred line: "Ada changed the calendar: …" |
 | What woke the agent | `.wake` with `.wake-kind` and `.wake-text` |
 | The message box | the next row of the thread: `form.msg.composer` with the person's avatar, a growing `textarea` and a send icon button |
-| Under it | `footer.statusbar`: Working with a spinner and Stop while the agent works, the model at the right |
+| While the agent works | a Stop icon button beside Send in the message box; no status bar under it |
 
 A tool call is said in words ("Changed the calendar", "Read the checklist"), never as its tool name.
 
