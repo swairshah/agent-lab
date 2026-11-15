@@ -1,5 +1,8 @@
 /* The lab's own layout: the conversation at the left, the elements at the right. The look is the base's (the app's). */
-.lab { display: flex; flex-direction: column; height: 100%; }
+/* The page itself never scrolls: the window holds the lab, and only the conversation and the elements' column scroll
+   inside it (as in the app, whose #app is the same). */
+#app { height: 100%; overflow: clip; }
+.lab { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 .lab-bar { display: flex; align-items: center; gap: 14px; height: 44px; padding: 0 10px 0 16px; border-bottom: 1px solid var(--rule); flex: none; font-size: 13px; }
 .lab-bar b { font-weight: 600; font-size: 14px; }
 .lab-toggle { display: inline-flex; align-items: center; gap: 7px; color: var(--ink-2); }
