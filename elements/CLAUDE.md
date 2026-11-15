@@ -53,7 +53,7 @@ The screen must look like the app's. `UI-GUIDELINES.md` is the full rule; in sho
   `npm run sync:ui` (chat) or copy the tokens again; `npm run check:ui` fails until they match.
 - The conversation uses the app's markup (rows, folded tool calls in words, the composer as the next row, the status
   bar). Say a tool call in words, never its tool name.
-- Motion at most 300ms, easing out. The office's words: file, practitioner, facility. No ids or technical words on the
+- Motion at most 300ms, easing out. The people's own words for their work. No ids or technical words on the
   screen. No stat strips.
 
 The look check finds the app at `~/work/buisn/long-horizon-agent`, or at `LONG_HORIZON_AGENT`.

@@ -1,4 +1,4 @@
-// A calendar: things due on a day (a renewal, a follow-up, a call), each scheduled, done or cancelled. People add and
+// A calendar: things due on a day (a meeting, a deadline, a call), each scheduled, done or cancelled. People add and
 // cancel entries on the screen; the agent schedules what it is waiting on and marks what happened.
 import { Type } from "@earendil-works/pi-ai";
 import { action, defineElement } from "../../element.ts";
@@ -26,7 +26,7 @@ const change = (state: Calendar, id: string, patch: Partial<CalendarEntry>): Cal
 export const calendar = defineElement<Calendar>({
 	id: "calendar",
 	title: "Calendar",
-	description: "What is due on which day: renewals, follow-ups, calls, reminders. The people see it as a month.",
+	description: "What is due on which day: meetings, deadlines, calls, reminders. The people see it as a month.",
 	initial: () => ({ entries: [], next: 1 }),
 	view: (state, ctx) => {
 		const today = new Date(ctx.now).toISOString().slice(0, 10);
@@ -40,7 +40,7 @@ export const calendar = defineElement<Calendar>({
 	},
 	actions: {
 		add_event: action<Calendar, { title: string; date: string; time?: string; note?: string }>({
-			description: "Put something on a day: a renewal, a follow-up, a reminder.",
+			description: "Put something on a day: a meeting, a deadline, a reminder.",
 			args: Type.Object({
 				title: Type.String({ description: "What is due, as a person reads it on the calendar." }),
 				date: Type.String({ description: "YYYY-MM-DD." }),

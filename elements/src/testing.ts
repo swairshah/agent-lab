@@ -4,7 +4,7 @@
 //   sectionText           the line the agent reads about it at its next step
 //
 //   const t = await testElement(calendar);
-//   await t.act("add_event", { title: "DEA renewal", date: "2027-03-01" });
+//   await t.act("add_event", { title: "Team offsite", date: "2027-03-01" });
 //   const result = await t.callTool("calendar_read", {});
 //   await t.dispose();
 import { mkdtempSync, rmSync } from "node:fs";

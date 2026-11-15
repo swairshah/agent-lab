@@ -21,7 +21,7 @@ export type ActionDef<S, A = Record<string, unknown>> = {
 	/** Its arguments. The agent's tool takes these, plus the version it last read. */
 	args: TSchema;
 	apply(state: S, args: A, ctx: ActionContext): S;
-	/** One line for the history and the conversation: "Added DEA renewal on Mar 1, 2027". */
+	/** One line for the history and the conversation: "Added Team offsite on Mar 1, 2027". */
 	summary(args: A, before: S, after: S): string;
 	/** A person doing this wakes the agent (a reminder added, a question asked), instead of telling it at its next turn. */
 	wakes?: boolean;

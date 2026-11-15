@@ -6,8 +6,8 @@ always been there. These are the app's rules, written down. `npm run check:ui` c
 
 ## Who reads the screen
 
-People in a credentialing office, working on many files at once. They are not technical. They use the office's own
-words, and they come back to the same screens all day, so the screen is quiet and the important thing is plain.
+People who are not technical, working on many things at once and coming back to the same screens all day. So the
+screen is quiet, and the important thing is plain. They use their own words for their work, not the software's.
 
 ## The look
 
@@ -29,7 +29,7 @@ figures. It has a light and a dark version, picked by the person's system or by 
 | `--faint` | Weekday letters, days outside the month, disabled |
 | `--rule` | Every line between things |
 | `--rule-strong` | Input and button borders, an empty mark |
-| `--accent` | The primary action, links, "today", what waits on the office |
+| `--accent` | The primary action, links, "today", what waits on the people looking at it |
 | `--accent-soft` | A highlight: the moment a link led to, an agent wake-up |
 | `--ok` | Done, verified, settled |
 | `--warn` | Waiting on someone outside; a revert |
@@ -37,7 +37,7 @@ figures. It has a light and a dark version, picked by the person's system or by 
 | `--focus` | The focus ring |
 | `--shadow` | Only for what floats: popovers, toasts, dialogs |
 
-Colors carry the same meaning everywhere: green is settled, blue is on the office or the action to take, amber is
+Colors carry the same meaning everywhere: green is settled, blue is on you or the action to take, amber is
 waiting on someone outside, red is blocked or destructive. Do not use them for decoration.
 
 ## Type
@@ -122,7 +122,7 @@ lab's own classes start with `lab-`. A state goes in an attribute, not a bare cl
 
 ## Words
 
-- **The office's words**: file (not case), practitioner, facility, primary source verification, governing body.
+- **The people's words**: what they call their work, never the software's names for it (no "entity", "record", "op").
 - **Plain sentences.** "Nothing on this day." "What blocks it?" Never a technical word on the screen: no ids, no
   JSON, no "null", no "API", no field names. An element's ids (`e1`, `i2`) are for the agent, not for people.
 - **Buttons say what happens**: "Mark done", "Cancel it", "Put back", "Remove". Not "OK", not "Submit".

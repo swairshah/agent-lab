@@ -106,7 +106,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 input:not([type=checkbox]):not([type=file]), select, textarea { border: 1px solid var(--rule-strong); background: var(--raised); border-radius: 6px; padding: 6px 9px; min-width: 0; }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus); }
 .eyebrow { margin: 0; font: 500 11px/1 var(--mono); text-transform: uppercase; letter-spacing: .12em; color: var(--accent); }
-/* A section's label: the app's small mono capitals ("NEEDS YOUR OFFICE", "DOCUMENTS"). */
+/* A section's label: the app's small mono capitals ("COMING UP", "1 OF 2 DONE"). */
 .section-label { margin: 0; font: 500 10.5px/1.4 var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 .form-field { margin-bottom: 14px; min-width: 0; }
 .form-field label { display: block; margin: 0 0 5px; font: 500 10.5px/1 var(--mono); text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
