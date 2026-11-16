@@ -10,8 +10,10 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
+#[cfg(target_os = "macos")]
+use tauri::TitleBarStyle;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{AppHandle, Manager, RunEvent, TitleBarStyle, WebviewUrl, WebviewWindowBuilder, Wry};
+use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, Wry};
 
 /// The host process, stopped when the app quits.
 struct Host(Mutex<Option<Child>>);
@@ -34,8 +36,15 @@ fn runtime() -> (PathBuf, PathBuf) {
 /// Starts the host and waits for its launch link (`SYNCPI_APP http://127.0.0.1:<port>/?key=<secret>`).
 fn start_host() -> Result<(Child, String), String> {
     let (node, dir) = runtime();
+    let host = dir.join("desktop-host.mjs");
+    if !host.exists() {
+        return Err(format!(
+            "The SyncPi desktop runtime is missing ({}). Run `npm run desktop` from the repository root so the web and host bundles are built first.",
+            host.display()
+        ));
+    }
     let mut child = Command::new(&node)
-        .arg(dir.join("desktop-host.mjs"))
+        .arg(&host)
         .current_dir(&dir)
         .env("SYNCPI_APP_PARENT", std::process::id().to_string())
         .stdout(Stdio::piped())
@@ -274,12 +283,16 @@ fn main() {
         })
         .setup(move |app| {
             let opener = app.handle().clone();
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url.clone()))
+            let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url.clone()))
                 .title("SyncPi")
                 .inner_size(1380., 900.)
-                .min_inner_size(720., 480.)
+                .min_inner_size(720., 480.);
+            // These builder methods only exist when Tauri is compiled for macOS.
+            #[cfg(target_os = "macos")]
+            let window = window
                 .title_bar_style(TitleBarStyle::Overlay)
-                .hidden_title(true)
+                .hidden_title(true);
+            window
                 // Links out of the app open in the browser; the window stays on the app.
                 .on_navigation(move |to| {
                     if to.origin() == origin {
