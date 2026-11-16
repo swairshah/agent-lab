@@ -1,0 +1,65 @@
+/* The lab's own layout: the conversation at the left, the side panel of elements at the right. The look is the base's
+   (the app's); the panel's head and tabs are the app's side panel (.panel-head, .panel-tab), under the lab's names. */
+/* The page itself never scrolls: the window holds the lab, and only the conversation and the elements' column scroll
+   inside it (as in the app, whose #app is the same). */
+#app { height: 100%; overflow: clip; }
+.lab { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+.lab-bar { display: flex; align-items: center; gap: 14px; height: 44px; padding: 0 10px 0 16px; border-bottom: 1px solid var(--rule); flex: none; font-size: 13px; }
+.lab-bar b { font-weight: 600; font-size: 14px; }
+.lab-toggle { display: inline-flex; align-items: center; gap: 7px; color: var(--ink-2); }
+.lab-you { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
+.lab-you input { width: 110px; padding: 4px 8px; }
+.lab-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) min(46vw, 560px); }
+/* Folded: the conversation takes the window. No motion: people fold and unfold it many times a day. */
+.lab-body[data-panel="closed"] { grid-template-columns: minmax(0, 1fr); }
+.lab-pad { padding: 16px; }
+.lab-version { font: 11px var(--mono); color: var(--muted); }
+
+/* The conversation is the app's (src/ui/chat.css): here it only fills its column. */
+.lab-body > .center { min-height: 0; }
+.lab-flash { background: var(--accent-soft); border-radius: 6px; }
+
+/* The fold button, with a dot while folded when a tab changed. */
+.lab-fold { position: relative; }
+.lab-fold .lab-dot { position: absolute; top: 5px; right: 5px; }
+.lab-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--accent); flex: none; }
+
+.lab-side { border-left: 1px solid var(--rule); background: var(--surface); display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
+.lab-side-head { display: flex; align-items: stretch; gap: 2px; height: 37px; padding-right: 6px; border-bottom: 1px solid var(--rule); background: var(--paper); flex: none; }
+.lab-side-head .icon-button { align-self: center; }
+.lab-tabs { flex: 1; min-width: 0; display: flex; overflow-x: auto; scrollbar-width: none; }
+.lab-tabs::-webkit-scrollbar { display: none; }
+.lab-tab { display: flex; align-items: center; gap: 6px; padding: 0 6px 0 14px; border-right: 1px solid var(--rule); color: var(--muted); font-size: 13px; white-space: nowrap; cursor: pointer; user-select: none; margin-bottom: -1px; border-bottom: 1px solid transparent; }
+.lab-tab:hover { color: var(--ink); }
+.lab-tab[aria-selected="true"] { color: var(--ink); background: var(--surface); border-bottom-color: var(--surface); }
+.lab-tab:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.lab-tab-close { display: grid; place-items: center; width: 20px; height: 20px; border: none; border-radius: 4px; background: none; color: var(--muted); cursor: pointer; padding: 0; opacity: 0; }
+.lab-tab-close svg { width: 12px; height: 12px; }
+.lab-tab:hover .lab-tab-close, .lab-tab[aria-selected="true"] .lab-tab-close, .lab-tab-close:focus-visible { opacity: 1; }
+.lab-tab-close:hover { background: var(--sunken); color: var(--ink); }
+@media (hover: none) { .lab-tab-close { opacity: 1; } }
+.lab-side-body { flex: 1; min-height: 0; overflow-y: auto; }
+.lab-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.lab-empty p { margin: 0; }
+
+/* Open an element: what is on and not open here, each with what it is for. */
+.lab-launcher { position: absolute; top: 40px; right: 8px; z-index: 5; width: 300px; max-width: calc(100% - 16px); padding: 4px; background: var(--raised); border: 1px solid var(--rule); border-radius: 10px; box-shadow: var(--shadow); animation: lab-pop 140ms ease-out; }
+.lab-launcher-item { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; padding: 8px 10px; border: none; border-radius: 6px; background: none; color: var(--ink); text-align: left; cursor: pointer; font-size: 13.5px; }
+.lab-launcher-item:hover, .lab-launcher-item:focus-visible { background: var(--sunken); }
+.lab-launcher-empty { margin: 0; padding: 8px 10px; }
+@keyframes lab-pop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+
+.lab-panel { padding: 12px 16px 18px; }
+.lab-panel-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+.lab-panel-head b { font-weight: 600; }
+.lab-history { flex-basis: 100%; list-style: none; margin: 8px 0 4px; padding: 4px 10px; border: 1px solid var(--rule); border-radius: 10px; background: var(--raised); max-height: 260px; overflow-y: auto; }
+.lab-history li { display: flex; align-items: baseline; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--rule); font-size: 12.5px; }
+.lab-history li:last-child { border-bottom: none; }
+.lab-history-revert .lab-history-text > span:first-child { color: var(--warn); }
+.lab-history-text { flex: 1; display: flex; flex-direction: column; }
+
+@media (max-width: 760px) {
+  .lab-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+  .lab-body[data-panel="closed"] { grid-template-rows: minmax(0, 1fr); }
+  .lab-side { border-left: none; border-top: 1px solid var(--rule); }
+}

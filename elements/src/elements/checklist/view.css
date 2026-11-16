@@ -1,0 +1,7 @@
+/* The checklist's own layout. Its rows and marks are the base's (the app's checklist). */
+.el-checklist-count { margin: 4px 0 8px; }
+.el-checklist-actions { display: flex; gap: 10px; flex: none; opacity: 0; transition: opacity .12s ease-out; }
+.check-row:hover .el-checklist-actions, .check-row:focus-within .el-checklist-actions { opacity: 1; }
+.el-checklist-inline { display: flex; gap: 6px; margin-top: 8px; }
+.el-checklist-inline input:first-child { flex: 1; }
+@media (hover: none) { .el-checklist-actions { opacity: 1; } }

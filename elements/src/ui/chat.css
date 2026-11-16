@@ -1,0 +1,238 @@
+/* The app's conversation (long-horizon-agent/src/web/style.css and app.css), written by `npm run sync:ui`.
+ * Do not edit: change the app, then sync. `npm run check:ui` fails when this differs from the app's. */
+
+/* ---------- the thread ---------- */
+
+.center { position: relative; min-width: 0; display: flex; flex-direction: column; }
+.setup-banner { display: flex; justify-content: center; gap: 14px; padding: 7px; font-size: 12.5px; color: var(--ink-2); background: var(--sunken); border-bottom: 1px solid var(--rule); }
+.scroller { flex: 1; overflow-y: auto; padding: 28px 28px 40vh; position: relative; }
+/* The thread takes a text cursor (quote-comments.ts), but isn't an editor. */
+.thread { outline: none; caret-color: var(--accent); cursor: text; }
+.thread [contenteditable="false"] { cursor: auto; }
+.thread button, .thread summary, .thread .file-link { cursor: pointer; }
+.thread > *, .composer { max-width: var(--measure); margin-left: auto; margin-right: auto; }
+
+/* Every row: an avatar column and the content, as in a conversation. */
+.msg { display: grid; grid-template-columns: 30px minmax(0, 1fr); column-gap: 14px; margin-top: 22px; }
+.msg > .avatar { margin-top: 1px; }
+/* Under a person's avatar: where their message ran (a globe for the session VM, a computer for their machine). */
+/* A person's message is one line, as in Delta: their name where a photo would be, then what they wrote; a status and
+   the actions at the end. */
+.msg.msg-user { grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 12px; align-items: baseline; }
+.msg-who { display: inline-flex; align-items: center; gap: 5px; min-width: max-content; font-size: 13.5px; font-weight: 600; line-height: 1.6; white-space: nowrap; color: var(--person, var(--ink-2)); }
+.msg-user > .msg-content { grid-column: 2; }
+.msg-user > .msg-meta { grid-column: 3; margin: 0; }
+.msg-user > .msg-meta:empty { display: none; }
+.msg-where { color: var(--muted); opacity: .75; line-height: 0; }
+.msg-where svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.msg-content { min-width: 0; }
+.msg-meta { display: flex; align-items: baseline; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+.msg-meta .author { font-weight: 600; color: var(--person, var(--ink-2)); }
+.msg-user .msg-body { font-size: 15px; line-height: 1.6; overflow-wrap: anywhere; }
+.msg-user.pending { opacity: .55; }
+.msg-user.typing .msg-meta > span:not(.author) { color: var(--faint); }
+.draft-body { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
+.draft-body:empty { display: none; }
+.msg-user.typing .msg-action { opacity: 1; }
+.msg-action { margin-left: auto; border: none; background: none; color: var(--muted); font-size: 12px; cursor: pointer; opacity: 0; transition: opacity .12s; }
+.msg:hover .msg-action, .msg-action:focus-visible { opacity: 1; }
+.msg-action:hover { color: var(--accent); }
+.msg-error { color: var(--removed); font-size: 13px; margin-top: 6px; }
+.avatar.model-avatar { background: var(--raised); color: var(--ink); border: 1px solid var(--rule); font-family: var(--mono); }
+.avatar.model-avatar svg { width: 16px; height: 16px; fill: currentColor; stroke: none; }
+/* Consecutive rows from the agent share one avatar. */
+.msg-agent + .msg-agent { margin-top: 10px; }
+.msg-agent + .msg-agent > .avatar { visibility: hidden; }
+.msg-agent.streaming .msg-body > :last-child::after { content: "▍"; color: var(--accent); animation: blink 1s step-end infinite; margin-left: 1px; }
+
+.avatar {
+  display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; flex: none; position: relative;
+  background: color-mix(in srgb, var(--person, var(--muted)) 16%, var(--paper)); color: var(--person, var(--muted));
+  font: 600 11px/1 var(--sans);
+}
+.avatar.online::after { content: ""; position: absolute; right: -1px; bottom: -1px; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); border: 2px solid var(--surface); }
+
+.attached { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; margin-top: 8px; }
+.attached img { max-width: 220px; max-height: 160px; border-radius: 8px; border: 1px solid var(--rule); display: block; }
+.attached .file-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--rule); border-radius: 6px; font: 12px var(--mono); color: var(--ink-2); background: var(--surface); }
+
+/* Comments on file lines, as Delta shows them. */
+.comments summary { font-size: 15px; }
+.comment-card { margin-top: 6px; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); padding: 8px 10px 10px; display: grid; gap: 6px; }
+.comment-where { font-size: 12.5px; justify-self: start; }
+.comment-lines { font: 12.5px/1.6 var(--mono); background: var(--raised); border-radius: 6px; padding: 4px 0; overflow-x: auto; }
+.comment-line { display: flex; gap: 12px; white-space: pre; tab-size: 2; }
+.comment-number { width: 3.5em; text-align: right; color: var(--faint); flex: none; }
+.comment-code { background: color-mix(in srgb, var(--removed) 10%, transparent); }
+.comment-more { color: var(--muted); font-size: 12px; padding: 2px 0 0 4.5em; font-family: var(--sans); }
+.comment-note { display: flex; align-items: flex-start; gap: 8px; border-left: 2px solid var(--accent); background: var(--raised); border-radius: 0 6px 6px 0; padding: 6px 10px; }
+.comment-note .avatar { width: 22px; height: 22px; font-size: 9px; }
+/* An answer to one of a message's comments: the comment, quoted small, then the answer under a reply arrow. */
+.comment-answer { margin: 12px 0; }
+.answer-to { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 10px; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); font-size: 13px; color: var(--ink-2); }
+.answer-to .avatar { width: 18px; height: 18px; font-size: 9px; flex: none; }
+.answer-to .file-link { flex: none; font-size: 12px; }
+.answer-quote { min-width: 0; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.answer-body { position: relative; margin: 6px 0 0 14px; padding-left: 18px; }
+.answer-body::before { content: "↳"; position: absolute; left: 0; top: 0; color: var(--faint); }
+.answer-body > :first-child { margin-top: 0; }
+.comment-text { font-size: 14.5px; white-space: pre-wrap; padding-top: 1px; }
+/* Line comments on a file or diff: a pill under the selection, then a box right under the lines. */
+.comment-pill-row { padding: 2px 0 4px 3.2em; font-family: var(--sans); }
+.comment-pill { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px 0 8px; border: none; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font: 500 12px var(--sans); cursor: pointer; box-shadow: 0 2px 6px rgb(0 0 0 / .15); }
+.comment-pill:hover { filter: brightness(1.06); }
+.comment-pill svg { width: 13px; height: 13px; }
+.line-comment { margin: 4px 12px 8px 3.2em; padding: 8px; border-radius: 8px; background: var(--raised); box-shadow: var(--shadow); font-family: var(--sans); display: grid; gap: 6px; }
+.line-comment textarea { width: 100%; resize: vertical; font-size: 13.5px; border: none; background: transparent; box-shadow: none; padding: 4px; }
+.line-comment textarea:focus { box-shadow: none; }
+.quote-pill-row { margin: 4px 0 6px; font-family: var(--sans); }
+.quote-box { margin: 6px 0 10px; }
+.quote-excerpt { margin: 0; padding: 2px 0 2px 10px; border-left: 2px solid var(--accent); color: var(--ink-2); font-size: 13.5px; white-space: pre-wrap; max-height: 7.5em; overflow: hidden; }
+.comment-on { font-size: 12px; color: var(--muted); }
+.line-comment-actions { display: flex; align-items: center; gap: 6px; font-size: 11.5px; }
+.line-comment-actions .muted, .line-comment-actions .spacer { flex: 1; }
+.line-comment-actions .button { padding: 3px 10px; font-size: 12px; }
+
+/* Comments where they were made: the text, and the note under its paragraph. */
+mark.commented { background: color-mix(in srgb, var(--removed) 16%, transparent); color: inherit; text-decoration: underline; text-decoration-color: var(--removed); text-decoration-thickness: 2px; text-underline-offset: 3px; border-radius: 2px; }
+.inline-comment { display: flex; align-items: center; gap: 8px; margin: 6px 0 10px; padding: 6px 10px; border-left: 2px solid var(--accent); background: var(--surface); border: 1px solid var(--rule); border-left: 2px solid var(--accent); border-radius: 0 8px 8px 0; font-size: 14.5px; }
+.inline-comment .avatar { width: 22px; height: 22px; font-size: 9px; }
+.prose { font-size: 15px; line-height: 1.65; overflow-wrap: anywhere; }
+.prose > :first-child { margin-top: 0; }
+.prose > :last-child { margin-bottom: 0; }
+.prose h1, .prose h2, .prose h3 { font-family: var(--serif); font-weight: 500; line-height: 1.25; margin: 1.2em 0 .45em; }
+.prose h1 { font-size: 22px; } .prose h2 { font-size: 19px; } .prose h3 { font-size: 16.5px; }
+.prose p { margin: .55em 0; }
+.prose a { color: var(--accent); }
+.prose code { background: var(--sunken); border-radius: 4px; padding: 1px 4px; font-size: .86em; }
+.prose pre { background: var(--code); border-radius: 8px; padding: 10px 12px; overflow-x: auto; font-size: 12.5px; }
+.prose pre code { background: none; padding: 0; }
+.prose blockquote { margin: .8em 0; padding-left: 12px; border-left: 2px solid var(--rule-strong); color: var(--ink-2); }
+.prose table { border-collapse: collapse; font-size: 13px; margin: .8em 0; }
+.prose th, .prose td { border: 1px solid var(--rule); padding: 5px 9px; text-align: left; }
+.prose ul, .prose ol { padding-left: 1.4em; }
+/* Mermaid diagrams: a viewer with Preview and Source, pan and zoom. Icons share a global svg rule; the drawing
+   is not an icon, so it undoes that rule. */
+.viewer { margin: .8em 0; border: 1px solid var(--rule); border-radius: 10px; background: var(--raised); overflow: hidden; }
+.viewer-head { display: flex; align-items: center; gap: 2px; padding: 6px 8px; border-bottom: 1px solid var(--rule); background: var(--surface); }
+.viewer-button { display: inline-grid; place-items: center; width: 26px; height: 26px; border: none; background: none; border-radius: 6px; color: var(--muted); cursor: pointer; }
+.viewer-button:hover { background: var(--sunken); color: var(--ink); }
+.viewer-button svg { width: 15px; height: 15px; }
+.viewer-button.done { color: var(--ok); }
+.viewer-stage { position: relative; overflow: hidden; cursor: grab; touch-action: none; background: var(--raised); min-height: 120px; }
+.viewer-stage.dragging { cursor: grabbing; }
+.viewer-canvas { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.viewer-canvas svg { display: block; fill: initial; stroke: initial; stroke-width: initial; stroke-linecap: initial; stroke-linejoin: initial; }
+.viewer-source { max-height: 520px; overflow: auto; font-size: 12.5px; }
+.diagram-error { color: var(--muted); font-size: 12.5px; padding: 8px 12px 0; }
+.alert { margin: .8em 0; padding: 8px 14px; border-left: 3px solid var(--alert, var(--muted)); background: color-mix(in srgb, var(--alert, var(--muted)) 7%, transparent); border-radius: 0 8px 8px 0; }
+.alert p { margin: .3em 0; }
+.alert-title { font: 600 12px/1.4 var(--sans); color: var(--alert, var(--muted)); text-transform: uppercase; letter-spacing: .06em; }
+.alert-note { --alert: #3b6fb6; }
+.alert-tip { --alert: var(--ok); }
+.alert-important { --alert: #7c4dbd; }
+.alert-warning { --alert: var(--warn); }
+.alert-caution { --alert: var(--removed); }
+.code-block { margin: .8em 0; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; font-size: 12.5px; }
+
+/* Thinking, tool calls: one quiet line each, opened on demand. */
+.fold summary { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; color: var(--muted); font-size: 15px; min-width: 0; padding: 1px 0; }
+.fold summary::-webkit-details-marker { display: none; }
+.fold summary::after { content: "›"; font-size: 16px; color: var(--faint); transition: transform .12s; }
+.fold[open] > summary::after { transform: rotate(90deg); }
+.fold summary:hover { color: var(--ink-2); }
+.terminal-output-text { margin: 4px 0 8px; padding: 8px 10px; max-height: 24em; overflow: auto; border-radius: 6px; background: var(--sunken); font: 12.5px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.thinking { margin-bottom: 6px; }
+.thinking-body { margin: 6px 0 4px; padding-left: 12px; border-left: 2px solid var(--rule-strong); color: var(--ink-2); white-space: pre-wrap; max-height: 320px; overflow-y: auto; font-size: 13.5px; }
+.tool { margin: 2px 0; }
+.tool-verb { color: var(--ink-2); white-space: nowrap; }
+.tool-arg { font-family: var(--mono); font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.tool-running .tool-verb::after { content: ""; display: inline-block; width: 9px; height: 9px; margin-left: 7px; border-radius: 50%; border: 1.5px solid var(--warn); border-top-color: transparent; animation: spin .8s linear infinite; vertical-align: -1px; }
+.tool-error .tool-verb { color: var(--removed); }
+.tool-body { padding: 6px 0 4px; }
+.tool-group-list { display: flex; flex-direction: column; gap: 2px; padding: 4px 0 2px; }
+.tool-line { display: flex; align-items: baseline; gap: 8px; font-size: 15px; color: var(--muted); min-width: 0; }
+.tool-line .tool-verb { color: var(--muted); }
+.tool-group-list .tool summary { font-size: 15px; }
+.tool-group-list .tool .tool-verb { color: var(--muted); }
+.file-link { border: none; background: none; padding: 0; font: 12.5px var(--mono); color: var(--ink-2); text-decoration: underline; text-decoration-color: var(--rule-strong); text-underline-offset: 3px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.file-link:hover { color: var(--accent); text-decoration-color: var(--accent); }
+/* Citations: a file the agent links to, or a file name in backticks. */
+.prose .file-link.cite { font: inherit; color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.prose code.cite { cursor: pointer; text-decoration: underline; text-decoration-color: var(--rule-strong); text-underline-offset: 3px; }
+.prose code.cite:hover { color: var(--accent); }
+.tool-spinner { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--warn); border-top-color: transparent; animation: spin .8s linear infinite; }
+.tool-output { margin: 0; max-height: 300px; overflow: auto; background: var(--code); border-radius: 8px; padding: 9px 12px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tool-note { color: var(--muted); font-size: 12px; }
+.diff-stats { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+.diff-stats .added { color: var(--added); }
+.diff-stats .removed { color: var(--removed); }
+.notice { margin: 22px auto 0; text-align: center; color: var(--muted); font: italic 13.5px/1.5 var(--serif); display: flex; align-items: center; gap: 12px; }
+.notice::before, .notice::after { content: ""; flex: 1; border-top: 1px solid var(--rule); }
+
+/* ---------- composer: the next row of the thread ---------- */
+
+.composer { margin-top: 26px; }
+.composer-main { min-width: 0; position: relative; }
+.draft-with { font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
+.draft-with strong { font-weight: 600; color: var(--ink-2); }
+.draft-with .link { font-size: inherit; margin-left: 4px; }
+/* Other people's cursors in the draft: a layer over the textarea with the same text, invisible but for them. */
+.peer-layer { position: absolute; pointer-events: none; color: transparent; white-space: pre-wrap; overflow-wrap: break-word; border-style: solid; border-color: transparent; margin: 0; }
+.peer-selection { color: transparent; background: color-mix(in srgb, var(--person) 22%, transparent); border-radius: 2px; }
+.draft-body .peer-selection { color: inherit; }
+.peer-caret { position: relative; display: inline-block; width: 0; height: 1.2em; vertical-align: text-bottom; border-left: 2px solid var(--person); margin-left: -1px; margin-right: -1px; }
+.peer-caret::after {
+  content: attr(data-name); position: absolute; left: -2px; bottom: 100%; padding: 0 4px; border-radius: 3px 3px 3px 0;
+  font: 600 10px/1.5 var(--sans, system-ui); color: #fff; background: var(--person); white-space: nowrap;
+  animation: peer-name .4s ease var(--hide, 2.5s) forwards;
+}
+@keyframes peer-name { to { opacity: 0; } }
+.composer textarea {
+  display: block; width: 100%; resize: none; border: none; background: transparent; padding: 4px 0;
+  font-size: 15px; line-height: 1.6; max-height: 50vh; box-shadow: none; border-radius: 0;
+}
+.composer textarea:focus { box-shadow: none; }
+.composer textarea::placeholder { color: var(--faint); }
+.attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.attachment { display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 8px; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); font: 12px var(--mono); color: var(--ink-2); max-width: 260px; }
+.attachment img { width: 22px; height: 22px; object-fit: cover; border-radius: 3px; }
+.attachment span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment button { border: none; background: none; color: var(--muted); cursor: pointer; padding: 0 3px; font-size: 14px; line-height: 1; }
+.attachment button:hover { color: var(--removed); }
+.viewer-note { color: var(--muted); font-size: 13px; margin: 4px 0 0; }
+.completions {
+  position: absolute; z-index: 5; width: min(520px, calc(100% - 56px));
+  background: var(--raised); border: 1px solid var(--rule-strong); border-radius: 10px; box-shadow: var(--shadow); padding: 4px; max-height: 280px; overflow-y: auto;
+}
+.completion { display: flex; gap: 12px; align-items: baseline; padding: 6px 10px; border-radius: 6px; cursor: pointer; }
+.completion[aria-selected="true"] { background: var(--sunken); }
+.completion-name { font-family: var(--mono); font-size: 12.5px; color: var(--ink); white-space: nowrap; }
+.completion-desc { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drop { position: absolute; inset: 8px; z-index: 6; display: grid; place-items: center; border: 2px dashed var(--accent); border-radius: 12px; background: color-mix(in srgb, var(--paper) 88%, transparent); color: var(--accent); font: italic 16px var(--serif); pointer-events: none; }
+
+/* ---------- status bar ---------- */
+
+.statusbar { display: flex; align-items: center; gap: 4px; height: 34px; padding: 0 8px 0 14px; border-top: 1px solid var(--rule); background: var(--paper); font-size: 12px; color: var(--muted); }
+.status-item { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; padding: 0 6px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+.status-button { border: none; background: none; color: var(--muted); cursor: pointer; height: 24px; border-radius: 5px; font-size: 12px; }
+.status-button:hover:not([disabled]) { background: var(--sunken); color: var(--ink); }
+.status-button[disabled] { cursor: default; }
+.branch::before { content: "⑂"; color: var(--accent); }
+.activity .spinner { display: none; width: 11px; height: 11px; border-radius: 50%; border: 1.5px solid var(--muted); border-top-color: transparent; animation: spin .9s linear infinite; }
+.activity[data-busy="true"] .spinner { display: inline-block; }
+.send { color: var(--ink-2); }
+.send:hover { color: var(--accent); }
+
+/* ---------- from app.css: the conversation's own rows ---------- */
+
+.composer-row { display: flex; align-items: flex-end; gap: 2px; }
+.composer-row textarea { flex: 1; }
+.composer { position: relative; }
+.wake { display: flex; gap: 10px; align-items: flex-start; margin-top: 22px; padding: 8px 12px; border-radius: 8px; background: var(--sunken); color: var(--ink-2); font-size: 13.5px; }
+.wake > svg { width: 15px; height: 15px; margin-top: 3px; color: var(--muted); flex: none; }
+.wake-kind { font: 500 10.5px/1.6 var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-right: 8px; }
+.tool-cancelled .tool-verb, .tool-cancelled .tool-arg { color: var(--faint); text-decoration: line-through; text-decoration-color: var(--rule-strong); }
+.wake-more summary { font-size: 12px; margin-top: 2px; }
+.wake-rest { margin: 4px 0 2px; padding-left: 10px; border-left: 2px solid var(--rule-strong); font-size: 12.5px; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.center > .scroller { padding-bottom: 32px; }
