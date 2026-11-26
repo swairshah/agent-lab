@@ -884,6 +884,17 @@ export class InteractiveApp {
 
 export async function runInteractive(session: Pid0Session, options: InteractiveOptions): Promise<number> {
 	const app = new InteractiveApp(session, options);
-	await app.start();
-	return app.finished;
+	const quiet = (...parts: unknown[]) => {
+		if (options.verbose) app.info(parts.map(String).join(" "));
+	};
+	const saved = { error: console.error, warn: console.warn, log: console.log };
+	console.error = quiet;
+	console.warn = quiet;
+	console.log = quiet;
+	try {
+		await app.start();
+		return await app.finished;
+	} finally {
+		Object.assign(console, saved);
+	}
 }

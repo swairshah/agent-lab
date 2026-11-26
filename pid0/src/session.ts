@@ -914,8 +914,8 @@ export class Pid0Session {
 	}
 
 	async lastAssistantText(): Promise<string | undefined> {
-		const items = await this.store.items();
-		return items.findLast((item) => item.kind === "assistant" && item.data.text)?.data && (items.findLast((item) => item.kind === "assistant" && item.data.text)!.data as AssistantData).text;
+		for (const item of (await this.store.items()).reverse()) if (item.kind === "assistant" && item.data.text) return item.data.text;
+		return undefined;
 	}
 
 	async dispose(): Promise<void> {

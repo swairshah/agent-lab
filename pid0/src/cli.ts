@@ -5,7 +5,7 @@ import { AcpAgent } from "./acp.ts";
 import { type Args, HELP, parseArgs, UsageError } from "./args.ts";
 import { editMcpServers, loadMcpServers, loadSettings, type McpServerConfig, type Settings, sessionsRoot, VERSION } from "./config.ts";
 import { exportSession } from "./export.ts";
-import { harnessIds, harnessStatus, resolveHarness } from "./harnesses.ts";
+import { harnessLabel, harnessStatus, resolveHarness } from "./harnesses.ts";
 import type { Prompt } from "./modes/print.ts";
 import { type ImageInput, Pid0Session } from "./session.ts";
 import { copySession, findSession, listSessions, type SessionInfo, SessionStore } from "./store.ts";
@@ -240,7 +240,6 @@ async function main(argv: string[]): Promise<number> {
 	if (args.export) {
 		const store = await SessionStore.open(resolve(args.export.input), { readOnly: true });
 		const output = args.export.output ?? `pid0-session-${store.meta.id}.html`;
-		const { harnessLabel } = await import("./harnesses.ts");
 		console.log(exportSession(store.meta, await store.items(), (h) => harnessLabel(h, settings), output));
 		await store.close();
 		return 0;
@@ -275,7 +274,7 @@ async function main(argv: string[]): Promise<number> {
 			...(systemPrompt ? { systemPrompt, systemPromptMode: args.systemPrompt ? ("override" as const) : ("append" as const) } : {}),
 			noMcp: args.noMcp,
 			persistPreferences: mode === "interactive",
-			...(args.verbose && mode !== "interactive" ? { log: (line: string) => process.stderr.write(`${line}\n`) } : {}),
+			...(args.verbose ? { log: (line: string) => (mode === "interactive" ? console.error(line) : void process.stderr.write(`${line}\n`)) } : {}),
 		});
 	} catch (error) {
 		await opened.store.close();
@@ -302,4 +301,4 @@ if (process.argv[1] && (process.argv[1].endsWith("cli.ts") || process.argv[1].en
 	);
 }
 
-export { harnessIds, main };
+export { main };
