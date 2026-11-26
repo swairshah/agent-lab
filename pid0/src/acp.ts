@@ -45,6 +45,7 @@ export type SessionOptions = {
 	cwd: string;
 	mcpServers: McpServer[];
 	systemPrompt?: string;
+	systemPromptMode?: "append" | "override";
 };
 
 export type AcpHost = {
@@ -255,7 +256,9 @@ export class AcpAgent {
 		return {
 			cwd: options.cwd,
 			mcpServers,
-			...(options.systemPrompt && this.capabilities.sessionCapabilities?.systemPrompt ? { systemPrompt: { mode: "append", content: [{ type: "text", text: options.systemPrompt }] } } : {}),
+			...(options.systemPrompt && this.capabilities.sessionCapabilities?.systemPrompt
+				? { systemPrompt: { mode: options.systemPromptMode === "override" && this.capabilities.sessionCapabilities.systemPrompt.mode?.override ? "override" : "append", content: [{ type: "text", text: options.systemPrompt }] } }
+				: {}),
 		};
 	}
 

@@ -55,6 +55,7 @@ export type SessionOptions = {
 	scopedModels?: string[];
 	permissions?: PermissionPolicy;
 	systemPrompt?: string;
+	systemPromptMode?: "append" | "override";
 	noMcp?: boolean;
 	persistPreferences?: boolean;
 	log?: (line: string) => void;
@@ -325,7 +326,18 @@ export class Pid0Session {
 		return agent;
 	}
 
-	async connect(): Promise<NativeState> {
+	#connectLine: Promise<unknown> = Promise.resolve();
+
+	connect(): Promise<NativeState> {
+		const run = this.#connectLine.then(
+			() => this.#connect(),
+			() => this.#connect(),
+		);
+		this.#connectLine = run.catch(() => {});
+		return run;
+	}
+
+	async #connect(): Promise<NativeState> {
 		const harness = this.harness;
 		const agent = await this.#agentFor(harness);
 		if (agent.state && this.#bindings.get(harness) === this.#key()) return agent.state;
@@ -334,7 +346,7 @@ export class Pid0Session {
 		const options = {
 			cwd: this.cwd,
 			mcpServers: this.#options.noMcp ? [] : toMcpServers(this.cwd),
-			...(this.#options.systemPrompt ? { systemPrompt: this.#options.systemPrompt } : {}),
+			...(this.#options.systemPrompt ? { systemPrompt: this.#options.systemPrompt, systemPromptMode: this.#options.systemPromptMode ?? "append" } : {}),
 		};
 		let state = info?.sessionId ? await agent.resumeSession(info.sessionId, options) : undefined;
 		const resumed = state !== undefined;
