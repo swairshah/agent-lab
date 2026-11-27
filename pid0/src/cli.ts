@@ -82,7 +82,7 @@ async function openStore(args: Args, root: string, cwd: string, interactive: boo
 		throw new UsageError(`no session matches "${args.session}"`);
 	}
 	if (args.sessionId) {
-		const existing = (await listSessions(root, cwd)).find((s) => s.id === args.sessionId);
+		const existing = (await listSessions(root, cwd, { includeEmpty: true })).find((s) => s.id === args.sessionId);
 		if (existing) return inPlace(existing);
 		return { store: await SessionStore.create({ root, cwd, id: args.sessionId, ...(args.name ? { name: args.name } : {}) }), cwd };
 	}
@@ -258,6 +258,8 @@ async function main(argv: string[]): Promise<number> {
 	}
 	if (args.name && opened.store.meta.name !== args.name) await opened.store.setName(args.name);
 	const systemPrompt = [args.systemPrompt, ...args.appendSystemPrompt].filter((s): s is string => s !== undefined).map(textOrFile).join("\n\n");
+	const { Resources } = await import("./resources.ts");
+	const resources = await Resources.load(cwd, { skillPaths: args.skills, promptPaths: args.promptTemplates, themePaths: args.themes, noSkills: args.noSkills, noPromptTemplates: args.noPromptTemplates, noThemes: args.noThemes });
 	let session: Pid0Session;
 	try {
 		session = await Pid0Session.start({
@@ -280,10 +282,11 @@ async function main(argv: string[]): Promise<number> {
 		await opened.store.close();
 		throw error;
 	}
+	session.expand = (text) => resources.expand(text);
 	let code = 0;
 	try {
 		if (mode === "rpc") code = await (await import("./modes/rpc.ts")).runRpc(session);
-		else if (mode === "interactive") code = await (await import("./modes/interactive.ts")).runInteractive(session, { prompts, verbose: args.verbose, ...(args.tuiMode ? { tuiMode: args.tuiMode } : {}) });
+		else if (mode === "interactive") code = await (await import("./modes/interactive.ts")).runInteractive(session, { prompts, verbose: args.verbose, resources, ...(args.useTheme ? { themeName: args.useTheme } : {}), ...(args.tuiMode ? { tuiMode: args.tuiMode } : {}) });
 		else code = await (await import("./modes/print.ts")).runPrint(session, prompts, mode === "json" ? "json" : "text");
 	} finally {
 		await session.dispose();

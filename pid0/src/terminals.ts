@@ -91,15 +91,18 @@ export class Terminals {
 		if (!term.exit) term.child.kill("SIGTERM");
 	}
 
+	readonly #released = new Map<string, string>();
+
 	release(id: string): void {
 		const term = this.#terms.get(id);
 		if (!term) return;
 		if (!term.exit) term.child.kill("SIGKILL");
+		this.#released.set(id, term.output);
 		this.#terms.delete(id);
 	}
 
 	peek(id: string): string | undefined {
-		return this.#terms.get(id)?.output;
+		return this.#terms.get(id)?.output ?? this.#released.get(id);
 	}
 
 	dispose(): void {

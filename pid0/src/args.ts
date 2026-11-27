@@ -25,6 +25,13 @@ export type Args = {
 	name?: string;
 	systemPrompt?: string;
 	appendSystemPrompt: string[];
+	skills: string[];
+	noSkills: boolean;
+	promptTemplates: string[];
+	noPromptTemplates: boolean;
+	themes: string[];
+	useTheme?: string;
+	noThemes: boolean;
 	tuiMode?: "regular" | "fullscreen";
 	verbose: boolean;
 	noMcp: boolean;
@@ -49,18 +56,9 @@ const HARNESS_OWNED: Record<string, { takesValue: boolean; what: string }> = {
 	"-e": { takesValue: true, what: "extensions" },
 	"--no-extensions": { takesValue: false, what: "extensions" },
 	"-ne": { takesValue: false, what: "extensions" },
-	"--skill": { takesValue: true, what: "skills" },
-	"--no-skills": { takesValue: false, what: "skills" },
-	"-ns": { takesValue: false, what: "skills" },
-	"--prompt-template": { takesValue: true, what: "prompt templates" },
-	"--no-prompt-templates": { takesValue: false, what: "prompt templates" },
-	"-np": { takesValue: false, what: "prompt templates" },
 	"--no-context-files": { takesValue: false, what: "context files (AGENTS.md, CLAUDE.md)" },
 	"-nc": { takesValue: false, what: "context files (AGENTS.md, CLAUDE.md)" },
 	"--api-key": { takesValue: true, what: "credentials" },
-	"--theme": { takesValue: true, what: "themes" },
-	"--use-theme": { takesValue: true, what: "themes" },
-	"--no-themes": { takesValue: false, what: "themes" },
 	"--approve": { takesValue: false, what: "project trust" },
 	"-a": { takesValue: false, what: "project trust" },
 	"--no-approve": { takesValue: false, what: "project trust" },
@@ -69,7 +67,7 @@ const HARNESS_OWNED: Record<string, { takesValue: boolean; what: string }> = {
 };
 
 export function parseArgs(argv: string[]): Args {
-	const args: Args = { commandArgs: [], print: false, continue: false, resume: false, noSession: false, appendSystemPrompt: [], verbose: false, noMcp: false, help: false, version: false, files: [], messages: [] };
+	const args: Args = { commandArgs: [], print: false, continue: false, resume: false, noSession: false, appendSystemPrompt: [], skills: [], noSkills: false, promptTemplates: [], noPromptTemplates: false, themes: [], noThemes: false, verbose: false, noMcp: false, help: false, version: false, files: [], messages: [] };
 	if (argv[0] === "harnesses" || argv[0] === "list" || argv[0] === "auth" || argv[0] === "mcp") {
 		args.command = argv[0] === "list" ? "harnesses" : argv[0];
 		args.commandArgs = argv.slice(1);
@@ -164,6 +162,29 @@ export function parseArgs(argv: string[]): Args {
 			case "--append-system-prompt":
 				args.appendSystemPrompt.push(value(arg));
 				break;
+			case "--skill":
+				args.skills.push(value(arg));
+				break;
+			case "-ns":
+			case "--no-skills":
+				args.noSkills = true;
+				break;
+			case "--prompt-template":
+				args.promptTemplates.push(value(arg));
+				break;
+			case "-np":
+			case "--no-prompt-templates":
+				args.noPromptTemplates = true;
+				break;
+			case "--theme":
+				args.themes.push(value(arg));
+				break;
+			case "--use-theme":
+				args.useTheme = value(arg);
+				break;
+			case "--no-themes":
+				args.noThemes = true;
+				break;
 			case "--tui-mode":
 				args.tuiMode = oneOf(arg, ["regular", "fullscreen"] as const);
 				break;
@@ -231,13 +252,17 @@ Sessions (stored with pi-durable under ~/.pid0/sessions)
 Prompts and process
   --system-prompt <text|path>         replace the harness's system prompt where it allows that, else add to it
   --append-system-prompt <text|path>  add to the harness's system prompt (repeatable)
+  --skill <path>               load a skill file or directory (repeatable); -ns, --no-skills disables discovery
+  --prompt-template <path>     load a prompt template file or directory (repeatable); -np disables discovery
+  --theme <path>               load a theme file or directory (repeatable); --no-themes disables discovery
+  --use-theme <name>           the theme for this run
   --no-mcp                     do not hand pid0's MCP servers to the harness
   --tui-mode regular|fullscreen
   --verbose                    show the harness's own log lines
   -h, --help    -v, --version
 
   @path includes a text file or image in the first prompt; piped stdin is prepended to it.
-  Inside the terminal UI: /harness, /model, /thinking, /mode, /new, /resume, /tree, /fork, /clone, /compact,
-  /name, /session, /copy, /export, /login, /mcp, /hotkeys, /quit; !cmd runs a shell command (!!cmd keeps it from the agent).
+  The terminal UI is pi's: its settings (/settings), themes, keybindings.json, prompt templates and skills are read
+  from pi's own folder (~/.pi/agent, or PID0_PI_DIR). /hotkeys lists the keys; / lists the commands.
 
-  Tools, extensions, skills, prompt templates and context files belong to each harness and are configured there.`;
+  Tools, extensions and context files belong to each harness and are configured there.`;

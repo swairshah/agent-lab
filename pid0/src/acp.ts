@@ -352,6 +352,10 @@ export class AcpAgent {
 		await this.#call(methods.agent.authenticate, { methodId });
 	}
 
+	async logout(): Promise<void> {
+		await this.#call(methods.agent.logout, {});
+	}
+
 	close(): void {
 		this.#terminals.dispose();
 		this.#exited ??= new AgentExited(`${this.harness.label} was closed`);
