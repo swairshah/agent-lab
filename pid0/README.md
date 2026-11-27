@@ -73,11 +73,11 @@ pid0 loads pi extensions with pi's own loader and runner: the ones in `~/.pi/age
 | Commands (`pi.registerCommand`) | in the `/` menu; also from `-p "/name args"` and RPC |
 | Shortcuts, flags (`--name` on the command line) | as in pi |
 | UI: `select`, `confirm`, `input`, `editor`, `notify`, `setStatus`, `setWidget`, `setHeader`, `setFooter`, `setTitle`, `custom` (inline or overlay), editor text, theme | pid0's terminal UI implements pi's extension UI context |
-| Events: `session_start`, `input` (transform or handle), `before_agent_start` (injected messages), `agent_start`/`end`, `turn_start`, `message_start`/`end`, `tool_execution_start`/`end`, `model_select`, `session_compact`, `session_shutdown` | emitted from the harness's ACP stream |
+| Events: `session_start`, `input` (transform or handle), `before_agent_start` (injected messages; text an extension adds to the system prompt is given to the harness as standing instructions, since the harness's own system prompt cannot be read or replaced), `agent_start`/`end`, `turn_start`, `message_start`/`end`, `tool_execution_start`/`end`, `model_select`, `session_compact`, `session_shutdown` | emitted from the harness's ACP stream |
 | `sendUserMessage`, `sendMessage`, `appendEntry`, session name, `setModel`, thinking level, `compact`, `newSession`, `fork`, `navigateTree`, `switchSession` | mapped onto pid0's session; messages and entries are stored in pi-durable |
 | Tools (`pi.registerTool`) | pid0 hosts them as an MCP server on localhost and hands it to the harness, which calls them as `pi-extensions` tools. Needs a harness that takes HTTP MCP servers (Claude Code and Codex do; pi-acp ignores MCP servers) |
 
-What cannot work, because the harness runs the model loop and its own tools: blocking or rewriting the harness's tool calls (`tool_call`, `tool_result`), changing its context or system prompt (`context`, the `systemPrompt` of `before_agent_start`), provider hooks and `registerProvider`, custom tool renderers, custom editor components and autocomplete providers. Extensions that only add a provider or auth for pi load but have nothing to do here. After `/reload`, extensions are reloaded only when pid0 restarts.
+What cannot work, because the harness runs the model loop and its own tools: blocking or rewriting the harness's tool calls (`tool_call`, `tool_result`), changing its context (`context`), provider hooks and `registerProvider`, custom tool renderers, custom editor components and autocomplete providers. Extensions that only add a provider or auth for pi load but have nothing to do here. After `/reload`, extensions are reloaded only when pid0 restarts.
 
 ### Sessions
 

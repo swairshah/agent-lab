@@ -291,7 +291,9 @@ export class ExtensionHost {
 
 	async #beforeTurn(text: string, images: ImageInput[]): Promise<void> {
 		if (!this.runner.hasHandlers("before_agent_start")) return;
-		const result = await this.runner.emitBeforeAgentStart({ messageType: "user", prompt: text, images: images.map((i) => ({ type: "image", data: i.data, mimeType: i.mimeType })) } as never, {} as never);
+		const result = await this.runner.emitBeforeAgentStart({ messageType: "user", prompt: text, images: images.map((i) => ({ type: "image", data: i.data, mimeType: i.mimeType })) } as never, { forceSystemPrompt: "", cwd: this.session.cwd } as never);
+		const added = (result?.systemPromptOptions as { forceSystemPrompt?: string } | undefined)?.forceSystemPrompt?.trim();
+		this.session.extraInstructions = added || undefined;
 		for (const message of result?.messages ?? []) {
 			await this.session.addEntry("note", { customType: message.customType, content: textOf(message.content), display: message.display, details: message.details });
 		}

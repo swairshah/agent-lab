@@ -159,6 +159,8 @@ export class Pid0Session {
 	intercept: ((text: string, images: ImageInput[]) => Promise<{ action: "continue" } | { action: "handled" } | { action: "transform"; text: string; images?: ImageInput[] }>) | undefined;
 	beforeTurn: ((text: string, images: ImageInput[]) => Promise<void>) | undefined;
 	extraMcpServers: (() => McpServer[]) | undefined;
+	extraInstructions: string | undefined;
+	readonly #sentInstructions = new Map<string, string>();
 
 	readonly #options: SessionOptions;
 	readonly #agents = new Map<string, AcpAgent>();
@@ -614,6 +616,11 @@ export class Pid0Session {
 		const unseen = (await this.store.contextItems()).filter((item) => item.id > seen);
 		const told = narrate(unseen, (h) => this.label(h), seen === 0, this.settings.handoff ?? "anonymous");
 		if (told) blocks.push({ type: "text", text: told });
+		const extra = this.extraInstructions;
+		if (extra && this.#sentInstructions.get(primedKey) !== extra) {
+			this.#sentInstructions.set(primedKey, extra);
+			blocks.push({ type: "text", text: `<instructions>\nThe user's setup adds these standing instructions. Follow them for the rest of this conversation; they replace any earlier version of this block.\n\n${extra}\n</instructions>` });
+		}
 		if (!this.#primed.has(primedKey)) {
 			this.#primed.add(primedKey);
 			if (this.#options.systemPrompt && !agent.supportsSystemPrompt) blocks.push({ type: "text", text: `<instructions>\n${this.#options.systemPrompt}\n</instructions>` });

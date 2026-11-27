@@ -73,7 +73,8 @@ const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 async function prompt(sessionId: string, s: Session, blocks: any[]): Promise<{ stopReason: string; usage?: unknown }> {
 	const all = blocks.map((b) => (b.type === "text" ? b.text : b.type === "image" ? "[image]" : b.type === "resource_link" ? `[link ${b.uri}]` : "[block]")).join("\n");
 	const hasContext = all.includes("<pid0-context");
-	const body = all.replace(/<pid0-context[\s\S]*?<\/pid0-context>\s*/g, "").trim();
+	const rules = /<instructions>[\s\S]*?\n\n([\s\S]*?)\n<\/instructions>/.exec(all)?.[1];
+	const body = all.replace(/<pid0-context[\s\S]*?<\/pid0-context>\s*/g, "").replace(/<instructions>[\s\S]*?<\/instructions>\s*/g, "").trim();
 	s.prompts.push(body);
 	s.cancelled = false;
 	saveState();
@@ -149,7 +150,7 @@ async function prompt(sessionId: string, s: Session, blocks: any[]): Promise<{ s
 	if (verb === "fail") throw { code: -32603, message: "the fake agent failed on purpose" };
 	text(sessionId, `[${NAME}/${s.model}/${s.level}/${s.mode}] `);
 	await sleep(5);
-	text(sessionId, `echo: ${body} (prompt ${s.prompts.length}, context ${hasContext ? "yes" : "no"}, mcp ${s.mcp}${s.system ? `, system ${s.system}` : ""})`);
+	text(sessionId, `echo: ${body} (prompt ${s.prompts.length}, context ${hasContext ? "yes" : "no"}, mcp ${s.mcp}${s.system ? `, system ${s.system}` : ""}${rules ? `, rules ${rules}` : ""})`);
 	return { stopReason: "end_turn", usage: { totalTokens: 30, inputTokens: 20, outputTokens: 10 } };
 }
 

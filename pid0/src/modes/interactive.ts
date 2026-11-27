@@ -494,10 +494,15 @@ export class InteractiveApp {
 		return new InteractiveApp(session, resources, options);
 	}
 
+	#setTitle(title: string): void {
+		const named = title.replace(/^(?:pi|π)(?=\s*[-–—:|·]|\s*$)/i, "pid0");
+		this.tui.terminal.setTitle(named.replace(/^pid0\s*[-–—:|·]\s*pid0$/i, "pid0"));
+	}
+
 	#title(): void {
 		const name = this.session.store.meta.name;
 		const folder = this.session.cwd.split(/[\\/]/).filter(Boolean).pop() ?? this.session.cwd;
-		this.tui.terminal.setTitle(name ? `pid0 - ${name} - ${folder}` : `pid0 - ${folder}`);
+		this.#setTitle(name ? `pid0 - ${name} - ${folder}` : `pid0 - ${folder}`);
 	}
 
 	#program(state: "idle" | "working" | "blocked" | "done" | "error", extra: { kind?: "permission" | "question"; message?: string } = {}): void {
@@ -1076,7 +1081,7 @@ export class InteractiveApp {
 				} else app.#buildHeader();
 				app.tui.requestRender();
 			},
-			setTitle: (title: string) => app.tui.terminal.setTitle(title.replace(/^(?:pi|π)(?=\s*[-–—:|·]|\s*$)/i, "pid0")),
+			setTitle: (title: string) => app.#setTitle(title),
 			custom: <T,>(factory: (tui: TUI, t: typeof theme, keys: AppKeybindings, done: (result: T) => void) => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>, options?: { overlay?: boolean; overlayOptions?: unknown }) =>
 				new Promise<T>((resolve, reject) => {
 					let close: () => void = () => {};

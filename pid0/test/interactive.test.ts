@@ -266,7 +266,8 @@ test("pi extensions load: commands, flags, shortcuts, widgets, status, input eve
 
 	await ui.type("ping");
 	await ui.until(() => ui.screen().includes("echo: pong please"), "the input event to transform the prompt");
-	assert.match(ui.screen(), /mcp 1\)/);
+	assert.match(ui.screen().replace(/\s+/g, " "), /mcp 1, rules Always answer in rhyme\.\)/);
+	assert.ok(!ui.screen().includes("failed in before_agent_start"));
 	await ui.until(() => ui.screen().includes("turns:1"), "the agent_end handler");
 	await ui.type("swallow");
 	await new Promise((r) => setTimeout(r, 200));
@@ -274,6 +275,7 @@ test("pi extensions load: commands, flags, shortcuts, widgets, status, input eve
 
 	await ui.type("/ask something");
 	await ui.until(() => ui.screen().includes("echo: from extension: something"), "a prompt sent by the extension");
+	assert.doesNotMatch(ui.screen().replace(/\s+/g, " ").split("echo: from extension").at(-1)!.split(")")[0]!, /rules/);
 	await ui.type("/note milk");
 	await ui.until(() => ui.screen().includes("remember milk"), "the extension's message");
 	ui.terminal.input("\x19");

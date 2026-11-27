@@ -150,7 +150,7 @@ test("extensions work outside the terminal UI: -e, an extension flag, an extensi
 	const extension = join(here, "fixtures", "sample-extension.ts");
 	const transformed = await run(["--no-session", "-e", extension, "--loud", "-p", "ping"]);
 	assert.equal(transformed.code, 0, transformed.err);
-	assert.match(transformed.out, /echo: pong please .*mcp 1\)/);
+	assert.match(transformed.out, /echo: pong please .*mcp 1, rules Always answer in rhyme\.\)/);
 	const asked = await run(["--no-session", "-e", extension, "-p", "/ask over cli"]);
 	assert.match(asked.out, /echo: from extension: over cli/);
 	const unknown = await run(["--no-session", "-e", extension, "--bogus", "-p", "x"]);
