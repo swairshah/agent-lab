@@ -1,0 +1,24 @@
+{
+  "name": "pid0",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "One coding-agent CLI that drives Claude Code, Codex, Antigravity and pi over the Agent Client Protocol, with pi-durable as its session store",
+  "engines": { "node": ">=22.19.0" },
+  "bin": { "pid0": "bin/pid0.mjs" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^2.12.0",
+    "@earendil-works/chord": "^1.6.1",
+    "@earendil-works/pi-ai": "^1.6.1",
+    "@earendil-works/pi-durable": "^1.6.1",
+    "@earendil-works/pi-tui": "^1.6.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "typescript": "^7.0.2"
+  }
+}
