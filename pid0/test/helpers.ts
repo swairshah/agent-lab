@@ -7,6 +7,7 @@ import { type Pid0Event, Pid0Session, type SessionOptions } from "../src/session
 import { SessionStore } from "../src/store.ts";
 
 export const here = dirname(fileURLToPath(import.meta.url));
+process.env.PID0_PI_DIR ??= mkdtempSync(join(tmpdir(), "pid0-pi-"));
 export const FAKE = join(here, "fake-agent.ts");
 
 export function fakeHarness(name: string, env: Record<string, string> = {}) {

@@ -162,6 +162,7 @@ test("tree, fork, clone and compact", async () => {
 test("a session open in another process cannot be opened for writing", async () => {
 	const { session } = await startSession();
 	const file = session.store.file!;
+	await session.promptAndWait("keep me");
 	await session.dispose();
 	writeFileSync(`${file}.lock`, String(process.ppid));
 	await assert.rejects(SessionStore.open(file), /is open in another pid0/);

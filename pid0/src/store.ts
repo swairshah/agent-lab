@@ -205,8 +205,12 @@ export class SessionStore {
 	}
 
 	async close(): Promise<void> {
+		const empty = this.file !== undefined && !this.readOnly && this.meta.messages === 0 && (await this.lastEntry()) === 0 && (await this.branches()).length <= 1;
 		await this.harness.close(context);
-		if (this.file && !this.readOnly) rmSync(lockPath(this.file), { force: true });
+		if (this.file && !this.readOnly) {
+			rmSync(lockPath(this.file), { force: true });
+			if (empty) for (const suffix of ["", "-wal", "-shm"]) rmSync(this.file + suffix, { force: true });
+		}
 	}
 
 	get id(): string {
@@ -423,14 +427,14 @@ function sessionFiles(dir: string): string[] {
 	}
 }
 
-export async function listSessions(root: string, cwd?: string): Promise<SessionInfo[]> {
+export async function listSessions(root: string, cwd?: string, options: { includeEmpty?: boolean } = {}): Promise<SessionInfo[]> {
 	const dirs = cwd ? [join(root, cwdSlug(cwd))] : [root, ...(existsSync(root) ? readdirSync(root).map((name) => join(root, name)).filter((path) => statSync(path).isDirectory()) : [])];
 	const out: SessionInfo[] = [];
 	for (const dir of dirs) {
 		for (const file of sessionFiles(dir)) {
 			try {
 				const store = await SessionStore.open(file, { readOnly: true });
-				if (store.meta.id) out.push({ ...store.meta, file });
+				if (store.meta.id && (store.meta.messages > 0 || options.includeEmpty)) out.push({ ...store.meta, file });
 				await store.close();
 			} catch {}
 		}
@@ -447,7 +451,7 @@ export async function findSession(root: string, cwd: string, ref: string): Promi
 		await store.close();
 		return { match: info };
 	}
-	const all = await listSessions(root);
+	const all = await listSessions(root, undefined, { includeEmpty: true });
 	const hits = all.filter((s) => s.id === ref);
 	const partial = hits.length ? hits : all.filter((s) => s.id.startsWith(ref));
 	if (partial.length === 0) return {};

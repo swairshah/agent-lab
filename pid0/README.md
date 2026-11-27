@@ -5,7 +5,7 @@ One coding-agent CLI that drives Claude Code, Codex, Antigravity and pi. It talk
 - **One conversation, several harnesses.** `/harness codex` in the middle of a session moves the conversation to Codex. The harness you switch to is told what happened so far with its next prompt; the one you left is told what it missed when you come back.
 - **Model choice inside the harness.** `/model`, `--model claude/opus:high`, Ctrl+P. pid0 reads the models, thinking levels and modes each harness offers over ACP and sets them there.
 - **pi-durable sessions.** A session is one SQLite file under `~/.pid0/sessions/<folder>/`. Messages, tool calls, plans and shell commands are pi-durable entries; `/tree` branches are pi-durable forks; `/compact` is a pi-durable reset with a handoff note.
-- **The same modes as pi.** A terminal UI, `--print`, `--mode json` and `--mode rpc`.
+- **pi's terminal UI.** The interactive mode is built from pi 1.5.0's own components: its settings list, themes, `keybindings.json`, session, tree and fork selectors, message and tool rendering, prompt templates and skills. `--print`, `--mode json` and `--mode rpc` work as in pi.
 
 ## Use
 
@@ -56,17 +56,11 @@ Each harness signs in the way its own CLI does. pid0 points the Claude Code and 
 
 ### In the terminal UI
 
-| | |
-|---|---|
-| `/harness [name]`, `/model [spec]`, `/thinking [level]`, `/mode [id]` | switch harness, model, thinking level, harness mode |
-| `/new`, `/resume`, `/name`, `/session` | sessions |
-| `/tree`, `/fork`, `/clone`, `/compact [instructions]` | branch inside the session, fork or copy into a new one, summarize the context |
-| `/copy`, `/export [path]` | copy the last answer; export HTML or JSONL |
-| `/permissions [ask\|allow\|deny]`, `/login`, `/mcp`, `/settings`, `/hotkeys`, `/quit` | |
-| `!cmd`, `!!cmd` | run a shell command; `!!` keeps it from the agent |
-| anything else starting with `/` | sent to the harness, which has its own commands (they appear in the `/` menu) |
+The UI reads pi's own folder (`~/.pi/agent`, or `PID0_PI_DIR`): `settings.json` for the settings `/settings` shows, `keybindings.json`, `themes/`, `prompts/` and `skills/`. So pid0 looks and behaves like your pi, and a setting changed in either shows in both. pid0's own choices (harnesses, default models, permissions, MCP servers, sessions) stay in `~/.pid0`.
 
-Enter sends, and queues while the agent works. Esc stops the turn and puts queued messages back in the editor. Ctrl+L opens the model selector, Ctrl+P cycles models, Shift+Tab cycles thinking levels, Ctrl+O expands tool output, Ctrl+T shows or hides thinking, Ctrl+G opens `$EDITOR`. `@` searches files and Tab completes paths.
+pi's commands: `/settings`, `/model`, `/scoped-models`, `/thinking`, `/export`, `/import`, `/share`, `/copy`, `/name`, `/session`, `/changelog`, `/hotkeys`, `/fork`, `/clone`, `/tree`, `/login`, `/logout`, `/new`, `/compact`, `/resume`, `/reload`, `/debug`, `/quit`. pid0 adds `/harness`, `/mode` (the harness's own modes, such as plan), `/permissions` and `/mcp`. Prompt templates are `/name`, skills `/skill:name`, and anything else starting with `/` goes to the harness, whose own commands appear in the `/` menu. `!cmd` runs a shell command; `!!cmd` keeps it from the agent.
+
+Keys are pi's and follow `keybindings.json`; `/hotkeys` lists them. A message sent while the agent works is queued as a follow-up. Double Esc on an empty editor opens `/tree` or `/fork`, as the setting says.
 
 When a harness asks permission for a tool, pid0 shows the harness's own options. `--permissions allow|deny` answers for you; outside the terminal UI the default is `allow`, as nobody is there to ask.
 
@@ -92,13 +86,17 @@ These go in `~/.pid0/mcp.json` (`-l`: the project's `.pid0/mcp.json`) and are ha
 
 ## What differs from pi
 
-pid0 does not run a model loop of its own; the harness does. So what pi configures for its own loop belongs to each harness here, and pid0 refuses those options with that explanation: `--tools` and the other tool flags, extensions, skills, prompt templates, themes, `--no-context-files`, `--api-key`, project trust, `--offline`, and the package commands (`pi install`, `update`, `config`).
+pid0 does not run a model loop of its own; the harness does. That decides what cannot carry over:
 
-- **Steering.** ACP has no way to add a message to a running turn. A message sent while the agent works waits for the turn to end, whether sent as steer or follow-up.
-- **`/tree` and `/fork`.** A harness cannot rewind its own session. After you move to another point, the harness starts a fresh native session and is given the conversation up to that point as text. Files are not rewound.
-- **`/compact`.** The current harness writes a handoff summary; the session is reset to it and every harness starts fresh from the summary. There is no automatic compaction: each harness compacts its own context as it sees fit.
-- **Cost and context** in the footer are what the harness reports (`usage_update`), so they cover the harness's current native session.
-- Not there: `/share`, `/bug`, `/import`, `/reload`, `/trust`, `/changelog`, `/scoped-models` (use `--models` or settings), images pasted into the editor (`@image.png` on the command line works).
+- **Extensions and packages.** pi extensions hook into pi's own loop, so they do not load, and `pi install`, `update`, `config` have no counterpart. Tools and context files (`AGENTS.md`) are each harness's own; pid0 refuses `--tools`, `-e`, `-nc`, `--api-key`, `--offline` and the trust flags with that explanation.
+- **Settings that belong to pi's loop.** `/settings` lists them all, as pi does, but transport, cache warming, HTTP idle timeout, steering mode, image settings and per-model thinking levels have no effect on a harness. Auto-compact, follow-up mode, theme, thinking visibility, double-escape action, tree filter, paddings, autocomplete size, quiet startup, hardware cursor, clear on shrink, terminal progress and terminal mode do apply.
+- **Steering.** ACP has no way to add a message to a running turn, so every message sent mid-turn is a follow-up.
+- **`/tree` and `/fork`.** A harness cannot rewind its own session. After you move to another point, the harness starts a fresh native session and is given the conversation up to that point as text. Files are not rewound, branches are not summarized, and entries cannot be labeled.
+- **`/compact` and auto-compact.** The current harness writes a handoff summary; the session is reset to it and every harness starts fresh from the summary. Auto-compact does this when the harness reports its context 90% full.
+- **`/model`** lists the current harness's models, with the other harnesses as entries that switch first. **`/scoped-models`** offers the current harness's models; entries for other harnesses come from `--models` or settings.
+- **`/login` and `/logout`** use what the harness offers over ACP. A sign-in that needs a terminal runs with `pid0 auth login`.
+- **`/share`** makes a secret gist with `gh`. **`/import`** takes a pid0 JSONL export. **`/bug`** and **`/trust`** only explain that they do not apply.
+- **Cost and context** in the footer are what the harness reports, for its current native session.
 
 ## How it fits together
 
@@ -118,7 +116,8 @@ pid0 does not run a model loop of its own; the harness does. So what pi configur
 - `src/harnesses.ts`: the four harnesses and how each is started; settings can add more.
 - `src/store.ts`: the pi-durable store: entries, documents, branches (forks), copies, listing, and a lock so two pid0s do not write one session.
 - `src/session.ts`: the engine all modes share. Before a prompt it resumes the harness's native session when the harness can (`session/resume`, else `session/load`), otherwise starts one and puts the part of the conversation that harness has not seen in front of the prompt (`src/narrate.ts`, about 60k characters, newest kept).
-- `src/modes/`: `interactive.ts` (on `@earendil-works/pi-tui`), `print.ts` (text and JSON), `rpc.ts`.
+- `src/modes/`: `interactive.ts` (pi's components on `@earendil-works/pi-tui`), `print.ts` (text and JSON), `rpc.ts`.
+- `src/resources.ts`, `src/pi.ts`: pi's settings, prompt templates, skills, themes and keybindings, loaded through `@earendil-works/pi-coding-agent` 1.5.0. Some of pi's modules (theme, keybindings, chat viewport) are not part of its public exports and are imported by file path, which is why the pi packages are pinned to 1.5.0.
 
 User and assistant entries also carry pi-ai messages in the entry's `model` field, so `conversation.context()` gives a pi-readable transcript of the session.
 
@@ -134,6 +133,6 @@ Run by hand on 2026-11-26 with the real Claude Code adapter (`@agentclientprotoc
 ## Not done yet
 
 - **Rewinding a harness.** Claude Code and Codex advertise `session/fork` over ACP; pid0 does not use it yet, so branches always start a fresh native session.
-- **Images in the editor**, and showing images that tools return.
+- **Showing images** that tools return. Pasting an image from the clipboard works.
 - **Terminal output while a command runs.** Claude Code sends it in tool-call `_meta`, which pid0 does not read; the output appears when the tool finishes.
-- **Session picker extras**: rename, delete, sort.
+- **pi extensions.** Their commands and UI could be hosted; their tools could only reach a harness as an MCP server.

@@ -32,7 +32,7 @@ export type Pid0Event =
 	| { type: "harness_changed"; harness: string }
 	| { type: "mode_changed"; mode?: string }
 	| { type: "commands_changed" }
-	| { type: "compaction_start"; reason: "manual" }
+	| { type: "compaction_start"; reason: "manual" | "threshold" }
 	| { type: "compaction_end"; summary?: string; error?: string }
 	| { type: "shell_end"; command: string; output: string; exitCode: number | null; excluded: boolean }
 	| { type: "session_changed"; reason: "new" | "switch" | "fork" | "clone" | "tree" }
@@ -134,6 +134,7 @@ type Turn = {
 	startedAt: number;
 	tools: Map<string, ToolData>;
 	written: Set<string>;
+	terminals?: Map<string, string[]>;
 	plan?: { content: string; status: string; priority?: string }[];
 	messages: (UserMessage | AssistantMessage)[];
 	last?: AssistantMessage;
@@ -149,6 +150,9 @@ export class Pid0Session {
 	onPermission: PermissionAsker | undefined;
 	permissions: PermissionPolicy;
 	scopedModels: string[];
+	autoCompact = false;
+	followUpMode: "all" | "one-at-a-time" = "one-at-a-time";
+	expand: ((text: string) => string) | undefined;
 
 	readonly #options: SessionOptions;
 	readonly #agents = new Map<string, AcpAgent>();
@@ -507,7 +511,8 @@ export class Pid0Session {
 		return out;
 	}
 
-	async prompt(text: string, options: { images?: ImageInput[]; behavior?: "steer" | "followUp" } = {}): Promise<"started" | "queued"> {
+	async prompt(raw: string, options: { images?: ImageInput[]; behavior?: "steer" | "followUp" } = {}): Promise<"started" | "queued"> {
+		const text = this.expand ? this.expand(raw) : raw;
 		if (this.#busy) {
 			this.#queue.push({ text, ...(options.images ? { images: options.images } : {}) });
 			this.#emitQueue();
@@ -551,8 +556,15 @@ export class Pid0Session {
 		while (next) {
 			await this.#oneTurn(next.text, next.images ?? []);
 			if (this.#aborted) break;
-			next = this.#queue.shift();
+			if (this.followUpMode === "all" && this.#queue.length > 1) {
+				const all = this.#queue.splice(0);
+				next = { text: all.map((q) => q.text).join("\n\n"), images: all.flatMap((q) => q.images ?? []) };
+			} else next = this.#queue.shift();
 			if (next) this.#emitQueue();
+		}
+		const context = this.#context;
+		if (this.autoCompact && !this.#aborted && context && context.size > 0 && context.used / context.size >= 0.9) {
+			await this.#compactNow(undefined, "threshold").catch((error) => this.notice("warning", `auto-compaction failed: ${(error as Error).message}`));
 		}
 		this.#busy = false;
 		this.#emit({ type: "agent_settled", aborted: this.#aborted });
@@ -694,11 +706,19 @@ export class Pid0Session {
 			for (const c of update.content as Record<string, any>[]) {
 				if (c.type === "content" && c.content?.type === "text") texts.push(c.content.text);
 				else if (c.type === "diff") diffs.push({ path: c.path, ...(c.oldText != null ? { oldText: c.oldText } : {}), newText: c.newText });
-				else if (c.type === "terminal") texts.push(turn.agent.terminalOutput(c.terminalId) ?? "");
+				else if (c.type === "terminal") {
+					turn.terminals ??= new Map();
+					turn.terminals.set(tool.toolCallId, [...(turn.terminals.get(tool.toolCallId) ?? []), c.terminalId]);
+				}
 			}
+			for (const id of turn.terminals?.get(tool.toolCallId) ?? []) texts.push(turn.agent.terminalOutput(id) ?? "");
 			const output = texts.join("\n");
 			if (output) tool.output = output.length > 50_000 ? `${output.slice(0, 50_000)}\n… (truncated)` : output;
 			if (diffs.length) tool.diffs = diffs;
+		}
+		if (!update.content) {
+			const live = (turn.terminals?.get(tool.toolCallId) ?? []).map((id) => turn.agent.terminalOutput(id) ?? "").join("\n");
+			if (live) tool.output = live.length > 50_000 ? `${live.slice(0, 50_000)}\n… (truncated)` : live;
 		}
 		if (!tool.output && update.rawOutput !== undefined && update.rawOutput !== null) {
 			const raw = typeof update.rawOutput === "string" ? update.rawOutput : JSON.stringify(update.rawOutput);
@@ -789,9 +809,17 @@ export class Pid0Session {
 	async compact(instructions?: string): Promise<string | undefined> {
 		if (this.#busy) throw new Error("wait for the current turn to finish before compacting");
 		this.#busy = true;
-		this.#compacting = true;
 		this.#aborted = false;
-		this.#emit({ type: "compaction_start", reason: "manual" });
+		try {
+			return await this.#compactNow(instructions, "manual");
+		} finally {
+			this.#busy = false;
+		}
+	}
+
+	async #compactNow(instructions: string | undefined, reason: "manual" | "threshold"): Promise<string | undefined> {
+		this.#compacting = true;
+		this.#emit({ type: "compaction_start", reason });
 		let summary: string | undefined;
 		let failure: string | undefined;
 		try {
@@ -812,7 +840,6 @@ export class Pid0Session {
 			summary = undefined;
 		} finally {
 			this.#turn = undefined;
-			this.#busy = false;
 			this.#compacting = false;
 		}
 		this.#emit({ type: "compaction_end", ...(summary ? { summary } : {}), ...(failure ? { error: failure } : {}) });

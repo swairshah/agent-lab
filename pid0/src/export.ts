@@ -1,6 +1,6 @@
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { Item, SessionMeta } from "./store.ts";
+import { type Item, type SessionMeta, SessionStore } from "./store.ts";
 
 const esc = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
@@ -54,4 +54,21 @@ export function exportSession(meta: SessionMeta, items: Item[], label: (harness:
 	if (path.endsWith(".jsonl")) writeFileSync(path, `${[{ type: "session", version: 1, ...meta }, ...items].map((line) => JSON.stringify(line)).join("\n")}\n`);
 	else writeFileSync(path, renderHtml(meta, items, label));
 	return path;
+}
+
+export async function importSession(input: string, root: string, cwd: string): Promise<string> {
+	const lines = readFileSync(resolve(input), "utf8").split("\n").filter((line) => line.trim());
+	const header = JSON.parse(lines[0] ?? "{}") as Partial<SessionMeta> & { type?: string };
+	if (header.type !== "session") throw new Error(`${input} is not a pid0 session export (its first line is not a session header)`);
+	const store = await SessionStore.create({ root, cwd, ...(header.name ? { name: header.name } : {}), ...(header.id ? { parentSession: header.id } : {}) });
+	try {
+		for (const line of lines.slice(1)) {
+			const item = JSON.parse(line) as Item;
+			if (item.kind === "reset") await store.reset(item.data.summary);
+			else await store.append(item.kind, item.data as never);
+		}
+	} finally {
+		await store.close();
+	}
+	return store.file!;
 }

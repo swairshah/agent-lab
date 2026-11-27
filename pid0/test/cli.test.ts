@@ -20,7 +20,7 @@ function setup() {
 	);
 	const run = (args: string[], stdin?: string): Promise<{ out: string; err: string; code: number }> =>
 		new Promise((resolve) => {
-			const child = spawn(process.execPath, ["--no-warnings", BIN, ...args], { cwd: work, env: { ...process.env, PID0_DIR: home }, stdio: ["pipe", "pipe", "pipe"] });
+			const child = spawn(process.execPath, ["--no-warnings", BIN, ...args], { cwd: work, env: { ...process.env, PID0_DIR: home, PID0_PI_DIR: join(home, "pi") }, stdio: ["pipe", "pipe", "pipe"] });
 			let out = "";
 			let err = "";
 			child.stdout.on("data", (c) => (out += c));
@@ -136,6 +136,7 @@ test("subcommands: harnesses, mcp, list-models, auth check", async () => {
 test("pi's harness-owned options are refused with the reason", async () => {
 	const { run } = setup();
 	const result = await run(["--tools", "read", "-p", "x"]);
+	assert.equal((await run(["--no-session", "-ns", "-np", "--no-themes", "-p", "x"])).code, 0);
 	assert.equal(result.code, 2);
 	assert.match(result.err, /the harness owns its tools/);
 	assert.throws(() => parseArgs(["--fork", "a", "--continue"]), /--fork cannot be combined/);
