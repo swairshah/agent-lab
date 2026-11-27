@@ -202,3 +202,21 @@ test("Claude Code gets the user's own login: an unapproved API key in the enviro
 	const codex = resolveHarness("codex", {});
 	assert.equal(harnessEnv(codex, { ...base, OPENAI_API_KEY: "sk-x" }).env.OPENAI_API_KEY, "sk-x");
 });
+
+test("handoff is anonymous by default and names the agents when asked", async () => {
+	const { narrate } = await import("../src/narrate.ts");
+	const items = [
+		{ id: 1, conversation: 1, kind: "user", data: { text: "hi", harness: "codex", at: 1 } },
+		{ id: 2, conversation: 1, kind: "assistant", data: { text: "hello", harness: "codex", model: "gpt", at: 2 } },
+		{ id: 3, conversation: 1, kind: "tool", data: { toolCallId: "t", title: "ls", status: "completed", harness: "codex", at: 3 } },
+	] as never;
+	const label = () => "Codex";
+	const anonymous = narrate(items, label, true)!;
+	assert.match(anonymous, /\[Assistant\]\nhello/);
+	assert.match(anonymous, /\[Assistant used a tool: ls/);
+	assert.doesNotMatch(anonymous, /Codex|gpt|joining a coding session/);
+	assert.match(anonymous, /Do not mention this record/);
+	const named = narrate(items, label, true, "named")!;
+	assert.match(named, /\[Codex · gpt\]\nhello/);
+	assert.match(named, /joining a coding session/);
+});

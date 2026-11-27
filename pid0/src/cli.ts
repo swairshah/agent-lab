@@ -234,6 +234,7 @@ async function main(argv: string[]): Promise<number> {
 	let cwd = process.cwd();
 	const settings = loadSettings(cwd);
 	const root = sessionsRoot(args.sessionDir, settings);
+	if (args.handoff) settings.handoff = args.handoff;
 	if (args.command === "harnesses") return commandHarnesses(settings);
 	if (args.command === "auth") return commandAuth(args.commandArgs, settings, cwd);
 	if (args.command === "mcp") return commandMcp(args.commandArgs, cwd);
