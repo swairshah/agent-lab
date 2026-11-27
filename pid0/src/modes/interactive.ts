@@ -945,7 +945,7 @@ export class InteractiveApp {
 			if (text.startsWith("/")) {
 				const space = text.search(/\s/);
 				const name = (space < 0 ? text.slice(1) : text.slice(1, space)).toLowerCase();
-				if (COMMANDS.some((c) => c.name === name) || ["help", "exit", "trust", "bug", "theme"].includes(name)) {
+				if (COMMANDS.some((c) => c.name === name) || ["trust", "bug"].includes(name)) {
 					await this.command(name, space < 0 ? "" : text.slice(space + 1).trim());
 					this.tui.requestRender();
 					return;
@@ -961,13 +961,11 @@ export class InteractiveApp {
 		const session = this.session;
 		switch (name) {
 			case "quit":
-			case "exit":
 				this.stop();
 				return;
 			case "settings":
 				this.#settings();
 				return;
-			case "help":
 			case "hotkeys":
 				this.#hotkeys();
 				return;
@@ -1215,9 +1213,6 @@ export class InteractiveApp {
 				return;
 			case "bug":
 				this.status("/bug sends reports to pi's developers and does not apply to pid0. Use /debug to write a log you can attach to an issue.");
-				return;
-			case "theme":
-				this.#settings();
 				return;
 		}
 	}

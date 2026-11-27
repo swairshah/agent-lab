@@ -198,6 +198,9 @@ test("/settings is pi's settings list and saves to pi's settings; templates and 
 	await ui.until(() => ui.screen().includes("echo: Say loudly: hello"), "the template to expand");
 	await ui.type("/skill:greet bob");
 	await ui.until(() => /echo: <skill name="greet"/.test(ui.screen()), "the skill to expand");
+	await ui.type("/theme");
+	await ui.until(() => ui.screen().includes("echo: /theme"), "an unknown command to go to the harness");
+	assert.ok(!ui.screen().includes("Auto-compact"));
 	await ui.type("/hotkeys");
 	await ui.until(() => /Open model selector/.test(ui.screen()), "the hotkeys");
 	await ui.close();
