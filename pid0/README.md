@@ -27,8 +27,8 @@ pid0 --list-models
 
 | Name | What pid0 runs | Needs |
 |---|---|---|
-| `claude` | `claude-agent-acp`, else `npx -y @agentclientprotocol/claude-agent-acp` | a Claude Code login or `ANTHROPIC_API_KEY` |
-| `codex` | `codex-acp`, else `npx -y @agentclientprotocol/codex-acp` | `codex login` or `OPENAI_API_KEY` |
+| `claude` | `claude-agent-acp`, else `npx -y @agentclientprotocol/claude-agent-acp` | the login your `claude` uses |
+| `codex` | `codex-acp`, else `npx -y @agentclientprotocol/codex-acp` | the login your `codex` uses |
 | `antigravity` | `agy acp` (built into agy 1.5+), else `agy-acp` / `antigravity-acp` on PATH | the `agy` CLI, signed in |
 | `pi` | `pi-acp`, else `npx -y pi-acp` | `pi` on PATH, with a provider login |
 
@@ -43,6 +43,8 @@ Any other ACP agent can be added, and the built-in commands overridden, in `~/.p
   }
 }
 ```
+
+Each harness signs in the way its own CLI does. pid0 points the Claude Code and Codex adapters at the `claude` and `codex` you have installed (when they are on PATH), so they run your version with your login. An `ANTHROPIC_API_KEY` in the environment is passed to Claude Code only if you approved that key in Claude Code itself; otherwise your Claude login is used, as in `claude`. To use the key anyway, set `"useApiKey": true` on the harness in settings.
 
 `PID0_<NAME>_COMMAND` overrides one harness's command for a run. `pid0 auth login <harness> [method]` runs a harness's own sign-in; `pid0 auth check <harness>` prints `ready` or `not_ready`.
 

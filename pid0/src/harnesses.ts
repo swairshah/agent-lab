@@ -1,4 +1,5 @@
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 import type { Settings } from "./config.ts";
 
@@ -7,6 +8,7 @@ export type ResolvedHarness = {
 	label: string;
 	command: string[];
 	env: Record<string, string>;
+	useApiKey?: boolean;
 	install: string;
 	auth: string;
 	source: "path" | "npx" | "settings" | "env";
@@ -116,6 +118,7 @@ export function resolveHarness(name: string, settings: Settings): ResolvedHarnes
 		id,
 		label: override?.label ?? builtin?.label ?? id,
 		env: override?.env ?? {},
+		...(override?.useApiKey !== undefined ? { useApiKey: override.useApiKey } : {}),
 		install: builtin?.install ?? `Check the command configured for "${id}" in settings.json.`,
 		auth: builtin?.auth ?? `Sign in with ${id}'s own CLI, then try again.`,
 	};
@@ -142,4 +145,32 @@ export function harnessStatus(settings: Settings): { harness: ResolvedHarness; a
 
 export function harnessLabel(id: string, settings: Settings): string {
 	return settings.harnesses?.[id]?.label ?? BUILTINS.find((b) => b.id === id)?.label ?? id;
+}
+
+function claudeApprovedKey(key: string, base: NodeJS.ProcessEnv): boolean {
+	try {
+		const approved = JSON.parse(readFileSync(join(base.CLAUDE_CONFIG_DIR ?? homedir(), ".claude.json"), "utf8")).customApiKeyResponses?.approved;
+		return Array.isArray(approved) && approved.includes(key.slice(-20));
+	} catch {
+		return false;
+	}
+}
+
+export function harnessEnv(harness: ResolvedHarness, base: NodeJS.ProcessEnv = process.env): { env: NodeJS.ProcessEnv; dropped: string[] } {
+	const env: NodeJS.ProcessEnv = { ...base };
+	const dropped: string[] = [];
+	if (harness.id === "claude") {
+		const installed = onPath("claude");
+		if (installed && !env.CLAUDE_CODE_EXECUTABLE) env.CLAUDE_CODE_EXECUTABLE = installed;
+		const key = env.ANTHROPIC_API_KEY;
+		if (key && harness.useApiKey !== true && !("ANTHROPIC_API_KEY" in harness.env) && !claudeApprovedKey(key, env)) {
+			delete env.ANTHROPIC_API_KEY;
+			dropped.push("ANTHROPIC_API_KEY");
+		}
+	}
+	if (harness.id === "codex") {
+		const installed = onPath("codex");
+		if (installed && !env.CODEX_PATH) env.CODEX_PATH = installed;
+	}
+	return { env: { ...env, ...harness.env }, dropped };
 }
