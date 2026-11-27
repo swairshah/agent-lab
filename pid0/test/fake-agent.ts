@@ -162,6 +162,7 @@ async function handle(method: string, params: any): Promise<unknown> {
 				agentCapabilities: {
 					loadSession: CAPS.includes("load"),
 					promptCapabilities: { image: true, embeddedContext: true },
+					mcpCapabilities: { http: true },
 					sessionCapabilities: { ...(CAPS.includes("resume") ? { resume: {} } : {}), ...(CAPS.includes("system") ? { systemPrompt: {} } : {}) },
 				},
 				authMethods: [{ id: "login", name: "Log in", description: `run ${NAME} login` }],

@@ -64,6 +64,21 @@ Keys are pi's and follow `keybindings.json`; `/hotkeys` lists them. A message se
 
 When a harness asks permission for a tool, pid0 shows the harness's own options. `--permissions allow|deny` answers for you; outside the terminal UI the default is `allow`, as nobody is there to ask.
 
+### pi extensions
+
+pid0 loads pi extensions with pi's own loader and runner: the ones in `~/.pi/agent/extensions`, in pi's settings and packages, in a trusted project's `.pi/extensions` (`-a` trusts for one run), and `-e <path>`. `-ne` turns discovery off.
+
+| Works | How |
+|---|---|
+| Commands (`pi.registerCommand`) | in the `/` menu; also from `-p "/name args"` and RPC |
+| Shortcuts, flags (`--name` on the command line) | as in pi |
+| UI: `select`, `confirm`, `input`, `editor`, `notify`, `setStatus`, `setWidget`, `setHeader`, `setFooter`, `setTitle`, `custom` (inline or overlay), editor text, theme | pid0's terminal UI implements pi's extension UI context |
+| Events: `session_start`, `input` (transform or handle), `before_agent_start` (injected messages), `agent_start`/`end`, `turn_start`, `message_start`/`end`, `tool_execution_start`/`end`, `model_select`, `session_compact`, `session_shutdown` | emitted from the harness's ACP stream |
+| `sendUserMessage`, `sendMessage`, `appendEntry`, session name, `setModel`, thinking level, `compact`, `newSession`, `fork`, `navigateTree`, `switchSession` | mapped onto pid0's session; messages and entries are stored in pi-durable |
+| Tools (`pi.registerTool`) | pid0 hosts them as an MCP server on localhost and hands it to the harness, which calls them as `pi-extensions` tools. Needs a harness that takes HTTP MCP servers (Claude Code and Codex do; pi-acp ignores MCP servers) |
+
+What cannot work, because the harness runs the model loop and its own tools: blocking or rewriting the harness's tool calls (`tool_call`, `tool_result`), changing its context or system prompt (`context`, the `systemPrompt` of `before_agent_start`), provider hooks and `registerProvider`, custom tool renderers, custom editor components and autocomplete providers. Extensions that only add a provider or auth for pi load but have nothing to do here. After `/reload`, extensions are reloaded only when pid0 restarts.
+
 ### Sessions
 
 `-c`, `-r`, `--session <path|id>`, `--session-id <id>`, `--fork <path|id>`, `--session-dir <dir>`, `--no-session` and `-n <name>` work as in pi. `PID0_DIR` moves `~/.pid0`; `PID0_SESSION_DIR` or `sessionDir` moves the sessions.
@@ -88,7 +103,7 @@ These go in `~/.pid0/mcp.json` (`-l`: the project's `.pid0/mcp.json`) and are ha
 
 pid0 does not run a model loop of its own; the harness does. That decides what cannot carry over:
 
-- **Extensions and packages.** pi extensions hook into pi's own loop, so they do not load, and `pi install`, `update`, `config` have no counterpart. Tools and context files (`AGENTS.md`) are each harness's own; pid0 refuses `--tools`, `-e`, `-nc`, `--api-key`, `--offline` and the trust flags with that explanation.
+- **Built-in tools and context files** (`AGENTS.md`) are each harness's own; pid0 refuses `--tools`, `-nc`, `--api-key` and `--offline` with that explanation. `pi install`, `update` and `config` have no counterpart: install packages with pi, and pid0 loads what pi's settings list.
 - **Settings that belong to pi's loop.** `/settings` lists them all, as pi does, but transport, cache warming, HTTP idle timeout, steering mode, image settings and per-model thinking levels have no effect on a harness. Auto-compact, follow-up mode, theme, thinking visibility, double-escape action, tree filter, paddings, autocomplete size, quiet startup, hardware cursor, clear on shrink, terminal progress and terminal mode do apply.
 - **Steering.** ACP has no way to add a message to a running turn, so every message sent mid-turn is a follow-up.
 - **`/tree` and `/fork`.** A harness cannot rewind its own session. After you move to another point, the harness starts a fresh native session and is given the conversation up to that point as text. Files are not rewound, branches are not summarized, and entries cannot be labeled.
@@ -117,6 +132,7 @@ pid0 does not run a model loop of its own; the harness does. That decides what c
 - `src/store.ts`: the pi-durable store: entries, documents, branches (forks), copies, listing, and a lock so two pid0s do not write one session.
 - `src/session.ts`: the engine all modes share. Before a prompt it resumes the harness's native session when the harness can (`session/resume`, else `session/load`), otherwise starts one and puts the part of the conversation that harness has not seen in front of the prompt (`src/narrate.ts`, about 60k characters, newest kept).
 - `src/modes/`: `interactive.ts` (pi's components on `@earendil-works/pi-tui`), `print.ts` (text and JSON), `rpc.ts`.
+- `src/extensions.ts`: hosts pi's `ExtensionRunner` on pid0's session: actions, events, commands, flags, and the MCP server that carries extension tools to the harness.
 - `src/resources.ts`, `src/pi.ts`: pi's settings, prompt templates, skills, themes and keybindings, loaded through `@earendil-works/pi-coding-agent` 1.5.0. Some of pi's modules (theme, keybindings, chat viewport) are not part of its public exports and are imported by file path, which is why the pi packages are pinned to 1.5.0.
 
 User and assistant entries also carry pi-ai messages in the entry's `model` field, so `conversation.context()` gives a pi-readable transcript of the session.
@@ -135,4 +151,3 @@ Run by hand on 2026-11-26 with the real Claude Code adapter (`@agentclientprotoc
 - **Rewinding a harness.** Claude Code and Codex advertise `session/fork` over ACP; pid0 does not use it yet, so branches always start a fresh native session.
 - **Showing images** that tools return. Pasting an image from the clipboard works.
 - **Terminal output while a command runs.** Claude Code sends it in tool-call `_meta`, which pid0 does not read; the output appears when the tool finishes.
-- **pi extensions.** Their commands and UI could be hosted; their tools could only reach a harness as an MCP server.

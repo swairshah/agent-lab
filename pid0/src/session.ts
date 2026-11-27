@@ -34,6 +34,9 @@ export type Pid0Event =
 	| { type: "commands_changed" }
 	| { type: "compaction_start"; reason: "manual" | "threshold" }
 	| { type: "compaction_end"; summary?: string; error?: string }
+	| { type: "entry_appended"; item: Item }
+	| { type: "branch_summary_start" }
+	| { type: "branch_summary_end"; summary?: string; aborted: boolean }
 	| { type: "shell_end"; command: string; output: string; exitCode: number | null; excluded: boolean }
 	| { type: "session_changed"; reason: "new" | "switch" | "fork" | "clone" | "tree" }
 	| { type: "notice"; level: "info" | "warning" | "error"; text: string };
@@ -153,6 +156,9 @@ export class Pid0Session {
 	autoCompact = false;
 	followUpMode: "all" | "one-at-a-time" = "one-at-a-time";
 	expand: ((text: string) => string) | undefined;
+	intercept: ((text: string, images: ImageInput[]) => Promise<{ action: "continue" } | { action: "handled" } | { action: "transform"; text: string; images?: ImageInput[] }>) | undefined;
+	beforeTurn: ((text: string, images: ImageInput[]) => Promise<void>) | undefined;
+	extraMcpServers: (() => McpServer[]) | undefined;
 
 	readonly #options: SessionOptions;
 	readonly #agents = new Map<string, AcpAgent>();
@@ -349,7 +355,7 @@ export class Pid0Session {
 		const info = natives.agents[harness];
 		const options = {
 			cwd: this.cwd,
-			mcpServers: this.#options.noMcp ? [] : toMcpServers(this.cwd),
+			mcpServers: [...(this.#options.noMcp ? [] : toMcpServers(this.cwd)), ...(this.extraMcpServers?.() ?? [])],
 			...(this.#options.systemPrompt ? { systemPrompt: this.#options.systemPrompt, systemPromptMode: this.#options.systemPromptMode ?? "append" } : {}),
 		};
 		let state = info?.sessionId ? await agent.resumeSession(info.sessionId, options) : undefined;
@@ -511,8 +517,7 @@ export class Pid0Session {
 		return out;
 	}
 
-	async prompt(raw: string, options: { images?: ImageInput[]; behavior?: "steer" | "followUp" } = {}): Promise<"started" | "queued"> {
-		const text = this.expand ? this.expand(raw) : raw;
+	async prompt(text: string, options: { images?: ImageInput[]; behavior?: "steer" | "followUp" } = {}): Promise<"started" | "queued"> {
 		if (this.#busy) {
 			this.#queue.push({ text, ...(options.images ? { images: options.images } : {}) });
 			this.#emitQueue();
@@ -554,7 +559,25 @@ export class Pid0Session {
 	async #run(first: { text: string; images?: ImageInput[] }): Promise<void> {
 		let next: { text: string; images?: ImageInput[] } | undefined = first;
 		while (next) {
-			await this.#oneTurn(next.text, next.images ?? []);
+			let text = next.text;
+			let images = next.images ?? [];
+			let handled = false;
+			try {
+				const result = (await this.intercept?.(text, images)) ?? { action: "continue" as const };
+				if (result.action === "handled") handled = true;
+				else if (result.action === "transform") {
+					text = result.text;
+					images = result.images ?? images;
+				}
+			} catch (error) {
+				this.notice("error", (error as Error).message);
+				handled = true;
+			}
+			if (!handled) {
+				if (this.expand) text = this.expand(text);
+				await this.beforeTurn?.(text, images).catch((error) => this.notice("warning", (error as Error).message));
+				await this.#oneTurn(text, images);
+			}
 			if (this.#aborted) break;
 			if (this.followUpMode === "all" && this.#queue.length > 1) {
 				const all = this.#queue.splice(0);
@@ -868,6 +891,20 @@ export class Pid0Session {
 		});
 	}
 
+	async addEntry(kind: "custom" | "note", data: { customType: string; data?: unknown; content?: string; display?: boolean; details?: unknown }): Promise<void> {
+		const at = Date.now();
+		const id =
+			kind === "custom"
+				? await this.store.append("custom", { customType: data.customType, ...(data.data !== undefined ? { data: data.data } : {}), at })
+				: await this.store.append("note", { customType: data.customType, content: data.content ?? "", display: data.display ?? true, ...(data.details !== undefined ? { details: data.details } : {}), at });
+		const item = (await this.store.items()).find((i) => i.id === id);
+		if (item) this.#emit({ type: "entry_appended", item });
+	}
+
+	get contextUsage(): { used: number; size: number } | undefined {
+		return this.#context;
+	}
+
 	async setName(name: string | undefined): Promise<void> {
 		await this.store.setName(name);
 		this.#emit({ type: "session_info_changed", ...(name ? { name } : {}) });
@@ -920,10 +957,52 @@ export class Pid0Session {
 		await this.#swap(store, "switch");
 	}
 
-	async navigate(entryId: number | undefined): Promise<void> {
+	async navigate(entryId: number | undefined, options: { summarize?: boolean; instructions?: string } = {}): Promise<{ aborted: boolean }> {
 		this.#idle("moving in the session tree");
+		let summary: string | undefined;
+		if (options.summarize) {
+			const active = await this.store.items();
+			const kept = await this.store.lineage(entryId);
+			const left = active.filter((i) => !kept.has(i.id) && (i.kind === "user" || i.kind === "assistant" || i.kind === "tool" || i.kind === "shell"));
+			if (left.length > 0) {
+				const point = active.findLast((i) => kept.has(i.id) && (i.kind === "user" || i.kind === "assistant"));
+				const quote = point && (point.kind === "user" || point.kind === "assistant") ? `the message that reads: "${point.data.text.slice(0, 300)}"` : "the very beginning, before the first message";
+				summary = await this.#summarizeBranch(quote, options.instructions);
+				if (summary === undefined) return { aborted: true };
+			}
+		}
+		const harness = this.harness;
 		await this.store.branchAt(entryId);
+		if (summary) await this.store.append("summary", { text: summary, harness, at: Date.now() });
 		await this.#swap(this.store, "tree");
+		return { aborted: false };
+	}
+
+	async #summarizeBranch(point: string, instructions: string | undefined): Promise<string | undefined> {
+		this.#busy = true;
+		this.#compacting = true;
+		this.#aborted = false;
+		this.#emit({ type: "branch_summary_start" });
+		let summary: string | undefined;
+		try {
+			const state = await this.connect();
+			const agent = this.#agents.get(this.harness)!;
+			const preface = await this.#preface(agent, state);
+			const turn: Turn = { agent, text: "", thinking: "", open: true, startedAt: Date.now(), tools: new Map(), written: new Set(), messages: [], capture: true };
+			this.#turn = turn;
+			const ask = `The user is going back to an earlier point of this conversation and leaving the work done after it. Summarize that later work for whoever continues from the earlier point: what was tried, what changed in files, what was learned, and what was left unfinished. Do not use tools; reply with the summary only.\n\nThe point being returned to is ${point}. Summarize only what came after it.${instructions ? `\n\nAlso: ${instructions}` : ""}`;
+			const response = await agent.prompt([...preface, { type: "text", text: ask }]);
+			const text = turn.text.trim();
+			if (response.stopReason !== "cancelled" && text) summary = text;
+		} catch (error) {
+			this.notice("warning", `could not summarize the branch: ${(error as Error).message}`);
+		} finally {
+			this.#turn = undefined;
+			this.#compacting = false;
+			this.#busy = false;
+		}
+		this.#emit({ type: "branch_summary_end", ...(summary ? { summary } : {}), aborted: summary === undefined });
+		return summary;
 	}
 
 	async clone(entryId?: number | "empty"): Promise<string> {

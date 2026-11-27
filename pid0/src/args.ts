@@ -26,6 +26,10 @@ export type Args = {
 	name?: string;
 	systemPrompt?: string;
 	appendSystemPrompt: string[];
+	extensions: string[];
+	noExtensions: boolean;
+	approve?: boolean;
+	extensionFlags: { name: string; value?: string }[];
 	skills: string[];
 	noSkills: boolean;
 	promptTemplates: string[];
@@ -53,22 +57,14 @@ const HARNESS_OWNED: Record<string, { takesValue: boolean; what: string }> = {
 	"-nbt": { takesValue: false, what: "tools" },
 	"--no-tools": { takesValue: false, what: "tools" },
 	"-nt": { takesValue: false, what: "tools" },
-	"--extension": { takesValue: true, what: "extensions" },
-	"-e": { takesValue: true, what: "extensions" },
-	"--no-extensions": { takesValue: false, what: "extensions" },
-	"-ne": { takesValue: false, what: "extensions" },
 	"--no-context-files": { takesValue: false, what: "context files (AGENTS.md, CLAUDE.md)" },
 	"-nc": { takesValue: false, what: "context files (AGENTS.md, CLAUDE.md)" },
 	"--api-key": { takesValue: true, what: "credentials" },
-	"--approve": { takesValue: false, what: "project trust" },
-	"-a": { takesValue: false, what: "project trust" },
-	"--no-approve": { takesValue: false, what: "project trust" },
-	"-na": { takesValue: false, what: "project trust" },
 	"--offline": { takesValue: false, what: "network activity" },
 };
 
 export function parseArgs(argv: string[]): Args {
-	const args: Args = { commandArgs: [], print: false, continue: false, resume: false, noSession: false, appendSystemPrompt: [], skills: [], noSkills: false, promptTemplates: [], noPromptTemplates: false, themes: [], noThemes: false, verbose: false, noMcp: false, help: false, version: false, files: [], messages: [] };
+	const args: Args = { commandArgs: [], print: false, continue: false, resume: false, noSession: false, appendSystemPrompt: [], extensions: [], noExtensions: false, extensionFlags: [], skills: [], noSkills: false, promptTemplates: [], noPromptTemplates: false, themes: [], noThemes: false, verbose: false, noMcp: false, help: false, version: false, files: [], messages: [] };
 	if (argv[0] === "harnesses" || argv[0] === "list" || argv[0] === "auth" || argv[0] === "mcp") {
 		args.command = argv[0] === "list" ? "harnesses" : argv[0];
 		args.commandArgs = argv.slice(1);
@@ -166,6 +162,22 @@ export function parseArgs(argv: string[]): Args {
 			case "--append-system-prompt":
 				args.appendSystemPrompt.push(value(arg));
 				break;
+			case "-e":
+			case "--extension":
+				args.extensions.push(value(arg));
+				break;
+			case "-ne":
+			case "--no-extensions":
+				args.noExtensions = true;
+				break;
+			case "-a":
+			case "--approve":
+				args.approve = true;
+				break;
+			case "-na":
+			case "--no-approve":
+				args.approve = false;
+				break;
 			case "--skill":
 				args.skills.push(value(arg));
 				break;
@@ -210,7 +222,13 @@ export function parseArgs(argv: string[]): Args {
 				const owned = HARNESS_OWNED[arg];
 				if (owned) throw new UsageError(`${arg} is one of pi's options for its own ${owned.what}. In pid0 the harness owns its ${owned.what}: configure them in the harness itself (Claude Code, Codex, Antigravity, pi).`);
 				if (arg.startsWith("@") && arg.length > 1) args.files.push(arg.slice(1));
-				else if (arg.startsWith("-") && arg.length > 1) throw new UsageError(`unknown option ${arg} (see pid0 --help)`);
+				else if (arg.startsWith("--") && arg.length > 2) {
+					const eq = arg.indexOf("=");
+					const next = argv[i + 1];
+					if (eq > 0) args.extensionFlags.push({ name: arg.slice(2, eq), value: arg.slice(eq + 1) });
+					else if (next !== undefined && !next.startsWith("-") && !next.startsWith("@")) args.extensionFlags.push({ name: arg.slice(2), value: argv[++i]! });
+					else args.extensionFlags.push({ name: arg.slice(2) });
+				} else if (arg.startsWith("-") && arg.length > 1) throw new UsageError(`unknown option ${arg} (see pid0 --help)`);
 				else args.messages.push(arg);
 			}
 		}
@@ -258,6 +276,8 @@ Sessions (stored with pi-durable under ~/.pid0/sessions)
 Prompts and process
   --system-prompt <text|path>         replace the harness's system prompt where it allows that, else add to it
   --append-system-prompt <text|path>  add to the harness's system prompt (repeatable)
+  -e, --extension <path>       load a pi extension file or directory (repeatable); -ne, --no-extensions disables discovery
+  -a, --approve / -na          trust (or not) this project's own extensions, skills and settings for this run
   --skill <path>               load a skill file or directory (repeatable); -ns, --no-skills disables discovery
   --prompt-template <path>     load a prompt template file or directory (repeatable); -np disables discovery
   --theme <path>               load a theme file or directory (repeatable); --no-themes disables discovery
@@ -271,4 +291,5 @@ Prompts and process
   The terminal UI is pi's: its settings (/settings), themes, keybindings.json, prompt templates and skills are read
   from pi's own folder (~/.pi/agent, or PID0_PI_DIR). /hotkeys lists the keys; / lists the commands.
 
-  Tools, extensions and context files belong to each harness and are configured there.`;
+  pi extensions load as in pi: their commands, shortcuts, flags, events and UI work; their tools reach the harness
+  through an MCP server pid0 hosts. Built-in tools and context files belong to each harness.`;

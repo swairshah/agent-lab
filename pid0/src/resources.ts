@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { DefaultResourceLoader, getAgentDir, type PromptTemplate, SettingsManager, type Skill, stripFrontmatter } from "@earendil-works/pi-coding-agent";
+
+type LoadedExtensions = ReturnType<DefaultResourceLoader["getExtensions"]>;
 import { prompts, themes } from "./pi.ts";
 
 export type ResourceOptions = {
@@ -9,6 +11,9 @@ export type ResourceOptions = {
 	noSkills?: boolean;
 	noPromptTemplates?: boolean;
 	noThemes?: boolean;
+	extensionPaths?: string[];
+	noExtensions?: boolean;
+	projectTrusted?: boolean;
 };
 
 export function piAgentDir(): string {
@@ -22,13 +27,14 @@ export class Resources {
 	templates: PromptTemplate[] = [];
 	skills: Skill[] = [];
 	diagnostics: string[] = [];
+	extensions: LoadedExtensions | undefined;
 	readonly #options: ResourceOptions;
 
 	private constructor(cwd: string, options: ResourceOptions) {
 		this.cwd = cwd;
 		this.agentDir = piAgentDir();
 		this.#options = options;
-		this.settings = SettingsManager.create(cwd, this.agentDir);
+		this.settings = SettingsManager.create(cwd, this.agentDir, options.projectTrusted === undefined ? undefined : { projectTrusted: options.projectTrusted });
 	}
 
 	static async load(cwd: string, options: ResourceOptions = {}): Promise<Resources> {
@@ -44,8 +50,9 @@ export class Resources {
 			cwd: this.cwd,
 			agentDir: this.agentDir,
 			settingsManager: this.settings,
-			noExtensions: true,
 			noContextFiles: true,
+			...(o.noExtensions ? { noExtensions: true } : {}),
+			...(o.extensionPaths?.length ? { additionalExtensionPaths: o.extensionPaths } : {}),
 			...(o.skillPaths?.length ? { additionalSkillPaths: o.skillPaths } : {}),
 			...(o.promptPaths?.length ? { additionalPromptTemplatePaths: o.promptPaths } : {}),
 			...(o.themePaths?.length ? { additionalThemePaths: o.themePaths } : {}),
@@ -59,8 +66,10 @@ export class Resources {
 		const loadedThemes = loader.getThemes();
 		this.templates = loadedPrompts.prompts;
 		this.skills = loadedSkills.skills;
+		this.extensions = loader.getExtensions();
 		themes.setRegisteredThemes(loadedThemes.themes);
 		this.diagnostics = [...loadedPrompts.diagnostics, ...loadedSkills.diagnostics, ...loadedThemes.diagnostics].map((d) => `${d.type}: ${d.message}${d.path ? ` (${d.path})` : ""}`);
+		for (const error of this.extensions.errors) this.diagnostics.push(`extension ${error.path}: ${error.error}`);
 	}
 
 	get skillCommands(): boolean {

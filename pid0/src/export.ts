@@ -20,6 +20,12 @@ function block(item: Item, label: (harness: string) => string): string {
 			return `<section class="shell"><h3>$ ${esc(item.data.command)}</h3><pre>${esc(item.data.output)}</pre></section>`;
 		case "switch":
 			return `<p class="meta">switched to ${esc(label(item.data.harness))}</p>`;
+		case "note":
+			return item.data.display ? `<section class="tool"><h3>${esc(item.data.customType)}</h3><pre>${esc(item.data.content)}</pre></section>` : "";
+		case "custom":
+			return "";
+		case "summary":
+			return `<section class="reset"><h3>Branch summary</h3><pre>${esc(item.data.text)}</pre></section>`;
 		case "reset":
 			return `<section class="reset"><h3>Compacted</h3><pre>${esc(item.data.summary ?? "")}</pre></section>`;
 		case "turn":

@@ -6,6 +6,7 @@ import type { RequestPermissionRequest, RequestPermissionResponse } from "@agent
 import {
 	AssistantMessageComponent,
 	BashExecutionComponent,
+	BranchSummaryMessageComponent,
 	CompactionSummaryMessageComponent,
 	copyToClipboard,
 	createBashToolDefinition,
@@ -13,6 +14,8 @@ import {
 	createReadToolDefinition,
 	createWriteToolDefinition,
 	CustomEditor,
+	CustomMessageComponent,
+	ExtensionEditorComponent,
 	DynamicBorder,
 	ExtensionInputComponent,
 	generateDiffString,
@@ -39,6 +42,7 @@ import {
 	isViewportTUI,
 	Loader,
 	Markdown,
+	matchesKey,
 	ProcessTerminal,
 	type SelectItem,
 	SelectList,
@@ -55,6 +59,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { loadMcpServers, updateSettings, VERSION } from "../config.ts";
 import { exportSession, importSession } from "../export.ts";
+import type { ExtensionHost } from "../extensions.ts";
 import { harnessStatus } from "../harnesses.ts";
 import { type AppKeybindings, clipboardImage, keybindingsModule, ScopedModelsSelectorComponent, theme, themes, ui, viewport } from "../pi.ts";
 import { Resources } from "../resources.ts";
@@ -62,7 +67,7 @@ import type { ImageInput, Pid0Event, Pid0Session } from "../session.ts";
 import { type Item, listSessions, type SessionInfo, SessionStore, type ToolData } from "../store.ts";
 import type { Prompt } from "./print.ts";
 
-export type InteractiveOptions = { prompts: Prompt[]; verbose: boolean; tuiMode?: "regular" | "fullscreen"; terminal?: Terminal; resources?: Resources; themeName?: string };
+export type InteractiveOptions = { prompts: Prompt[]; verbose: boolean; tuiMode?: "regular" | "fullscreen"; terminal?: Terminal; resources?: Resources; themeName?: string; host?: ExtensionHost; control?: { shutdown: () => void } };
 
 const COMMANDS: SlashCommand[] = [
 	{ name: "settings", description: "Open settings menu" },
@@ -250,6 +255,7 @@ class ListSelector implements Component {
 class Footer implements Component {
 	readonly #session: Pid0Session;
 	branch: string | undefined;
+	readonly statuses = new Map<string, string>();
 
 	constructor(session: Pid0Session) {
 		this.#session = session;
@@ -281,7 +287,12 @@ class Footer implements Component {
 		const room = width - visibleWidth(left) - 2;
 		if (visibleWidth(right) > room) right = room > 0 ? truncateToWidth(right, room, "") : "";
 		const padding = " ".repeat(Math.max(0, width - visibleWidth(left) - visibleWidth(right)));
-		return [truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "...")), theme.fg("dim", left) + theme.fg("dim", padding + right)];
+		const lines = [truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "...")), theme.fg("dim", left) + theme.fg("dim", padding + right)];
+		if (this.statuses.size > 0) {
+			const line = [...this.statuses.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, text]) => text.replace(/[\r\n\t]+/g, " ")).join(" ");
+			lines.push(truncateToWidth(line, width, theme.fg("dim", "...")));
+		}
+		return lines;
 	}
 }
 
@@ -378,6 +389,11 @@ export class InteractiveApp {
 	readonly #pending = new Container();
 	readonly #status = new Container();
 	readonly #editorSlot = new Container();
+	readonly #widgetsAbove = new Container();
+	readonly #widgetsBelow = new Container();
+	readonly #widgets = new Map<string, { component: Component & { dispose?(): void }; below: boolean }>();
+	readonly #host: ExtensionHost | undefined;
+	#workingMessage: string | undefined;
 	readonly #footerSlot = new Container();
 	readonly #footer: Footer;
 	readonly #keys: AppKeybindings;
@@ -396,6 +412,9 @@ export class InteractiveApp {
 	#lastEscape = 0;
 	#bashMode = false;
 	#images: ImageInput[] = [];
+	#programState: { state: "idle" | "working" | "blocked" | "done" | "error"; kind?: "permission" | "question"; message?: string } = { state: "idle" };
+	#resting: "idle" | "done" | "error" = "idle";
+	#blocked = 0;
 	#done: (code: number) => void = () => {};
 	readonly #options: InteractiveOptions;
 	readonly finished: Promise<number>;
@@ -404,6 +423,7 @@ export class InteractiveApp {
 		this.session = session;
 		this.resources = resources;
 		this.#options = options;
+		this.#host = options.host;
 		this.#keys = ui.keys;
 		const settings = resources.settings;
 		this.#hideThinking = settings.getHideThinkingBlock();
@@ -422,13 +442,15 @@ export class InteractiveApp {
 		this.#document.addChild(this.chat);
 		this.#editorSlot.addChild(this.editor);
 		this.#footerSlot.addChild(this.#footer);
-		for (const part of [this.#document, this.#pending, this.#status, this.#editorSlot, this.#footerSlot]) this.tui.addChild(part);
+		for (const part of [this.#document, this.#pending, this.#status, this.#widgetsAbove, this.#editorSlot, this.#widgetsBelow, this.#footerSlot]) this.tui.addChild(part);
 		if (isViewportTUI(this.tui)) {
 			const layout = viewport.createChatViewport({
 				document: this.#document,
 				pendingMessages: this.#pending,
 				status: this.#status,
+				widgetsAbove: this.#widgetsAbove,
 				editor: this.#editorSlot,
+				widgetsBelow: this.#widgetsBelow,
 				footer: this.#footerSlot,
 				scrollbar: settings.getFullscreenScrollbar(),
 				scrollbarTrackStyle: (text: string) => theme.fg("scrollbarTrack" as never, text),
@@ -439,6 +461,21 @@ export class InteractiveApp {
 		this.#wireEditor();
 		session.subscribe((event) => this.#onEvent(event));
 		session.onPermission = (request, harness) => this.#askPermission(request, harness);
+		if (this.#host) {
+			const host = this.#host;
+			host.onError = (message) => this.warn(message);
+			host.setUI(this.#extensionUI());
+			const shortcuts = host.runner.getShortcuts(this.#keys.getEffectiveConfig() as never);
+			this.editor.onExtensionShortcut = (data) => {
+				for (const [key, shortcut] of shortcuts) {
+					if (!matchesKey(data, key)) continue;
+					this.#run(async () => void (await shortcut.handler(host.runner.createContext())));
+					return true;
+				}
+				return false;
+			};
+		}
+		if (options.control) options.control.shutdown = () => this.stop();
 		this.#refreshCommands();
 		this.#refreshBorder();
 		themes.onThemeChange(() => {
@@ -455,6 +492,19 @@ export class InteractiveApp {
 	static async create(session: Pid0Session, options: InteractiveOptions): Promise<InteractiveApp> {
 		const resources = await prepareUi(session.cwd, options.resources, options.themeName);
 		return new InteractiveApp(session, resources, options);
+	}
+
+	#title(): void {
+		const name = this.session.store.meta.name;
+		const folder = this.session.cwd.split(/[\\/]/).filter(Boolean).pop() ?? this.session.cwd;
+		this.tui.terminal.setTitle(name ? `pid0 - ${name} - ${folder}` : `pid0 - ${folder}`);
+	}
+
+	#program(state: "idle" | "working" | "blocked" | "done" | "error", extra: { kind?: "permission" | "question"; message?: string } = {}): void {
+		const next = { state, ...extra };
+		if (JSON.stringify(next) === JSON.stringify(this.#programState)) return;
+		this.#programState = next;
+		this.tui.terminal.setProgramStatus?.({ ...next, app: "pid0" });
 	}
 
 	#buildHeader(): void {
@@ -479,7 +529,10 @@ export class InteractiveApp {
 		await this.#replay();
 		this.tui.setFocus(this.editor);
 		this.tui.start();
+		this.#title();
+		this.tui.terminal.setProgramStatus?.({ state: "idle", app: "pid0" });
 		for (const line of this.resources.diagnostics) this.warn(line);
+		await this.#host?.start();
 		void this.session.connect().then(
 			() => {
 				this.#refreshBorder();
@@ -492,6 +545,7 @@ export class InteractiveApp {
 
 	stop(code = 0): void {
 		this.#loader?.stop();
+		this.tui.terminal.setProgramStatus?.({ state: "clear", app: "pid0" });
 		this.tui.stop();
 		themes.stopThemeWatcher();
 		if (this.session.persistent && this.session.store.meta.messages > 0) process.stdout.write(`\nResume this session with: pid0 --session ${this.session.store.id.slice(0, 8)}\n`);
@@ -533,9 +587,10 @@ export class InteractiveApp {
 		const taken = new Set(COMMANDS.map((c) => c.name));
 		const templates: SlashCommand[] = this.resources.templates.filter((t) => !taken.has(t.name)).map((t) => ({ name: t.name, description: `${t.description} (prompt)`, ...(t.argumentHint ? { argumentHint: t.argumentHint } : {}) }));
 		const skills: SlashCommand[] = this.resources.skillCommands ? this.resources.skills.map((s) => ({ name: `skill:${s.name}`, description: `${s.description} (skill)` })) : [];
-		for (const c of [...templates, ...skills]) taken.add(c.name);
+		const extension: SlashCommand[] = (this.#host?.commands() ?? []).filter((c) => !taken.has(c.name)).map((c) => ({ name: c.name, description: `${c.description ?? ""} (extension)`.trim() }));
+		for (const c of [...templates, ...skills, ...extension]) taken.add(c.name);
 		const harness: SlashCommand[] = (this.session.native?.commands ?? []).filter((c) => !taken.has(c.name)).map((c) => ({ name: c.name, description: `${c.description} (${this.session.label()})` }));
-		this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider([...COMMANDS, ...templates, ...skills, ...harness], this.session.cwd));
+		this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider([...COMMANDS, ...extension, ...templates, ...skills, ...harness], this.session.cwd));
 	}
 
 	#refreshBorder(): void {
@@ -730,6 +785,19 @@ export class InteractiveApp {
 			case "switch":
 				this.status(`Switched to ${this.session.label(item.data.harness)}`);
 				break;
+			case "note":
+				if (item.data.display) {
+					const message = { role: "custom", customType: item.data.customType, content: item.data.content, display: true, details: item.data.details, timestamp: item.data.at };
+					this.chat.addChild(new CustomMessageComponent(message as never, this.#host?.runner.getMessageRenderer(item.data.customType), getMarkdownTheme(), this.#outputPad));
+				}
+				break;
+			case "summary": {
+				const summary = new BranchSummaryMessageComponent({ role: "branchSummary", summary: item.data.text, fromId: null, timestamp: item.data.at } as never, getMarkdownTheme(), this.#outputPad);
+				summary.setExpanded(this.#expanded);
+				this.chat.addChild(new Spacer(1));
+				this.chat.addChild(summary);
+				break;
+			}
 			case "reset": {
 				const summary = new CompactionSummaryMessageComponent({ role: "compactionSummary", summary: item.data.summary ?? "", tokensBefore: 0, timestamp: item.data.at } as never, getMarkdownTheme(), this.#outputPad);
 				summary.setExpanded(this.#expanded);
@@ -766,7 +834,7 @@ export class InteractiveApp {
 		this.#loader?.stop();
 		this.#loader = undefined;
 		if (busy) {
-			this.#loader = new Loader(this.tui, (s) => theme.fg("accent", s), (s) => theme.fg("muted", s), `${message} (${keyText("app.interrupt")} to interrupt)`);
+			this.#loader = new Loader(this.tui, (s) => theme.fg("accent", s), (s) => theme.fg("muted", s), `${this.#workingMessage ?? message} (${keyText("app.interrupt")} to interrupt)`);
 			this.#status.addChild(this.#loader);
 			this.#loader.start();
 		}
@@ -786,9 +854,16 @@ export class InteractiveApp {
 		switch (event.type) {
 			case "agent_start":
 				this.#setBusy(true);
+				this.#resting = "done";
+				this.#program("working");
 				break;
 			case "agent_settled":
 				this.#setBusy(false);
+				if (event.aborted && this.#resting === "done") this.#resting = "idle";
+				this.#program(this.#resting);
+				break;
+			case "session_info_changed":
+				this.#title();
 				break;
 			case "message_start":
 				if (event.message.role === "user") this.#user(event.message.content);
@@ -840,6 +915,7 @@ export class InteractiveApp {
 				this.#renderQueue();
 				break;
 			case "notice":
+				if (event.level === "error") this.#resting = "error";
 				if (event.level === "error") this.error(event.text);
 				else if (event.level === "warning") this.warn(event.text);
 				else this.status(event.text);
@@ -852,6 +928,15 @@ export class InteractiveApp {
 			case "thinking_level_changed":
 				this.#refreshBorder();
 				break;
+			case "entry_appended":
+				this.#item(event.item);
+				break;
+			case "branch_summary_start":
+				this.#setBusy(true, "Summarizing branch...");
+				break;
+			case "branch_summary_end":
+				this.#setBusy(false);
+				break;
 			case "compaction_start":
 				this.#setBusy(true, event.reason === "threshold" ? "Auto-compacting..." : "Compacting context...");
 				break;
@@ -860,6 +945,9 @@ export class InteractiveApp {
 				if (event.summary) void this.#replay();
 				break;
 			case "session_changed":
+				this.#title();
+				this.#resting = "idle";
+				this.#program("idle");
 				void this.#replay();
 				this.#renderQueue();
 				void this.session.connect().then(
@@ -912,9 +1000,159 @@ export class InteractiveApp {
 		return run;
 	}
 
+	input(title: string, initialValue?: string): Promise<string | undefined> {
+		return new Promise((resolve) => {
+			this.showSelector((done) => {
+				const component = new ExtensionInputComponent(
+					title,
+					undefined,
+					(value) => {
+						done();
+						resolve(value);
+					},
+					() => {
+						done();
+						resolve(undefined);
+					},
+					{ tui: this.tui, ...(initialValue ? { initialValue } : {}) },
+				);
+				return { component, dispose: () => component.dispose() };
+			});
+		});
+	}
+
+	#extensionUI(): Parameters<ExtensionHost["setUI"]>[0] {
+		const app = this;
+		const footerData = { getGitBranch: () => this.#footer.branch ?? null, getExtensionStatuses: () => this.#footer.statuses, getAvailableProviderCount: () => 1, onBranchChange: () => () => {} };
+		const context = {
+			select: (title: string, options: string[]) => app.select(title, options.map((o) => ({ value: o, label: o })), { search: false }),
+			confirm: async (title: string, message: string) => (await app.select(`${title}${message ? `: ${message}` : ""}`, [{ value: "yes", label: "Yes" }, { value: "no", label: "No" }], { search: false })) === "yes",
+			input: (title: string) => app.input(title),
+			notify: (message: string, type?: "info" | "warning" | "error") => {
+				if (type === "error") app.error(message);
+				else if (type === "warning") app.warn(message);
+				else app.status(message);
+			},
+			onTerminalInput: (handler: (data: string) => unknown) => app.tui.addInputListener((data) => handler(data) as never),
+			setStatus: (key: string, text: string | undefined) => {
+				if (text === undefined) app.#footer.statuses.delete(key);
+				else app.#footer.statuses.set(key, text);
+				app.tui.requestRender();
+			},
+			setWorkingMessage: (message?: string) => {
+				app.#workingMessage = message;
+				app.#loader?.setMessage(`${message ?? "Working..."} (${keyText("app.interrupt")} to interrupt)`);
+			},
+			setWorkingVisible: () => {},
+			setWorkingIndicator: () => {},
+			setHiddenThinkingLabel: (label?: string) => {
+				for (const block of app.#assistants) block.setHiddenThinkingLabel(label ?? "Thinking...");
+				app.tui.requestRender();
+			},
+			setWidget: (key: string, content: string[] | ((tui: TUI, t: typeof theme) => Component & { dispose?(): void }) | undefined, options?: { placement?: string }) => {
+				const existing = app.#widgets.get(key);
+				if (existing) {
+					(existing.below ? app.#widgetsBelow : app.#widgetsAbove).removeChild(existing.component);
+					existing.component.dispose?.();
+					app.#widgets.delete(key);
+				}
+				if (content !== undefined) {
+					const below = options?.placement === "belowEditor";
+					const component = Array.isArray(content) ? new Text(content.join("\n"), 1, 0) : content(app.tui, theme);
+					app.#widgets.set(key, { component, below });
+					(below ? app.#widgetsBelow : app.#widgetsAbove).addChild(component);
+				}
+				app.tui.requestRender();
+			},
+			setFooter: (factory: ((tui: TUI, t: typeof theme, data: typeof footerData) => Component) | undefined) => {
+				app.#footerSlot.clear();
+				app.#footerSlot.addChild(factory ? factory(app.tui, theme, footerData) : app.#footer);
+				app.tui.requestRender();
+			},
+			setHeader: (factory: ((tui: TUI, t: typeof theme) => Component) | undefined) => {
+				if (factory) {
+					app.#header.clear();
+					app.#header.addChild(factory(app.tui, theme));
+				} else app.#buildHeader();
+				app.tui.requestRender();
+			},
+			setTitle: (title: string) => app.tui.terminal.setTitle(title),
+			custom: <T,>(factory: (tui: TUI, t: typeof theme, keys: AppKeybindings, done: (result: T) => void) => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>, options?: { overlay?: boolean; overlayOptions?: unknown }) =>
+				new Promise<T>((resolve, reject) => {
+					let close: () => void = () => {};
+					const finish = (result: T) => {
+						close();
+						resolve(result);
+					};
+					Promise.resolve(factory(app.tui, theme, app.#keys, finish)).then((component) => {
+						if (options?.overlay) {
+							const overlayOptions = typeof options.overlayOptions === "function" ? (options.overlayOptions as () => object)() : options.overlayOptions;
+							const handle = app.tui.showOverlay(component, overlayOptions as never);
+							close = () => {
+								handle.hide();
+								component.dispose?.();
+								app.tui.setFocus(app.editor);
+								app.tui.requestRender();
+							};
+						} else app.showSelector((done) => ((close = done), { component, dispose: () => component.dispose?.() }));
+					}, reject);
+				}),
+			pasteToEditor: (text: string) => app.editor.handleInput(`\x1b[200~${text}\x1b[201~`),
+			setEditorText: (text: string) => app.editor.setText(text),
+			getEditorText: () => app.editor.getExpandedText(),
+			editor: (title: string, prefill?: string) =>
+				new Promise<string | undefined>((resolve) => {
+					app.showSelector((done) => {
+						const component = new ExtensionEditorComponent(
+							app.tui,
+							app.#keys as never,
+							title,
+							prefill,
+							(value) => {
+								done();
+								resolve(value);
+							},
+							() => {
+								done();
+								resolve(undefined);
+							},
+						);
+						return { component };
+					});
+				}),
+			addAutocompleteProvider: () => {},
+			setEditorComponent: () => {},
+			getEditorComponent: () => undefined,
+			get theme() {
+				return theme;
+			},
+			getAllThemes: () => themes.getAvailableThemes().map((name) => ({ name, path: undefined })),
+			getTheme: () => undefined,
+			setTheme: (value: unknown) => {
+				if (typeof value !== "string") return { success: false, error: "pid0 takes a theme by name" };
+				const result = themes.setTheme(value, false);
+				if (result.success) app.resources.settings.setTheme(value);
+				app.tui.invalidate();
+				app.tui.requestRender();
+				return result;
+			},
+			getToolsExpanded: () => app.#expanded,
+			setToolsExpanded: (expanded: boolean) => {
+				app.#expanded = expanded;
+				for (const block of app.#toolBlocks) block.setExpanded(expanded);
+				for (const block of app.#bashes) block.setExpanded(expanded);
+				app.tui.requestRender(true);
+			},
+		};
+		return context as never;
+	}
+
 	async #askPermission(request: RequestPermissionRequest, harness: string): Promise<RequestPermissionResponse> {
 		const title = `${this.session.label(harness)} wants to run: ${request.toolCall.title ?? "a tool"}`;
+		this.#blocked++;
+		this.#program("blocked", { kind: "permission", message: title });
 		const chosen = await this.select(title, request.options.map((o) => ({ value: o.optionId, label: o.name, description: o.kind.replace(/_/g, " ") })), { search: false, hint: `${rawKeyHint("enter", "to answer")}  ${rawKeyHint("esc", "to reject")}` });
+		if (--this.#blocked === 0) this.#program(this.session.isStreaming ? "working" : this.#resting);
 		return chosen ? { outcome: { outcome: "selected", optionId: chosen } } : { outcome: { outcome: "cancelled" } };
 	}
 
@@ -945,8 +1183,12 @@ export class InteractiveApp {
 			if (text.startsWith("/")) {
 				const space = text.search(/\s/);
 				const name = (space < 0 ? text.slice(1) : text.slice(1, space)).toLowerCase();
-				if (COMMANDS.some((c) => c.name === name) || ["help", "exit", "trust", "bug", "theme"].includes(name)) {
+				if (COMMANDS.some((c) => c.name === name) || ["trust", "bug"].includes(name)) {
 					await this.command(name, space < 0 ? "" : text.slice(space + 1).trim());
+					this.tui.requestRender();
+					return;
+				}
+				if (this.#host && (await this.#host.runCommand(space < 0 ? text.slice(1) : text.slice(1, space), space < 0 ? "" : text.slice(space + 1).trim()))) {
 					this.tui.requestRender();
 					return;
 				}
@@ -961,13 +1203,11 @@ export class InteractiveApp {
 		const session = this.session;
 		switch (name) {
 			case "quit":
-			case "exit":
 				this.stop();
 				return;
 			case "settings":
 				this.#settings();
 				return;
-			case "help":
 			case "hotkeys":
 				this.#hotkeys();
 				return;
@@ -1197,7 +1437,7 @@ export class InteractiveApp {
 				this.#refreshCommands();
 				this.#buildHeader();
 				this.tui.invalidate();
-				this.status("Reloaded keybindings, skills, prompts, themes, and settings");
+				this.status(`Reloaded keybindings, skills, prompts, themes, and settings${this.#host ? ". Extensions are reloaded when pid0 restarts." : ""}`);
 				for (const line of this.resources.diagnostics) this.warn(line);
 				return;
 			}
@@ -1215,9 +1455,6 @@ export class InteractiveApp {
 				return;
 			case "bug":
 				this.status("/bug sends reports to pi's developers and does not apply to pid0. Use /debug to write a log you can attach to an issue.");
-				return;
-			case "theme":
-				this.#settings();
 				return;
 		}
 	}
@@ -1450,7 +1687,7 @@ export class InteractiveApp {
 		this.tui.requestRender();
 	}
 
-	async #tree(): Promise<void> {
+	async #tree(initial?: string): Promise<void> {
 		const session = this.session;
 		const tree = await session.store.tree();
 		const shown = tree.items.filter((i) => i.kind === "user" || i.kind === "assistant" || i.kind === "reset" || i.kind === "tool");
@@ -1496,22 +1733,54 @@ export class InteractiveApp {
 					done();
 					this.#run(async () => {
 						const picked = shown.find((i) => String(i.id) === entryId)!;
+						let target: number | undefined;
 						if (picked.kind === "user") {
 							const parentId = nodes.get(picked.id)!.entry.parentId as string | null;
-							const before = parentId === null ? undefined : tree.items.findLast((i) => i.id < picked.id && i.id >= Number(parentId) && this.#sameLine(tree, picked, i));
-							await session.navigate(before?.id);
-							this.editor.setText(picked.data.text);
+							target = parentId === null ? undefined : tree.items.findLast((i) => i.id < picked.id && i.id >= Number(parentId) && this.#sameLine(tree, picked, i))?.id;
 						} else {
 							const next = tree.items.find((i) => i.id > picked.id && i.conversation === picked.conversation && (i.kind === "user" || i.kind === "assistant" || i.kind === "tool"));
-							const end = tree.items.findLast((i) => i.conversation === picked.conversation && i.id > picked.id && (!next || i.id < next.id));
-							await session.navigate(end?.id ?? picked.id);
+							target = tree.items.findLast((i) => i.conversation === picked.conversation && i.id > picked.id && (!next || i.id < next.id))?.id ?? picked.id;
 						}
+						if (target !== undefined && target === (await session.store.lastEntry())) {
+							this.status("Already at this point");
+							return;
+						}
+						let summarize = false;
+						let instructions: string | undefined;
+						if (!this.resources.settings.getBranchSummarySkipPrompt()) {
+							for (;;) {
+								const choice = await this.select("Summarize branch?", [{ value: "no", label: "No summary" }, { value: "yes", label: "Summarize" }, { value: "custom", label: "Summarize with custom prompt" }], { search: false });
+								if (choice === undefined) {
+									await this.#tree(entryId);
+									return;
+								}
+								summarize = choice !== "no";
+								if (choice === "custom") {
+									instructions = await this.input("Custom summarization instructions");
+									if (instructions === undefined) continue;
+								}
+								break;
+							}
+						}
+						if (session.isStreaming) {
+							this.#dequeue();
+							const settled = session.waitForSettled();
+							await session.abort();
+							await settled;
+						}
+						const result = await session.navigate(target, { summarize, ...(instructions ? { instructions } : {}) });
+						if (result.aborted) {
+							this.status("Branch summarization cancelled");
+							await this.#tree(entryId);
+							return;
+						}
+						if (picked.kind === "user" && !this.editor.getText().trim()) this.editor.setText(picked.data.text);
 						this.status("Navigated to selected point");
 					});
 				},
 				() => done(),
 				undefined,
-				leaf ? String(leaf.id) : undefined,
+				initial ?? (leaf ? String(leaf.id) : undefined),
 				this.resources.settings.getTreeFilterMode(),
 			);
 			selector.onCopy = (text) => {

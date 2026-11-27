@@ -40,6 +40,9 @@ export type TurnData = {
 	at: number;
 };
 export type SwitchData = { harness: string; model?: string; from?: string; at: number };
+export type CustomData = { customType: string; data?: unknown; at: number };
+export type NoteData = { customType: string; content: string; display: boolean; details?: unknown; at: number };
+export type SummaryData = { text: string; harness: string; at: number };
 export type ResetData = { summary?: string; by?: string; at: number };
 
 export type Item = { id: number; conversation: number } & (
@@ -50,6 +53,9 @@ export type Item = { id: number; conversation: number } & (
 	| { kind: "shell"; data: ShellData }
 	| { kind: "turn"; data: TurnData }
 	| { kind: "switch"; data: SwitchData }
+	| { kind: "summary"; data: SummaryData }
+	| { kind: "custom"; data: CustomData }
+	| { kind: "note"; data: NoteData }
 	| { kind: "reset"; data: ResetData }
 );
 export type ItemKind = Item["kind"];
@@ -98,6 +104,9 @@ const KINDS: Record<string, ItemKind> = {
 	"pid0.shell": "shell",
 	"pid0.turn": "turn",
 	"pid0.switch": "switch",
+	"pid0.summary": "summary",
+	"pid0.custom": "custom",
+	"pid0.note": "note",
 };
 
 function toItem(entry: EntryRecord): Item | undefined {
@@ -120,6 +129,8 @@ function modelMessages(kind: ItemKind, data: Record<string, any>): unknown[] | u
 	if (kind === "assistant" && data.text) {
 		return [{ role: "assistant", content: [{ type: "text", text: data.text }], api: "acp", provider: data.harness, model: data.model ?? "default", usage: ZERO_USAGE, stopReason: "stop", timestamp: data.at }];
 	}
+	if (kind === "note") return [{ role: "user", content: data.content, timestamp: data.at }];
+	if (kind === "summary") return [{ role: "user", content: `Summary of a branch of this conversation that was explored and then left:\n${data.text}`, timestamp: data.at }];
 	if (kind === "shell" && !data.excluded) return [{ role: "user", content: `Ran \`${data.command}\`\n\`\`\`\n${data.output}\n\`\`\``, timestamp: data.at }];
 	return undefined;
 }
@@ -377,6 +388,19 @@ export class SessionStore {
 		const fork = await source.fork(entryId as never, { ownership: { kind: "ownerless" }, init }, context);
 		await this.#activate(fork);
 		return this.branch;
+	}
+
+	async lineage(entryId: number | undefined): Promise<Set<number>> {
+		const ids = new Set<number>();
+		if (entryId === undefined) return ids;
+		const owner = await this.#owner(entryId);
+		let cursor: never | undefined;
+		do {
+			const page = await owner.entries({ order: "ascending", maxEntryId: entryId as never }, 500, cursor, context);
+			for (const entry of page.items) ids.add(entry.id as unknown as number);
+			cursor = page.next as never | undefined;
+		} while (cursor !== undefined);
+		return ids;
 	}
 
 	async #owner(entryId: number): Promise<Conversation> {

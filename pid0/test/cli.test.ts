@@ -144,3 +144,18 @@ test("pi's harness-owned options are refused with the reason", async () => {
 	const parsed = parseArgs(["-p", "--model", "claude/opus:high", "@a.txt", "hi", "--", "-not-a-flag"]);
 	assert.deepEqual([parsed.print, parsed.model, parsed.files, parsed.messages], [true, "claude/opus:high", ["a.txt"], ["hi", "-not-a-flag"]]);
 });
+
+test("extensions work outside the terminal UI: -e, an extension flag, an extension command, unknown flags", async () => {
+	const { run } = setup();
+	const extension = join(here, "fixtures", "sample-extension.ts");
+	const transformed = await run(["--no-session", "-e", extension, "--loud", "-p", "ping"]);
+	assert.equal(transformed.code, 0, transformed.err);
+	assert.match(transformed.out, /echo: pong please .*mcp 1\)/);
+	const asked = await run(["--no-session", "-e", extension, "-p", "/ask over cli"]);
+	assert.match(asked.out, /echo: from extension: over cli/);
+	const unknown = await run(["--no-session", "-e", extension, "--bogus", "-p", "x"]);
+	assert.equal(unknown.code, 2);
+	assert.match(unknown.err, /unknown option --bogus/);
+	const none = await run(["--no-session", "-ne", "-e", extension, "-p", "ping"]);
+	assert.match(none.out, /echo: pong please/);
+});
