@@ -22,6 +22,8 @@ export function narrateItem(item: Item, label: (harness: string) => string): str
 		}
 		case "shell":
 			return item.data.excluded ? undefined : `[User ran \`${item.data.command}\` (exit ${item.data.exitCode ?? "?"})]\n${clip(item.data.output.trim(), TOOL_OUTPUT * 2)}`;
+		case "note":
+			return item.data.content ? `[Note added to the conversation by the user's tooling: ${item.data.customType}]\n${item.data.content}` : undefined;
 		case "summary":
 			return `[Summary of a branch of this conversation that was explored and then left]\n${item.data.text}`;
 		case "reset":

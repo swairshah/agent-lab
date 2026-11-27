@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { stripTerminalSequences, type Terminal } from "@earendil-works/pi-tui";
 import { InteractiveApp } from "../src/modes/interactive.ts";
-import { startSession } from "./helpers.ts";
+import { here, startSession } from "./helpers.ts";
 
 class FakeTerminal implements Terminal {
 	columns = 100;
@@ -38,10 +38,19 @@ const ENTER = "\r";
 const DOWN = "\x1b[B";
 const ESC = "\x1b";
 
-async function open(options: Parameters<typeof startSession>[0] = {}) {
-	const started = await startSession(options);
+async function open(options: Parameters<typeof startSession>[0] & { extensions?: string[]; flags?: [string, string | true][] } = {}) {
+	const { extensions, flags, ...sessionOptions } = options;
+	const started = await startSession(sessionOptions);
 	const terminal = new FakeTerminal();
-	const app = await InteractiveApp.create(started.session, { prompts: [], verbose: false, terminal, tuiMode: "regular" });
+	let extra = {};
+	if (extensions) {
+		const { Resources } = await import("../src/resources.ts");
+		const { ExtensionHost } = await import("../src/extensions.ts");
+		const resources = await Resources.load(started.cwd, { extensionPaths: extensions });
+		const host = await ExtensionHost.load(started.session, resources, { mode: "tui", flags: new Map(flags ?? []), shutdown: () => {} });
+		extra = { resources, host };
+	}
+	const app = await InteractiveApp.create(started.session, { prompts: [], verbose: false, terminal, tuiMode: "regular", ...extra });
 	await app.start();
 	await started.session.connect();
 	const screen = () => stripTerminalSequences(app.tui.render(terminal.columns).join("\n"));
@@ -237,4 +246,52 @@ test("double escape opens the tree; going back to a message can summarize the br
 	await ui.type("three");
 	await ui.until(() => ui.screen().includes("echo: three (prompt 1, context yes"), "an answer on the new branch");
 	await ui.close();
+});
+
+test("pi extensions load: commands, flags, shortcuts, widgets, status, input events, messages and tools", async () => {
+	const ui = await open({ extensions: [join(here, "fixtures", "sample-extension.ts")], flags: [["loud", true]] });
+	await ui.until(() => ui.screen().includes("sample widget line"), "the extension's widget");
+	await ui.type("/hello bob");
+	await ui.until(() => ui.screen().includes("hello bob (loud=true)"), "the extension command");
+	await ui.until(() => ui.screen().includes("turns:0"), "the extension status in the footer");
+
+	await ui.type("ping");
+	await ui.until(() => ui.screen().includes("echo: pong please"), "the input event to transform the prompt");
+	assert.match(ui.screen(), /mcp 1\)/);
+	await ui.until(() => ui.screen().includes("turns:1"), "the agent_end handler");
+	await ui.type("swallow");
+	await new Promise((r) => setTimeout(r, 200));
+	assert.ok(!ui.screen().includes("echo: swallow"));
+
+	await ui.type("/ask something");
+	await ui.until(() => ui.screen().includes("echo: from extension: something"), "a prompt sent by the extension");
+	await ui.type("/note milk");
+	await ui.until(() => ui.screen().includes("remember milk"), "the extension's message");
+	ui.terminal.input("\x19");
+	await ui.until(() => ui.screen().includes("shortcut pressed"), "the extension shortcut");
+
+	const items = await ui.session.messages();
+	assert.ok(items.some((i) => i.kind === "custom" && i.data.customType === "sample-state"));
+	assert.ok(items.some((i) => i.kind === "note" && i.data.content === "remember milk"));
+
+	await ui.close();
+});
+
+test("extension tools are served to the harness over MCP", async () => {
+	const { Resources } = await import("../src/resources.ts");
+	const { ExtensionHost } = await import("../src/extensions.ts");
+	const started = await startSession();
+	const resources = await Resources.load(started.cwd, { extensionPaths: [join(here, "fixtures", "sample-extension.ts")] });
+	const host = (await ExtensionHost.load(started.session, resources, { mode: "print", flags: new Map(), shutdown: () => {} }))!;
+	const call = async (body: unknown, token = host.mcpToken) => fetch(host.mcpUrl!, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
+	assert.equal((await call({ jsonrpc: "2.0", id: 1, method: "tools/list" }, "wrong")).status, 401);
+	const init = (await (await call({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } })).json()) as { result: { protocolVersion: string } };
+	assert.equal(init.result.protocolVersion, "2025-06-18");
+	assert.equal((await call({ jsonrpc: "2.0", method: "notifications/initialized" })).status, 202);
+	const list = (await (await call({ jsonrpc: "2.0", id: 2, method: "tools/list" })).json()) as { result: { tools: { name: string }[] } };
+	assert.deepEqual(list.result.tools.map((t) => t.name), ["sample_add"]);
+	const result = (await (await call({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "sample_add", arguments: { a: 2, b: 3 } } })).json()) as { result: { content: { text: string }[]; isError: boolean } };
+	assert.deepEqual(result.result, { content: [{ type: "text", text: "5" }], isError: false });
+	await host.dispose();
+	await started.session.dispose();
 });

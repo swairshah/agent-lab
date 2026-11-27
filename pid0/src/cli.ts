@@ -250,7 +250,6 @@ async function main(argv: string[]): Promise<number> {
 
 	const mode = args.mode === "rpc" ? "rpc" : args.mode === "json" ? "json" : args.print || !process.stdin.isTTY || !process.stdout.isTTY ? "print" : "interactive";
 	const piped = mode !== "rpc" && mode !== "interactive" && !process.stdin.isTTY ? await readStdin() : "";
-	const prompts = buildPrompts(args, piped, cwd);
 	const opened = await openStore(args, root, cwd, mode === "interactive");
 	if (!opened) return 0;
 	if (opened.cwd !== cwd) {
@@ -260,7 +259,26 @@ async function main(argv: string[]): Promise<number> {
 	if (args.name && opened.store.meta.name !== args.name) await opened.store.setName(args.name);
 	const systemPrompt = [args.systemPrompt, ...args.appendSystemPrompt].filter((s): s is string => s !== undefined).map(textOrFile).join("\n\n");
 	const { Resources } = await import("./resources.ts");
-	const resources = await Resources.load(cwd, { skillPaths: args.skills, promptPaths: args.promptTemplates, themePaths: args.themes, noSkills: args.noSkills, noPromptTemplates: args.noPromptTemplates, noThemes: args.noThemes });
+	const resourceOptions = { skillPaths: args.skills, promptPaths: args.promptTemplates, themePaths: args.themes, noSkills: args.noSkills, noPromptTemplates: args.noPromptTemplates, noThemes: args.noThemes, extensionPaths: args.extensions, noExtensions: args.noExtensions, ...(args.approve !== undefined ? { projectTrusted: args.approve } : {}) };
+	let resources: Awaited<ReturnType<typeof Resources.load>>;
+	const flags = new Map<string, string | true>();
+	try {
+		resources = await Resources.load(cwd, resourceOptions);
+		const known = new Map<string, string>();
+		for (const extension of resources.extensions?.extensions ?? []) for (const [name, flag] of extension.flags) known.set(name, flag.type);
+		for (const flag of args.extensionFlags) {
+			const type = known.get(flag.name);
+			if (!type) throw new UsageError(`unknown option --${flag.name} (see pid0 --help)`);
+			if (type === "boolean" && flag.value !== undefined && flag.value !== "true" && flag.value !== "false") {
+				args.messages.unshift(flag.value);
+				flags.set(flag.name, true);
+			} else flags.set(flag.name, flag.value ?? true);
+		}
+	} catch (error) {
+		await opened.store.close();
+		throw error;
+	}
+	const prompts = buildPrompts(args, piped, cwd);
 	let session: Pid0Session;
 	try {
 		session = await Pid0Session.start({
@@ -284,12 +302,30 @@ async function main(argv: string[]): Promise<number> {
 		throw error;
 	}
 	session.expand = (text) => resources.expand(text);
+	const { ExtensionHost } = await import("./extensions.ts");
+	const control: { shutdown: () => void } = { shutdown: () => {} };
 	let code = 0;
+	let host: Awaited<ReturnType<typeof ExtensionHost.load>>;
 	try {
-		if (mode === "rpc") code = await (await import("./modes/rpc.ts")).runRpc(session);
-		else if (mode === "interactive") code = await (await import("./modes/interactive.ts")).runInteractive(session, { prompts, verbose: args.verbose, resources, ...(args.useTheme ? { themeName: args.useTheme } : {}), ...(args.tuiMode ? { tuiMode: args.tuiMode } : {}) });
-		else code = await (await import("./modes/print.ts")).runPrint(session, prompts, mode === "json" ? "json" : "text");
+		host = await ExtensionHost.load(session, resources, {
+			mode: mode === "interactive" ? "tui" : mode,
+			flags,
+			shutdown: () => control.shutdown(),
+			reload: async () => {
+				await resources.reload();
+			},
+		});
+		if (mode === "rpc") {
+			await host?.start();
+			code = await (await import("./modes/rpc.ts")).runRpc(session);
+		} else if (mode === "interactive") {
+			code = await (await import("./modes/interactive.ts")).runInteractive(session, { prompts, verbose: args.verbose, resources, control, ...(host ? { host } : {}), ...(args.useTheme ? { themeName: args.useTheme } : {}), ...(args.tuiMode ? { tuiMode: args.tuiMode } : {}) });
+		} else {
+			await host?.start();
+			code = await (await import("./modes/print.ts")).runPrint(session, prompts, mode === "json" ? "json" : "text");
+		}
 	} finally {
+		await host?.dispose().catch(() => {});
 		await session.dispose();
 	}
 	return code;

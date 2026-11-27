@@ -16,7 +16,7 @@ type ThemeModule = {
 	setRegisteredThemes(themes: Theme[]): void;
 };
 
-export type AppKeybindings = TuiKeybindingsManager & { reload(): void; getKeys(id: string): string[]; matches(data: string, id: string): boolean };
+export type AppKeybindings = TuiKeybindingsManager & { reload(): void; getKeys(id: string): string[]; matches(data: string, id: string): boolean; getEffectiveConfig(): Record<string, unknown> };
 
 type KeybindingsModule = { KeybindingsManager: { create(agentDir?: string): AppKeybindings }; KEYBINDINGS: Record<string, { defaultKeys: string | string[]; description?: string }> };
 type PromptsModule = { expandPromptTemplate(text: string, templates: PromptTemplate[]): string };
