@@ -186,3 +186,18 @@ test("an agent that is missing or fails is reported, not thrown", async () => {
 	assert.match(answers(events).at(-1)!, /echo: ok/);
 	await session.dispose();
 });
+
+test("Claude Code gets the user's own login: an unapproved API key in the environment is not passed on", async () => {
+	const { harnessEnv, resolveHarness } = await import("../src/harnesses.ts");
+	const home = tempDir();
+	const claude = resolveHarness("claude", {});
+	const base = { PATH: process.env.PATH, CLAUDE_CONFIG_DIR: home, ANTHROPIC_API_KEY: "sk-ant-0123456789abcdefghijklmnop" };
+	assert.deepEqual(harnessEnv(claude, base).dropped, ["ANTHROPIC_API_KEY"]);
+	assert.equal(harnessEnv(claude, base).env.ANTHROPIC_API_KEY, undefined);
+	writeFileSync(join(home, ".claude.json"), JSON.stringify({ customApiKeyResponses: { approved: [base.ANTHROPIC_API_KEY.slice(-20)] } }));
+	assert.equal(harnessEnv(claude, base).env.ANTHROPIC_API_KEY, base.ANTHROPIC_API_KEY);
+	const forced = resolveHarness("claude", { harnesses: { claude: { useApiKey: true } } });
+	assert.equal(harnessEnv(forced, { ...base, CLAUDE_CONFIG_DIR: tempDir() }).env.ANTHROPIC_API_KEY, base.ANTHROPIC_API_KEY);
+	const codex = resolveHarness("codex", {});
+	assert.equal(harnessEnv(codex, { ...base, OPENAI_API_KEY: "sk-x" }).env.OPENAI_API_KEY, "sk-x");
+});

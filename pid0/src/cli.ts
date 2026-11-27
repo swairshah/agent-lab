@@ -5,7 +5,7 @@ import { AcpAgent } from "./acp.ts";
 import { type Args, HELP, parseArgs, UsageError } from "./args.ts";
 import { editMcpServers, loadMcpServers, loadSettings, type McpServerConfig, type Settings, sessionsRoot, VERSION } from "./config.ts";
 import { exportSession } from "./export.ts";
-import { harnessLabel, harnessStatus, resolveHarness } from "./harnesses.ts";
+import { harnessEnv, harnessLabel, harnessStatus, resolveHarness } from "./harnesses.ts";
 import type { Prompt } from "./modes/print.ts";
 import { type ImageInput, Pid0Session } from "./session.ts";
 import { copySession, findSession, listSessions, type SessionInfo, SessionStore } from "./store.ts";
@@ -137,7 +137,7 @@ async function commandAuth(rest: string[], settings: Settings, cwd: string): Pro
 			agent.close();
 			const [command, ...base] = harness.command;
 			const code = await new Promise<number>((done) => {
-				const child = spawn(command!, [...base, ...(terminal.args ?? [])], { stdio: "inherit", env: { ...process.env, ...harness.env, ...terminal.env } });
+				const child = spawn(command!, [...base, ...(terminal.args ?? [])], { stdio: "inherit", env: { ...harnessEnv(harness).env, ...terminal.env } });
 				child.on("exit", (c) => done(c ?? 1));
 				child.on("error", () => done(1));
 			});

@@ -8,6 +8,7 @@ export type HarnessOverride = {
 	label?: string;
 	command?: string[];
 	env?: Record<string, string>;
+	useApiKey?: boolean;
 	disabled?: boolean;
 };
 

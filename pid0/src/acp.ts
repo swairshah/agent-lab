@@ -20,7 +20,7 @@ import {
 	type SessionUpdate,
 } from "@agentclientprotocol/sdk/unstable";
 import { VERSION } from "./config.ts";
-import type { ResolvedHarness } from "./harnesses.ts";
+import { harnessEnv, type ResolvedHarness } from "./harnesses.ts";
 import { Terminals } from "./terminals.ts";
 
 export type Choice = { id: string; name: string; description?: string };
@@ -139,7 +139,9 @@ export class AcpAgent {
 		this.#host = host;
 		this.#terminals = new Terminals(cwd);
 		const [command, ...args] = harness.command;
-		this.#child = spawn(command!, args, { cwd, env: { ...process.env, ...harness.env }, stdio: ["pipe", "pipe", "pipe"] });
+		const { env, dropped } = harnessEnv(harness);
+		if (dropped.length) host.log?.(`[${harness.id}] not passing ${dropped.join(", ")}: using the login ${harness.label} itself uses (set "useApiKey": true for this harness in settings.json to use the key)`);
+		this.#child = spawn(command!, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
 		this.#child.stderr!.on("data", (chunk: Buffer) => {
 			for (const line of chunk.toString("utf8").split("\n")) {
 				if (!line.trim()) continue;
