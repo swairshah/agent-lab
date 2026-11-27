@@ -589,7 +589,7 @@ export class Pid0Session {
 		const primedKey = `${harness}:${state.sessionId}`;
 		const seen = (await this.store.natives()).agents[harness]?.seen ?? 0;
 		const unseen = (await this.store.contextItems()).filter((item) => item.id > seen);
-		const told = narrate(unseen, (h) => this.label(h), seen === 0);
+		const told = narrate(unseen, (h) => this.label(h), seen === 0, this.settings.handoff ?? "anonymous");
 		if (told) blocks.push({ type: "text", text: told });
 		if (!this.#primed.has(primedKey)) {
 			this.#primed.add(primedKey);

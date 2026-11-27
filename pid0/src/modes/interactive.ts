@@ -71,6 +71,7 @@ const COMMANDS: SlashCommand[] = [
 	{ name: "scoped-models", description: "Enable/disable models for Ctrl+P cycling" },
 	{ name: "thinking", description: "Select thinking level", argumentHint: "[level]" },
 	{ name: "mode", description: "Select the harness mode (plan, accept edits, ...)", argumentHint: "[mode]" },
+	{ name: "handoff", description: "Whether a harness you switch to is told which agents came before", argumentHint: "[anonymous|named]" },
 	{ name: "permissions", description: "How tool permission requests are answered", argumentHint: "[ask|allow|deny]" },
 	{ name: "export", description: "Export session (HTML default, or specify path: .html/.jsonl)", argumentHint: "[path]" },
 	{ name: "import", description: "Import and resume a session from a JSONL file", argumentHint: "<path>" },
@@ -669,6 +670,7 @@ export class InteractiveApp {
 	}
 
 	#user(text: string): void {
+		if (this.chat.children.length > 0) this.chat.addChild(new Spacer(1));
 		this.chat.addChild(new UserMessageComponent(text, getMarkdownTheme(), this.#outputPad));
 	}
 
@@ -977,7 +979,7 @@ export class InteractiveApp {
 				}
 				if (!target) return;
 				await session.setHarness(target);
-				this.status(`Harness: ${session.label()}. It is told what happened so far with its next prompt.`);
+				this.status(`Harness: ${session.label()}. It gets the conversation so far with its next prompt.`);
 				await session.connect();
 				this.#refreshBorder();
 				return;
@@ -1037,6 +1039,16 @@ export class InteractiveApp {
 				if (state.modes.length === 0) throw new Error(`${session.label()} does not offer modes over ACP`);
 				const mode = arg || (await this.select("Select mode", state.modes.map((t) => ({ value: t.id, label: t.name, ...(t.description ? { description: t.description } : {}) })), { ...(state.currentMode ? { current: state.currentMode } : {}), search: false }));
 				if (mode) this.status(`Mode: ${await session.setMode(mode)}`);
+				return;
+			}
+			case "handoff": {
+				const current = session.settings.handoff ?? "anonymous";
+				const mode = arg || (await this.select("Handoff when switching harness", [{ value: "anonymous", label: "anonymous", description: "earlier replies are the assistant's; the switch is not mentioned" }, { value: "named", label: "named", description: "earlier replies are labelled with the agent that wrote them" }], { current, search: false }));
+				if (!mode) return;
+				if (mode !== "anonymous" && mode !== "named") throw new Error("handoff is anonymous or named");
+				session.settings.handoff = mode;
+				updateSettings((s) => void (s.handoff = mode));
+				this.status(`Handoff: ${mode}`);
 				return;
 			}
 			case "permissions": {

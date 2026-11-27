@@ -15,6 +15,7 @@ export type Args = {
 	listModels?: string | true;
 	agentMode?: string;
 	permissions?: "ask" | "allow" | "deny";
+	handoff?: "anonymous" | "named";
 	continue: boolean;
 	resume: boolean;
 	session?: string;
@@ -128,6 +129,9 @@ export function parseArgs(argv: string[]): Args {
 			case "--permissions":
 				args.permissions = oneOf(arg, ["ask", "allow", "deny"] as const);
 				break;
+			case "--handoff":
+				args.handoff = oneOf(arg, ["anonymous", "named"] as const);
+				break;
 			case "-c":
 			case "--continue":
 				args.continue = true;
@@ -237,6 +241,8 @@ Harness and model
   --models <patterns>          comma-separated harness/model list that Ctrl+P cycles through
   --list-models [search]       list the models every installed harness offers, then exit
   --agent-mode <id>            a mode the harness offers (for example plan, acceptEdits)
+  --handoff anonymous|named    after a harness switch, whether earlier replies are labelled with the agent that wrote them
+                               (default anonymous: the new harness carries on as the same assistant)
   --permissions ask|allow|deny how tool permission requests are answered (default: ask in the terminal UI, allow elsewhere)
 
 Sessions (stored with pi-durable under ~/.pid0/sessions)

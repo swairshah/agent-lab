@@ -25,6 +25,7 @@ export type Settings = {
 	harnesses?: Record<string, HarnessOverride>;
 	sessionDir?: string;
 	permissions?: "ask" | "allow" | "deny";
+	handoff?: "anonymous" | "named";
 	hideThinking?: boolean;
 	tuiMode?: "regular" | "fullscreen";
 	quietStartup?: boolean;
