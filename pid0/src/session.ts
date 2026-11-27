@@ -34,6 +34,8 @@ export type Pid0Event =
 	| { type: "commands_changed" }
 	| { type: "compaction_start"; reason: "manual" | "threshold" }
 	| { type: "compaction_end"; summary?: string; error?: string }
+	| { type: "branch_summary_start" }
+	| { type: "branch_summary_end"; summary?: string; aborted: boolean }
 	| { type: "shell_end"; command: string; output: string; exitCode: number | null; excluded: boolean }
 	| { type: "session_changed"; reason: "new" | "switch" | "fork" | "clone" | "tree" }
 	| { type: "notice"; level: "info" | "warning" | "error"; text: string };
@@ -920,10 +922,52 @@ export class Pid0Session {
 		await this.#swap(store, "switch");
 	}
 
-	async navigate(entryId: number | undefined): Promise<void> {
+	async navigate(entryId: number | undefined, options: { summarize?: boolean; instructions?: string } = {}): Promise<{ aborted: boolean }> {
 		this.#idle("moving in the session tree");
+		let summary: string | undefined;
+		if (options.summarize) {
+			const active = await this.store.items();
+			const kept = await this.store.lineage(entryId);
+			const left = active.filter((i) => !kept.has(i.id) && (i.kind === "user" || i.kind === "assistant" || i.kind === "tool" || i.kind === "shell"));
+			if (left.length > 0) {
+				const point = active.findLast((i) => kept.has(i.id) && (i.kind === "user" || i.kind === "assistant"));
+				const quote = point && (point.kind === "user" || point.kind === "assistant") ? `the message that reads: "${point.data.text.slice(0, 300)}"` : "the very beginning, before the first message";
+				summary = await this.#summarizeBranch(quote, options.instructions);
+				if (summary === undefined) return { aborted: true };
+			}
+		}
+		const harness = this.harness;
 		await this.store.branchAt(entryId);
+		if (summary) await this.store.append("summary", { text: summary, harness, at: Date.now() });
 		await this.#swap(this.store, "tree");
+		return { aborted: false };
+	}
+
+	async #summarizeBranch(point: string, instructions: string | undefined): Promise<string | undefined> {
+		this.#busy = true;
+		this.#compacting = true;
+		this.#aborted = false;
+		this.#emit({ type: "branch_summary_start" });
+		let summary: string | undefined;
+		try {
+			const state = await this.connect();
+			const agent = this.#agents.get(this.harness)!;
+			const preface = await this.#preface(agent, state);
+			const turn: Turn = { agent, text: "", thinking: "", open: true, startedAt: Date.now(), tools: new Map(), written: new Set(), messages: [], capture: true };
+			this.#turn = turn;
+			const ask = `The user is going back to an earlier point of this conversation and leaving the work done after it. Summarize that later work for whoever continues from the earlier point: what was tried, what changed in files, what was learned, and what was left unfinished. Do not use tools; reply with the summary only.\n\nThe point being returned to is ${point}. Summarize only what came after it.${instructions ? `\n\nAlso: ${instructions}` : ""}`;
+			const response = await agent.prompt([...preface, { type: "text", text: ask }]);
+			const text = turn.text.trim();
+			if (response.stopReason !== "cancelled" && text) summary = text;
+		} catch (error) {
+			this.notice("warning", `could not summarize the branch: ${(error as Error).message}`);
+		} finally {
+			this.#turn = undefined;
+			this.#compacting = false;
+			this.#busy = false;
+		}
+		this.#emit({ type: "branch_summary_end", ...(summary ? { summary } : {}), aborted: summary === undefined });
+		return summary;
 	}
 
 	async clone(entryId?: number | "empty"): Promise<string> {

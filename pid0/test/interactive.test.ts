@@ -205,3 +205,36 @@ test("/settings is pi's settings list and saves to pi's settings; templates and 
 	await ui.until(() => /Open model selector/.test(ui.screen()), "the hotkeys");
 	await ui.close();
 });
+
+test("double escape opens the tree; going back to a message can summarize the branch that is left", async () => {
+	const ui = await open();
+	await ui.type("one");
+	await ui.until(() => ui.screen().includes("echo: one"), "the first answer");
+	await ui.type("two");
+	await ui.until(() => ui.screen().includes("echo: two"), "the second answer");
+	ui.terminal.input(ESC);
+	ui.terminal.input(ESC);
+	await ui.until(() => ui.screen().includes("Session Tree"), "the tree after a double escape");
+	ui.terminal.input(ENTER);
+	await ui.until(() => ui.screen().includes("Already at this point"), "the note for the current point");
+
+	ui.terminal.input(ESC);
+	ui.terminal.input(ESC);
+	await ui.until(() => ui.screen().includes("Session Tree"), "the tree again");
+	ui.terminal.input("\x1b[A");
+	ui.terminal.input(ENTER);
+	await ui.until(() => ui.screen().includes("Summarize branch?"), "the summary question");
+	ui.terminal.input(DOWN);
+	ui.terminal.input(ENTER);
+	await ui.until(() => ui.app.editor.getText() === "two" && ui.screen().includes("Navigated to selected point"), "the move");
+	const items = await ui.session.messages();
+	assert.deepEqual(items.filter((i) => i.kind === "user").map((i) => i.kind === "user" && i.data.text), ["one"]);
+	const summary = items.at(-1)!;
+	assert.ok(summary.kind === "summary" && /echo: The user is going back to an earlier point/.test(summary.data.text));
+	assert.ok(!ui.screen().includes("echo: two"));
+
+	ui.app.editor.setText("");
+	await ui.type("three");
+	await ui.until(() => ui.screen().includes("echo: three (prompt 1, context yes"), "an answer on the new branch");
+	await ui.close();
+});

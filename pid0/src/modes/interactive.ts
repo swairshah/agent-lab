@@ -6,6 +6,7 @@ import type { RequestPermissionRequest, RequestPermissionResponse } from "@agent
 import {
 	AssistantMessageComponent,
 	BashExecutionComponent,
+	BranchSummaryMessageComponent,
 	CompactionSummaryMessageComponent,
 	copyToClipboard,
 	createBashToolDefinition,
@@ -730,6 +731,13 @@ export class InteractiveApp {
 			case "switch":
 				this.status(`Switched to ${this.session.label(item.data.harness)}`);
 				break;
+			case "summary": {
+				const summary = new BranchSummaryMessageComponent({ role: "branchSummary", summary: item.data.text, fromId: null, timestamp: item.data.at } as never, getMarkdownTheme(), this.#outputPad);
+				summary.setExpanded(this.#expanded);
+				this.chat.addChild(new Spacer(1));
+				this.chat.addChild(summary);
+				break;
+			}
 			case "reset": {
 				const summary = new CompactionSummaryMessageComponent({ role: "compactionSummary", summary: item.data.summary ?? "", tokensBefore: 0, timestamp: item.data.at } as never, getMarkdownTheme(), this.#outputPad);
 				summary.setExpanded(this.#expanded);
@@ -852,6 +860,12 @@ export class InteractiveApp {
 			case "thinking_level_changed":
 				this.#refreshBorder();
 				break;
+			case "branch_summary_start":
+				this.#setBusy(true, "Summarizing branch...");
+				break;
+			case "branch_summary_end":
+				this.#setBusy(false);
+				break;
 			case "compaction_start":
 				this.#setBusy(true, event.reason === "threshold" ? "Auto-compacting..." : "Compacting context...");
 				break;
@@ -910,6 +924,27 @@ export class InteractiveApp {
 		);
 		this.#selectorLine = run.catch(() => {});
 		return run;
+	}
+
+	input(title: string, initialValue?: string): Promise<string | undefined> {
+		return new Promise((resolve) => {
+			this.showSelector((done) => {
+				const component = new ExtensionInputComponent(
+					title,
+					undefined,
+					(value) => {
+						done();
+						resolve(value);
+					},
+					() => {
+						done();
+						resolve(undefined);
+					},
+					{ tui: this.tui, ...(initialValue ? { initialValue } : {}) },
+				);
+				return { component, dispose: () => component.dispose() };
+			});
+		});
 	}
 
 	async #askPermission(request: RequestPermissionRequest, harness: string): Promise<RequestPermissionResponse> {
@@ -1445,7 +1480,7 @@ export class InteractiveApp {
 		this.tui.requestRender();
 	}
 
-	async #tree(): Promise<void> {
+	async #tree(initial?: string): Promise<void> {
 		const session = this.session;
 		const tree = await session.store.tree();
 		const shown = tree.items.filter((i) => i.kind === "user" || i.kind === "assistant" || i.kind === "reset" || i.kind === "tool");
@@ -1491,22 +1526,54 @@ export class InteractiveApp {
 					done();
 					this.#run(async () => {
 						const picked = shown.find((i) => String(i.id) === entryId)!;
+						let target: number | undefined;
 						if (picked.kind === "user") {
 							const parentId = nodes.get(picked.id)!.entry.parentId as string | null;
-							const before = parentId === null ? undefined : tree.items.findLast((i) => i.id < picked.id && i.id >= Number(parentId) && this.#sameLine(tree, picked, i));
-							await session.navigate(before?.id);
-							this.editor.setText(picked.data.text);
+							target = parentId === null ? undefined : tree.items.findLast((i) => i.id < picked.id && i.id >= Number(parentId) && this.#sameLine(tree, picked, i))?.id;
 						} else {
 							const next = tree.items.find((i) => i.id > picked.id && i.conversation === picked.conversation && (i.kind === "user" || i.kind === "assistant" || i.kind === "tool"));
-							const end = tree.items.findLast((i) => i.conversation === picked.conversation && i.id > picked.id && (!next || i.id < next.id));
-							await session.navigate(end?.id ?? picked.id);
+							target = tree.items.findLast((i) => i.conversation === picked.conversation && i.id > picked.id && (!next || i.id < next.id))?.id ?? picked.id;
 						}
+						if (target !== undefined && target === (await session.store.lastEntry())) {
+							this.status("Already at this point");
+							return;
+						}
+						let summarize = false;
+						let instructions: string | undefined;
+						if (!this.resources.settings.getBranchSummarySkipPrompt()) {
+							for (;;) {
+								const choice = await this.select("Summarize branch?", [{ value: "no", label: "No summary" }, { value: "yes", label: "Summarize" }, { value: "custom", label: "Summarize with custom prompt" }], { search: false });
+								if (choice === undefined) {
+									await this.#tree(entryId);
+									return;
+								}
+								summarize = choice !== "no";
+								if (choice === "custom") {
+									instructions = await this.input("Custom summarization instructions");
+									if (instructions === undefined) continue;
+								}
+								break;
+							}
+						}
+						if (session.isStreaming) {
+							this.#dequeue();
+							const settled = session.waitForSettled();
+							await session.abort();
+							await settled;
+						}
+						const result = await session.navigate(target, { summarize, ...(instructions ? { instructions } : {}) });
+						if (result.aborted) {
+							this.status("Branch summarization cancelled");
+							await this.#tree(entryId);
+							return;
+						}
+						if (picked.kind === "user" && !this.editor.getText().trim()) this.editor.setText(picked.data.text);
 						this.status("Navigated to selected point");
 					});
 				},
 				() => done(),
 				undefined,
-				leaf ? String(leaf.id) : undefined,
+				initial ?? (leaf ? String(leaf.id) : undefined),
 				this.resources.settings.getTreeFilterMode(),
 			);
 			selector.onCopy = (text) => {
