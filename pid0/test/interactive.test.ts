@@ -259,6 +259,7 @@ test("double escape opens the tree; going back to a message can summarize the br
 test("pi extensions load: commands, flags, shortcuts, widgets, status, input events, messages and tools", async () => {
 	const ui = await open({ extensions: [join(here, "fixtures", "sample-extension.ts")], flags: [["loud", true]] });
 	await ui.until(() => ui.screen().includes("sample widget line"), "the extension's widget");
+	assert.equal(ui.terminal.title, "pid0 - somewhere");
 	await ui.type("/hello bob");
 	await ui.until(() => ui.screen().includes("hello bob (loud=true)"), "the extension command");
 	await ui.until(() => ui.screen().includes("turns:0"), "the extension status in the footer");

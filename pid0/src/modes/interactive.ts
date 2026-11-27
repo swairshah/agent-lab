@@ -1076,7 +1076,7 @@ export class InteractiveApp {
 				} else app.#buildHeader();
 				app.tui.requestRender();
 			},
-			setTitle: (title: string) => app.tui.terminal.setTitle(title),
+			setTitle: (title: string) => app.tui.terminal.setTitle(title.replace(/^(?:pi|π)(?=\s*[-–—:|·]|\s*$)/i, "pid0")),
 			custom: <T,>(factory: (tui: TUI, t: typeof theme, keys: AppKeybindings, done: (result: T) => void) => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>, options?: { overlay?: boolean; overlayOptions?: unknown }) =>
 				new Promise<T>((resolve, reject) => {
 					let close: () => void = () => {};
