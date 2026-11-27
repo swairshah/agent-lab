@@ -222,6 +222,7 @@ async function listModels(args: Args, settings: Settings, root: string, cwd: str
 }
 
 async function main(argv: string[]): Promise<number> {
+	process.title = "pid0";
 	const args = parseArgs(argv);
 	if (args.help) {
 		console.log(HELP);

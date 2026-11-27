@@ -412,6 +412,9 @@ export class InteractiveApp {
 	#lastEscape = 0;
 	#bashMode = false;
 	#images: ImageInput[] = [];
+	#programState: { state: "idle" | "working" | "blocked" | "done" | "error"; kind?: "permission" | "question"; message?: string } = { state: "idle" };
+	#resting: "idle" | "done" | "error" = "idle";
+	#blocked = 0;
 	#done: (code: number) => void = () => {};
 	readonly #options: InteractiveOptions;
 	readonly finished: Promise<number>;
@@ -491,6 +494,19 @@ export class InteractiveApp {
 		return new InteractiveApp(session, resources, options);
 	}
 
+	#title(): void {
+		const name = this.session.store.meta.name;
+		const folder = this.session.cwd.split(/[\\/]/).filter(Boolean).pop() ?? this.session.cwd;
+		this.tui.terminal.setTitle(name ? `pid0 - ${name} - ${folder}` : `pid0 - ${folder}`);
+	}
+
+	#program(state: "idle" | "working" | "blocked" | "done" | "error", extra: { kind?: "permission" | "question"; message?: string } = {}): void {
+		const next = { state, ...extra };
+		if (JSON.stringify(next) === JSON.stringify(this.#programState)) return;
+		this.#programState = next;
+		this.tui.terminal.setProgramStatus?.({ ...next, app: "pid0" });
+	}
+
 	#buildHeader(): void {
 		this.#header.clear();
 		if (this.resources.settings.getQuietStartup() === true) return;
@@ -513,6 +529,8 @@ export class InteractiveApp {
 		await this.#replay();
 		this.tui.setFocus(this.editor);
 		this.tui.start();
+		this.#title();
+		this.tui.terminal.setProgramStatus?.({ state: "idle", app: "pid0" });
 		for (const line of this.resources.diagnostics) this.warn(line);
 		await this.#host?.start();
 		void this.session.connect().then(
@@ -527,6 +545,7 @@ export class InteractiveApp {
 
 	stop(code = 0): void {
 		this.#loader?.stop();
+		this.tui.terminal.setProgramStatus?.({ state: "clear", app: "pid0" });
 		this.tui.stop();
 		themes.stopThemeWatcher();
 		if (this.session.persistent && this.session.store.meta.messages > 0) process.stdout.write(`\nResume this session with: pid0 --session ${this.session.store.id.slice(0, 8)}\n`);
@@ -835,9 +854,16 @@ export class InteractiveApp {
 		switch (event.type) {
 			case "agent_start":
 				this.#setBusy(true);
+				this.#resting = "done";
+				this.#program("working");
 				break;
 			case "agent_settled":
 				this.#setBusy(false);
+				if (event.aborted && this.#resting === "done") this.#resting = "idle";
+				this.#program(this.#resting);
+				break;
+			case "session_info_changed":
+				this.#title();
 				break;
 			case "message_start":
 				if (event.message.role === "user") this.#user(event.message.content);
@@ -889,6 +915,7 @@ export class InteractiveApp {
 				this.#renderQueue();
 				break;
 			case "notice":
+				if (event.level === "error") this.#resting = "error";
 				if (event.level === "error") this.error(event.text);
 				else if (event.level === "warning") this.warn(event.text);
 				else this.status(event.text);
@@ -918,6 +945,9 @@ export class InteractiveApp {
 				if (event.summary) void this.#replay();
 				break;
 			case "session_changed":
+				this.#title();
+				this.#resting = "idle";
+				this.#program("idle");
 				void this.#replay();
 				this.#renderQueue();
 				void this.session.connect().then(
@@ -1119,7 +1149,10 @@ export class InteractiveApp {
 
 	async #askPermission(request: RequestPermissionRequest, harness: string): Promise<RequestPermissionResponse> {
 		const title = `${this.session.label(harness)} wants to run: ${request.toolCall.title ?? "a tool"}`;
+		this.#blocked++;
+		this.#program("blocked", { kind: "permission", message: title });
 		const chosen = await this.select(title, request.options.map((o) => ({ value: o.optionId, label: o.name, description: o.kind.replace(/_/g, " ") })), { search: false, hint: `${rawKeyHint("enter", "to answer")}  ${rawKeyHint("esc", "to reject")}` });
+		if (--this.#blocked === 0) this.#program(this.session.isStreaming ? "working" : this.#resting);
 		return chosen ? { outcome: { outcome: "selected", optionId: chosen } } : { outcome: { outcome: "cancelled" } };
 	}
 

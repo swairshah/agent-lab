@@ -26,9 +26,15 @@ class FakeTerminal implements Terminal {
 	clearLine(): void {}
 	clearFromCursor(): void {}
 	clearScreen(): void {}
-	setTitle(): void {}
+	title = "";
+	setTitle(title: string): void {
+		this.title = title;
+	}
 	setProgress(): void {}
-	setProgramStatus(): void {}
+	statuses: { state: string; app?: string; kind?: string }[] = [];
+	setProgramStatus(status: { state: string; app?: string; kind?: string }): void {
+		this.statuses.push(status);
+	}
 	input(data: string): void {
 		this.#onInput(data);
 	}
@@ -124,6 +130,8 @@ test("permission requests are asked in the UI; tools, shell commands and info co
 	assert.match(ui.screen(), /Allow\s+allow once/);
 	ui.terminal.input(ENTER);
 	await ui.until(() => ui.screen().includes("Wrote made.txt (yes)"), "the write");
+	assert.match(ui.terminal.title, /^pid0 - /);
+	assert.deepEqual(ui.terminal.statuses.map((s) => `${s.app}:${s.state}${s.kind ? `:${s.kind}` : ""}`).slice(0, 4), ["pid0:idle", "pid0:working", "pid0:blocked:permission", "pid0:working"]);
 	assert.equal(readFileSync(join(ui.cwd, "made.txt"), "utf8"), "by-ui");
 	assert.match(ui.screen(), /write made\.txt\s+by-ui/);
 
