@@ -303,6 +303,7 @@ async function main(argv: string[]): Promise<number> {
 		throw error;
 	}
 	session.expand = (text) => resources.expand(text);
+	session.baseInstructions = resources.skillsPrompt();
 	const { ExtensionHost } = await import("./extensions.ts");
 	const control: { shutdown: () => void } = { shutdown: () => {} };
 	let code = 0;
@@ -314,7 +315,9 @@ async function main(argv: string[]): Promise<number> {
 	try {
 		if (tools) {
 			await tools.start();
-			session.mcpProviders.push(() => (tools.mcp ? [tools.mcp] : []));
+			const own = () => (tools.mcp ? [tools.mcp] : []);
+			session.mcpProviders.push(own);
+			subagents?.exclude(own);
 		}
 		host = await ExtensionHost.load(session, resources, {
 			mode: mode === "interactive" ? "tui" : mode,

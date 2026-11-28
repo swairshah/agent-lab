@@ -58,7 +58,7 @@ Each harness signs in the way its own CLI does. pid0 points the Claude Code and 
 
 The UI reads pi's own folder (`~/.pi/agent`, or `PID0_PI_DIR`): `settings.json` for the settings `/settings` shows, `keybindings.json`, `themes/`, `prompts/` and `skills/`. So pid0 looks and behaves like your pi, and a setting changed in either shows in both. pid0's own choices (harnesses, default models, permissions, MCP servers, sessions) stay in `~/.pid0`.
 
-pi's commands: `/settings`, `/model`, `/scoped-models`, `/thinking`, `/export`, `/import`, `/share`, `/copy`, `/name`, `/session`, `/changelog`, `/hotkeys`, `/fork`, `/clone`, `/tree`, `/login`, `/logout`, `/new`, `/compact`, `/resume`, `/reload`, `/debug`, `/quit`. pid0 adds `/harness`, `/mode` (the harness's own modes, such as plan), `/permissions` and `/mcp`. Prompt templates are `/name`, skills `/skill:name`, and anything else starting with `/` goes to the harness, whose own commands appear in the `/` menu. `!cmd` runs a shell command; `!!cmd` keeps it from the agent.
+pi's commands: `/settings`, `/model`, `/scoped-models`, `/thinking`, `/export`, `/import`, `/share`, `/copy`, `/name`, `/session`, `/changelog`, `/hotkeys`, `/fork`, `/clone`, `/tree`, `/login`, `/logout`, `/new`, `/compact`, `/resume`, `/reload`, `/debug`, `/quit`. pid0 adds `/harness`, `/mode` (the harness's own modes, such as plan), `/permissions` and `/mcp`. pi's skills are listed to the agent, as pi does, so it can load one when a task matches; you can also call one with `/skill:name`. Prompt templates are `/name`, and anything else starting with `/` goes to the harness, whose own commands appear in the `/` menu. `!cmd` runs a shell command; `!!cmd` keeps it from the agent.
 
 Keys are pi's and follow `keybindings.json`; `/hotkeys` lists them. A message sent while the agent works is queued as a follow-up. Double Esc on an empty editor opens `/tree` or `/fork`, as the setting says.
 
@@ -100,6 +100,7 @@ How they run:
 - Each turn of a subagent is a pi-durable task (`pid0.subagent.turn`), and its status and message queue are a pi-durable document (`pid0.subagent`). The commit that ends a turn starts the next queued message in the same transaction. A turn that was running when pid0 quit is run again when the session is next opened: its message is sent again, into the subagent's resumed native session where the harness can resume one.
 - When a subagent finishes and nobody is waiting on it with `subagent_wait`, its answer is added to the main conversation as a note, which the main agent sees with its next prompt. It does not wake the main agent by itself.
 - Permission requests from a subagent are answered like the main agent's, labelled with the subagent's name.
+- A subagent inherits what pid0 gives the main agent: pi's skills, the standing instructions your extensions add, extension tools, your MCP servers, the permission setting, and `/template` and `/skill:name` expansion in its prompt. Its harness's own tools and configuration are whatever that harness has.
 - Subagents do not get the subagent tools, so they cannot start their own.
 
 ### Sessions

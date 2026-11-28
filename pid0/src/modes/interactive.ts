@@ -1464,6 +1464,7 @@ export class InteractiveApp {
 			}
 			case "reload": {
 				await this.resources.reload();
+				this.session.baseInstructions = this.resources.skillsPrompt();
 				this.#keys.reload();
 				themes.setTheme(this.#options.themeName ?? this.resources.settings.getTheme() ?? "dark", false);
 				this.#applySettings();

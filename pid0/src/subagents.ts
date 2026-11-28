@@ -37,6 +37,7 @@ export class Subagents {
 	readonly #listeners = new Set<(event: SubagentEvent) => void>();
 	readonly #waiters = new Map<string, number>();
 	#closing = false;
+	#own: unknown;
 	#store: SessionStore;
 
 	constructor(parent: Pid0Session) {
@@ -50,6 +51,20 @@ export class Subagents {
 				this.#attach();
 			});
 		});
+	}
+
+	exclude(provider: unknown): void {
+		this.#own = provider;
+	}
+
+	#inherit(child: Pid0Session): void {
+		const parent = this.parent;
+		child.permissions = parent.permissions;
+		child.expand = parent.expand;
+		child.baseInstructions = parent.baseInstructions;
+		child.extraInstructions = parent.extraInstructions;
+		child.mcpProviders.length = 0;
+		child.mcpProviders.push(...parent.mcpProviders.filter((provider) => provider !== this.#own));
 	}
 
 	#attach(): void {
@@ -109,7 +124,9 @@ export class Subagents {
 			...(state.model ? { model: state.model } : {}),
 			...(state.thinking ? { thinking: state.thinking } : {}),
 			permissions: parent.permissions,
+			noMcp: parent.noMcp,
 		});
+		this.#inherit(child);
 		child.onPermission = (request, harness) => (parent.onPermission ? parent.onPermission({ ...request, toolCall: { ...request.toolCall, title: `[subagent ${state.name}] ${request.toolCall.title ?? "a tool"}` } }, harness) : Promise.resolve({ outcome: { outcome: "cancelled" as const } }));
 		this.#children.set(state.id, child);
 		return child;
@@ -118,7 +135,7 @@ export class Subagents {
 	async #runTurn(input: TurnInput, conversation: number, signal: AbortSignal): Promise<TurnResult> {
 		const state = await this.#state(conversation);
 		const child = await this.#child(state, conversation);
-		child.permissions = this.parent.permissions;
+		this.#inherit(child);
 		let error: string | undefined;
 		const stop = child.subscribe((event) => {
 			if (event.type === "notice" && event.level === "error") error = event.text;

@@ -134,3 +134,21 @@ test("a subagent's unfinished turn is picked up again after pid0 restarts", asyn
 	await session.dispose();
 	await subagents.dispose();
 });
+
+test("subagents inherit pid0's skills, standing instructions and tool servers, but not the subagent tools", async () => {
+	const { session, subagents, close } = await setup();
+	const own = () => [{ type: "http" as const, name: "pid0", url: "http://127.0.0.1:1/mcp", headers: [] }];
+	const shared = () => [{ type: "http" as const, name: "pi-extensions", url: "http://127.0.0.1:2/mcp", headers: [] }];
+	session.mcpProviders.push(own, shared);
+	subagents.exclude(own);
+	session.baseInstructions = "Skills: greet";
+	session.extraInstructions = "Answer in rhyme.";
+	session.expand = (text) => text.replace("/shout", "LOUDLY");
+	const started = await subagents.dispatch({ prompt: "/shout hi" });
+	const done = await subagents.wait(started.id);
+	assert.match(done.lastAnswer!, /echo: LOUDLY hi \(prompt 1, context no, mcp 1, rules Skills: greet\n\nAnswer in rhyme\.\)/);
+	await session.promptAndWait("main");
+	const main = (await session.messages()).findLast((i) => i.kind === "assistant")!;
+	assert.ok(main.kind === "assistant" && /mcp 2, rules Skills: greet/.test(main.data.text));
+	await close();
+});

@@ -160,6 +160,7 @@ export class Pid0Session {
 	beforeTurn: ((text: string, images: ImageInput[]) => Promise<void>) | undefined;
 	readonly mcpProviders: (() => McpServer[])[] = [];
 	extraInstructions: string | undefined;
+	baseInstructions: string | undefined;
 	readonly #sentInstructions = new Map<string, string>();
 
 	readonly #options: SessionOptions;
@@ -616,7 +617,7 @@ export class Pid0Session {
 		const unseen = (await this.store.contextItems()).filter((item) => item.id > seen);
 		const told = narrate(unseen, (h) => this.label(h), seen === 0, this.settings.handoff ?? "anonymous");
 		if (told) blocks.push({ type: "text", text: told });
-		const extra = this.extraInstructions;
+		const extra = [this.baseInstructions, this.extraInstructions].filter(Boolean).join("\n\n") || undefined;
 		if (extra && this.#sentInstructions.get(primedKey) !== extra) {
 			this.#sentInstructions.set(primedKey, extra);
 			blocks.push({ type: "text", text: `<instructions>\nThe user's setup adds these standing instructions. Follow them for the rest of this conversation; they replace any earlier version of this block.\n\n${extra}\n</instructions>` });
@@ -906,6 +907,10 @@ export class Pid0Session {
 				: await this.store.append("note", { customType: data.customType, content: data.content ?? "", display: data.display ?? true, ...(data.details !== undefined ? { details: data.details } : {}), at });
 		const item = (await this.store.items()).find((i) => i.id === id);
 		if (item) this.#emit({ type: "entry_appended", item });
+	}
+
+	get noMcp(): boolean {
+		return Boolean(this.#options.noMcp);
 	}
 
 	get contextUsage(): { used: number; size: number } | undefined {
