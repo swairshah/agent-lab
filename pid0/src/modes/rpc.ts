@@ -3,32 +3,28 @@ import { exportSession } from "../export.ts";
 import { harnessStatus } from "../harnesses.ts";
 import type { Pid0Session } from "../session.ts";
 import { listSessions } from "../store.ts";
+import type { Subagents } from "../subagents.ts";
 
-type Command = { id?: string; type: string; [key: string]: any };
+export type Command = { id?: string; type: string; [key: string]: any };
+export type RpcOptions = { subagents?: Subagents };
+export const READ_ONLY_COMMANDS = new Set(["get_state", "get_messages", "get_entries", "get_harnesses", "get_available_models", "get_available_thinking_levels", "get_available_modes", "get_session_stats", "list_sessions", "get_fork_messages", "get_tree", "get_last_assistant_text", "get_commands", "get_subagents", "get_pending"]);
 
-export async function runRpc(session: Pid0Session): Promise<number> {
-	let pending: Promise<void> = Promise.resolve();
-	const send = (record: unknown) => {
-		pending = pending.then(
-			() =>
-				new Promise<void>((resolve) => {
-					if (process.stdout.write(`${JSON.stringify(record)}\n`)) resolve();
-					else process.stdout.once("drain", resolve);
-				}),
-		);
-	};
-	session.subscribe(send);
-
+export function createRpc(session: Pid0Session, send: (record: unknown) => void, options: RpcOptions = {}) {
 	const permissions = new Map<string, (response: RequestPermissionResponse) => void>();
 	let permissionSeq = 0;
-	if (session.permissions === "ask") {
-		session.onPermission = (request, harness) =>
-			new Promise((resolve) => {
-				const id = `perm-${++permissionSeq}`;
-				permissions.set(id, resolve);
-				send({ type: "permission_request", id, harness, toolCall: request.toolCall, options: request.options });
+	const open = new Map<string, unknown>();
+	session.onPermission = (request, harness) =>
+		new Promise((resolve) => {
+			const id = `perm-${++permissionSeq}`;
+			const record = { type: "permission_request", id, harness, toolCall: request.toolCall, options: request.options };
+			open.set(id, record);
+			permissions.set(id, (response) => {
+				open.delete(id);
+				send({ type: "permission_resolved", id });
+				resolve(response);
 			});
-	}
+			send(record);
+		});
 
 	const handlers: Record<string, (c: Command) => Promise<unknown> | unknown> = {
 		prompt: async (c) => {
@@ -98,6 +94,24 @@ export async function runRpc(session: Pid0Session): Promise<number> {
 		get_last_assistant_text: async () => ({ text: (await session.lastAssistantText()) ?? null }),
 		set_session_name: async (c) => session.setName(String(c.name ?? "").trim() || undefined),
 		get_commands: async () => ({ commands: (session.native?.commands ?? []).map((cmd) => ({ name: cmd.name, description: cmd.description, source: session.harness })) }),
+		get_subagents: async () => ({ subagents: options.subagents ? await options.subagents.list() : [] }),
+		subagent: async (c) => {
+			const subagents = options.subagents;
+			if (!subagents) throw new Error("subagents are off");
+			const id = String(c.id_or_name ?? c.name ?? "");
+			if (c.action === "stop") return subagents.stop(id);
+			if (c.action === "pause") return subagents.pause(id);
+			if (c.action === "resume") return subagents.resume(id);
+			if (c.action === "interrupt") return subagents.interrupt(id);
+			if (c.action === "send") return subagents.send(id, String(c.message ?? ""), c.mode === "steer" ? "steer" : "queue");
+			if (c.action === "dispatch") return subagents.dispatch({ prompt: String(c.prompt ?? ""), ...(c.harness ? { harness: String(c.harness) } : {}), ...(c.model ? { model: String(c.model) } : {}), ...(c.name ? { name: String(c.name) } : {}) });
+			return subagents.status(id);
+		},
+		set_permissions: (c) => {
+			if (c.policy !== "ask" && c.policy !== "allow" && c.policy !== "deny") throw new Error("policy is ask, allow or deny");
+			session.permissions = c.policy;
+			return { policy: session.permissions };
+		},
 		permission_response: (c) => {
 			const resolve = permissions.get(String(c.id));
 			if (!resolve) throw new Error(`no pending permission request ${c.id}`);
@@ -106,6 +120,35 @@ export async function runRpc(session: Pid0Session): Promise<number> {
 		},
 	};
 
+	handlers.get_pending = () => ({ permissions: [...open.values()], queued: session.queued });
+
+	const run = async (command: Command): Promise<Record<string, unknown> | undefined> => {
+		const handler = handlers[command.type];
+		const head = { ...(command.id !== undefined ? { id: command.id } : {}), type: "response", command: command.type };
+		if (!handler) return { ...head, success: false, error: `Unknown command: ${command.type}` };
+		try {
+			const data = await handler(command);
+			return { ...head, success: true, ...(data !== undefined && data !== null ? { data } : {}) };
+		} catch (error) {
+			return { ...head, success: false, error: (error as Error).message };
+		}
+	};
+	return { run };
+}
+
+export async function runRpc(session: Pid0Session, options: RpcOptions = {}): Promise<number> {
+	let pending: Promise<void> = Promise.resolve();
+	const send = (record: unknown) => {
+		pending = pending.then(
+			() =>
+				new Promise<void>((resolve) => {
+					if (process.stdout.write(`${JSON.stringify(record)}\n`)) resolve();
+					else process.stdout.once("drain", resolve);
+				}),
+		);
+	};
+	session.subscribe(send);
+	const rpc = createRpc(session, send, options);
 	const handle = async (line: string) => {
 		let command: Command;
 		try {
@@ -114,18 +157,8 @@ export async function runRpc(session: Pid0Session): Promise<number> {
 			send({ type: "response", command: "parse", success: false, error: `Failed to parse command: ${(error as Error).message}` });
 			return;
 		}
-		const handler = handlers[command.type];
-		const head = { ...(command.id !== undefined ? { id: command.id } : {}), type: "response", command: command.type };
-		if (!handler) {
-			send({ ...head, success: false, error: `Unknown command: ${command.type}` });
-			return;
-		}
-		try {
-			const data = await handler(command);
-			if (command.type !== "permission_response") send({ ...head, success: true, ...(data !== undefined && data !== null ? { data } : {}) });
-		} catch (error) {
-			send({ ...head, success: false, error: (error as Error).message });
-		}
+		const response = await rpc.run(command);
+		if (response && !(command.type === "permission_response" && response.success)) send(response);
 	};
 
 	await new Promise<void>((resolve) => {

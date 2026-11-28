@@ -3,7 +3,8 @@ import { VERSION } from "./config.ts";
 export type Mode = "text" | "json" | "rpc";
 
 export type Args = {
-	command?: "harnesses" | "auth" | "mcp";
+	command?: "harnesses" | "auth" | "mcp" | "attach";
+	serve?: { host: string; port: number };
 	commandArgs: string[];
 	print: boolean;
 	mode?: Mode;
@@ -66,7 +67,11 @@ const HARNESS_OWNED: Record<string, { takesValue: boolean; what: string }> = {
 
 export function parseArgs(argv: string[]): Args {
 	const args: Args = { commandArgs: [], print: false, continue: false, resume: false, noSession: false, appendSystemPrompt: [], extensions: [], noExtensions: false, extensionFlags: [], skills: [], noSkills: false, promptTemplates: [], noPromptTemplates: false, themes: [], noThemes: false, verbose: false, noMcp: false, noSubagents: false, help: false, version: false, files: [], messages: [] };
-	if (argv[0] === "harnesses" || argv[0] === "list" || argv[0] === "auth" || argv[0] === "mcp") {
+	if (argv[0] === "serve") {
+		args.serve = { host: "127.0.0.1", port: 7410 };
+		argv = argv.slice(1);
+	}
+	if (argv[0] === "harnesses" || argv[0] === "list" || argv[0] === "auth" || argv[0] === "mcp" || argv[0] === "attach") {
 		args.command = argv[0] === "list" ? "harnesses" : argv[0];
 		args.commandArgs = argv.slice(1);
 		return args;
@@ -208,6 +213,15 @@ export function parseArgs(argv: string[]): Args {
 			case "--verbose":
 				args.verbose = true;
 				break;
+			case "--host":
+				if (!args.serve) throw new UsageError("--host is an option of pid0 serve");
+				args.serve.host = value(arg);
+				break;
+			case "--port":
+				if (!args.serve) throw new UsageError("--port is an option of pid0 serve");
+				args.serve.port = Number(value(arg));
+				if (!Number.isInteger(args.serve.port) || args.serve.port < 0 || args.serve.port > 65535) throw new UsageError("--port must be a port number");
+				break;
 			case "--no-subagents":
 				args.noSubagents = true;
 				break;
@@ -246,6 +260,9 @@ export function parseArgs(argv: string[]): Args {
 export const HELP = `pid0 ${VERSION}: one coding-agent CLI for Claude Code, Codex, Antigravity and pi (over ACP), with pi-durable sessions
 
   pid0 [options] [--] [@files...] [messages...]
+  pid0 serve [--host <addr>] [--port <n>] [options]
+                                         run in the background: a web page and an API on http://127.0.0.1:7410
+  pid0 attach [url]                      talk to a running pid0 serve from a terminal
   pid0 harnesses                         the harnesses pid0 can drive, and whether each is installed
   pid0 auth login <harness> [method]     sign in to a harness
   pid0 auth check <harness>              ready | not_ready (exit 0 | 1)

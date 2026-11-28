@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pid0</title>
+<style>
+:root {
+	color-scheme: light dark;
+	--bg: #f7f6f2; --panel: #ffffff; --fg: #1d1f23; --dim: #6c7079; --line: #dedcd4;
+	--user: #e9eef9; --tool: #f1efe8; --accent: #2f5fd0; --ok: #2c7a4b; --bad: #b3372e; --warn: #9a6a0b;
+}
+@media (prefers-color-scheme: dark) {
+	:root { --bg: #15171a; --panel: #1c1f23; --fg: #e4e3de; --dim: #9197a1; --line: #2d3138; --user: #1e2738; --tool: #20232a; --accent: #7ea2f5; --ok: #6fc48f; --bad: #ee8279; --warn: #dfb256; }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; flex-direction: column; }
+button, select, textarea { font: inherit; color: inherit; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+header h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: .01em; }
+header .where { color: var(--dim); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 160px; min-width: 0; }
+header select, header button { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font-size: 13px; max-width: 220px; }
+header button { cursor: pointer; }
+#dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); flex: none; }
+#dot.working { background: var(--warn); animation: pulse 1.1s ease-in-out infinite; }
+#dot.idle { background: var(--ok); }
+#dot.offline { background: var(--bad); }
+@keyframes pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { #dot.working { animation: none; } }
+main { flex: 1; overflow-y: auto; padding: 18px 16px 8px; }
+#log { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+.msg { border-radius: 10px; padding: 10px 14px; overflow-wrap: anywhere; }
+.msg.user { background: var(--user); white-space: pre-wrap; }
+.msg.assistant { padding-left: 2px; padding-right: 2px; }
+.msg.assistant .who { font-size: 12px; color: var(--dim); margin-bottom: 2px; }
+.text { white-space: pre-wrap; }
+pre.code { background: var(--tool); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 8px 0; white-space: pre; }
+details { border: 1px solid var(--line); border-radius: 8px; background: var(--tool); font-size: 13px; }
+details > summary { cursor: pointer; padding: 7px 12px; list-style: none; display: flex; gap: 8px; align-items: baseline; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary .st { color: var(--dim); font-size: 12px; margin-left: auto; flex: none; }
+details.completed > summary::before { content: "●"; color: var(--ok); }
+details.failed > summary::before, details.cancelled > summary::before { content: "●"; color: var(--bad); }
+details.pending > summary::before, details.in_progress > summary::before { content: "●"; color: var(--warn); }
+details.thinking > summary { color: var(--dim); font-style: italic; }
+details .body { padding: 0 12px 10px; }
+details .body pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; max-height: 420px; overflow: auto; }
+.note { color: var(--dim); font-size: 13px; text-align: center; }
+.note.error { color: var(--bad); text-align: left; }
+.note.warning { color: var(--warn); text-align: left; }
+.card { border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; background: var(--panel); font-size: 13.5px; white-space: pre-wrap; }
+.card h4 { margin: 0 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); font-weight: 600; }
+#side { max-width: 860px; margin: 0 auto; width: 100%; padding: 0 16px; display: flex; flex-direction: column; gap: 8px; }
+.ask { border: 1px solid var(--warn); border-radius: 10px; padding: 10px 12px; background: var(--panel); }
+.ask .q { margin-bottom: 8px; }
+.ask button, .sub button { margin-right: 6px; padding: 4px 11px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); cursor: pointer; font-size: 13px; }
+.ask button.allow { border-color: var(--ok); }
+.ask button.reject { border-color: var(--bad); }
+.sub { display: flex; align-items: center; gap: 8px; font-size: 13px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; background: var(--panel); }
+.sub .name { font-weight: 600; }
+.sub .status { color: var(--dim); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queued { color: var(--dim); font-size: 13px; }
+footer { border-top: 1px solid var(--line); background: var(--panel); padding: 10px 16px 12px; }
+#composer { max-width: 860px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; }
+#input { flex: 1; resize: none; min-height: 44px; max-height: 220px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); outline: none; }
+#input:focus { border-color: var(--accent); }
+#send, #stop { height: 44px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--line); cursor: pointer; }
+#send { background: var(--accent); color: #fff; border-color: transparent; }
+#stop { background: var(--bg); display: none; }
+#stats { max-width: 860px; margin: 6px auto 0; color: var(--dim); font-size: 12px; display: flex; justify-content: space-between; gap: 12px; }
+</style>
+</head>
+<body>
+<header>
+	<span id="dot" class="offline" title="connecting"></span>
+	<h1>pid0</h1>
+	<span class="where" id="where"></span>
+	<select id="harness" aria-label="Harness"></select>
+	<select id="model" aria-label="Model"></select>
+	<select id="thinking" aria-label="Thinking level"></select>
+	<select id="permissions" aria-label="Tool permission requests">
+		<option value="ask">permissions: ask</option>
+		<option value="allow">permissions: allow</option>
+		<option value="deny">permissions: deny</option>
+	</select>
+	<button id="new" type="button">New session</button>
+</header>
+<main id="scroll"><div id="log"></div></main>
+<div id="side"></div>
+<footer>
+	<form id="composer">
+		<textarea id="input" rows="1" placeholder="Message the agent. Enter sends, Shift+Enter adds a line, !cmd runs a shell command." autofocus></textarea>
+		<button id="stop" type="button">Stop</button>
+		<button id="send" type="submit">Send</button>
+	</form>
+	<div id="stats"><span id="left"></span><span id="right"></span></div>
+</footer>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const log = $("log"), scroller = $("scroll"), side = $("side");
+let state = {}, live = null, tools = new Map(), asks = new Map(), subagents = [], queued = [];
+
+function el(tag, cls, text) {
+	const node = document.createElement(tag);
+	if (cls) node.className = cls;
+	if (text !== undefined) node.textContent = text;
+	return node;
+}
+async function rpc(type, extra) {
+	const response = await fetch("/rpc", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({ type }, extra || {})) });
+	const body = await response.json();
+	if (!body.success) throw new Error(body.error || "the command failed");
+	return body.data;
+}
+function atBottom() { return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80; }
+function add(node) {
+	const stick = atBottom();
+	log.appendChild(node);
+	if (stick) scroller.scrollTop = scroller.scrollHeight;
+	return node;
+}
+function note(text, level) { return add(el("div", "note" + (level ? " " + level : ""), text)); }
+function renderText(target, text) {
+	target.textContent = "";
+	const parts = text.split(/```/);
+	parts.forEach((part, i) => {
+		if (i % 2 === 1) target.appendChild(el("pre", "code", part.replace(/^[^\n]*\n/, "")));
+		else if (part) target.appendChild(el("div", "text", part.replace(/^\n+|\n+$/g, "")));
+	});
+}
+function userMessage(text) { add(el("div", "msg user", text)); }
+function assistantBlock(harness, model) {
+	const box = el("div", "msg assistant");
+	box.appendChild(el("div", "who", [harness, model].filter(Boolean).join(" · ")));
+	const thinking = el("details", "thinking");
+	thinking.appendChild(el("summary", "", "Thinking"));
+	const thinkingBody = el("div", "body");
+	thinkingBody.appendChild(el("pre"));
+	thinking.appendChild(thinkingBody);
+	thinking.hidden = true;
+	const body = el("div");
+	box.appendChild(thinking);
+	box.appendChild(body);
+	add(box);
+	return { box, body, thinking, text: "", thought: "" };
+}
+function setAssistant(block, text, thought) {
+	block.text = text; block.thought = thought;
+	const stick = atBottom();
+	renderText(block.body, text);
+	block.thinking.hidden = !thought;
+	block.thinking.querySelector("pre").textContent = thought;
+	if (stick) scroller.scrollTop = scroller.scrollHeight;
+}
+function toolBlock(title, status) {
+	const box = el("details", status);
+	const summary = el("summary");
+	const name = el("span", "", title);
+	const st = el("span", "st", status === "completed" ? "" : status.replace("_", " "));
+	summary.appendChild(name); summary.appendChild(st);
+	const body = el("div", "body");
+	box.appendChild(summary); box.appendChild(body);
+	add(box);
+	return { box, name, st, body };
+}
+function setTool(block, data) {
+	block.box.className = data.status;
+	block.name.textContent = data.title;
+	block.st.textContent = data.status === "completed" ? "" : data.status.replace("_", " ");
+	block.body.textContent = "";
+	if (data.input !== undefined && data.input !== null) block.body.appendChild(el("pre", "", typeof data.input === "string" ? data.input : JSON.stringify(data.input, null, 2)));
+	for (const diff of data.diffs || []) block.body.appendChild(el("pre", "", diff.path + "\n" + diff.newText));
+	if (data.output) block.body.appendChild(el("pre", "", data.output));
+}
+function card(title, text) {
+	const box = el("div", "card");
+	box.appendChild(el("h4", "", title));
+	box.appendChild(el("div", "", text));
+	return add(box);
+}
+function renderItem(item) {
+	const d = item.data;
+	if (item.kind === "user") userMessage(d.text);
+	else if (item.kind === "assistant") setAssistant(assistantBlock(d.harness, d.model), d.text || "", d.thinking || "");
+	else if (item.kind === "tool") setTool(toolBlock(d.title, d.status), d);
+	else if (item.kind === "shell") card("$ " + d.command + (d.excluded ? " (not shared with the agent)" : ""), d.output.replace(/\s+$/, ""));
+	else if (item.kind === "plan") card("Plan", d.entries.map((e) => (e.status === "completed" ? "✓ " : e.status === "in_progress" ? "▸ " : "○ ") + e.content).join("\n"));
+	else if (item.kind === "note" && d.display) card(d.customType, d.content);
+	else if (item.kind === "summary") card("Branch summary", d.text);
+	else if (item.kind === "reset") card("Compacted", d.summary || "");
+	else if (item.kind === "switch") note("switched harness");
+	else if (item.kind === "turn" && d.error) note(d.error, "error");
+	else if (item.kind === "turn" && d.stopReason === "cancelled") note("stopped");
+}
+async function reload() {
+	log.textContent = ""; tools = new Map(); live = null;
+	const data = await rpc("get_messages");
+	for (const item of data.messages) renderItem(item);
+	scroller.scrollTop = scroller.scrollHeight;
+}
+function fill(select, options, current, placeholder) {
+	select.textContent = "";
+	if (options.length === 0) {
+		const none = el("option", "", placeholder);
+		none.value = "";
+		select.appendChild(none);
+		select.disabled = true;
+		return;
+	}
+	select.disabled = false;
+	for (const option of options) {
+		const node = el("option", "", option.label);
+		node.value = option.value;
+		if (option.value === current) node.selected = true;
+		select.appendChild(node);
+	}
+}
+async function refreshChoices() {
+	try {
+		const harnesses = (await rpc("get_harnesses")).harnesses;
+		fill($("harness"), harnesses.map((h) => ({ value: h.id, label: h.label + (h.available ? "" : " (not installed)") })), state.harness, "harness");
+		const models = (await rpc("get_available_models")).models;
+		fill($("model"), models.map((m) => ({ value: m.id, label: m.name })), state.model, "default model");
+		const levels = (await rpc("get_available_thinking_levels")).levels;
+		fill($("thinking"), levels.map((l) => ({ value: l, label: "thinking: " + l })), state.thinkingLevel, "thinking: n/a");
+	} catch (error) { note(error.message, "warning"); }
+}
+function fmt(n) { return n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n); }
+function renderState() {
+	const dot = $("dot");
+	dot.className = state.isStreaming || state.isCompacting ? "working" : "idle";
+	dot.title = state.isStreaming ? "working" : "idle";
+	$("where").textContent = [state.cwd, state.sessionName].filter(Boolean).join(" · ");
+	$("stop").style.display = state.isStreaming || state.isCompacting ? "block" : "none";
+	$("permissions").value = state.permissions || "ask";
+	document.title = (state.isStreaming ? "● " : "") + "pid0" + (state.sessionName ? " - " + state.sessionName : "");
+	const t = state.totals || {};
+	const bits = [];
+	if (t.total) bits.push("↑" + fmt(t.input) + " ↓" + fmt(t.output));
+	if (state.cost) bits.push((state.cost.currency === "USD" ? "$" : "") + state.cost.amount.toFixed(3));
+	if (state.context && state.context.size) bits.push(((state.context.used / state.context.size) * 100).toFixed(1) + "% of " + fmt(state.context.size));
+	$("left").textContent = bits.join("  ");
+	$("right").textContent = [state.harnessLabel, state.modelName, state.thinkingLevel, state.mode && state.mode !== "default" ? state.mode : ""].filter(Boolean).join(" · ");
+	for (const [id, value] of [["harness", state.harness], ["model", state.model], ["thinking", state.thinkingLevel]]) if (value && [...$(id).options].some((o) => o.value === value)) $(id).value = value;
+}
+function renderSide() {
+	const stick = atBottom();
+	requestAnimationFrame(() => { if (stick) scroller.scrollTop = scroller.scrollHeight; });
+	side.textContent = "";
+	for (const ask of asks.values()) {
+		const box = el("div", "ask");
+		box.appendChild(el("div", "q", "Allow " + (ask.toolCall.title || "a tool") + "?"));
+		for (const option of ask.options) {
+			const button = el("button", option.kind.startsWith("allow") ? "allow" : "reject", option.name);
+			button.type = "button";
+			button.onclick = () => rpc("permission_response", { id: ask.id, optionId: option.optionId }).catch((e) => note(e.message, "error"));
+			box.appendChild(button);
+		}
+		side.appendChild(box);
+	}
+	for (const sub of subagents) {
+		if (sub.status === "stopped") continue;
+		const row = el("div", "sub");
+		row.appendChild(el("span", "name", sub.name));
+		row.appendChild(el("span", "status", sub.status + " · " + sub.harness + (sub.model ? " · " + sub.model : "") + (sub.activity.length ? " · " + sub.activity[sub.activity.length - 1] : "")));
+		const act = (label, action) => {
+			const button = el("button", "", label);
+			button.type = "button";
+			button.onclick = () => rpc("subagent", { action, name: sub.id }).then(refreshSubagents, (e) => note(e.message, "error"));
+			row.appendChild(button);
+		};
+		if (sub.status === "working") act("Pause", "pause");
+		if (sub.status === "paused") act("Resume", "resume");
+		act("Stop", "stop");
+		side.appendChild(row);
+	}
+	for (const text of queued) side.appendChild(el("div", "queued", "queued: " + text.split("\n")[0]));
+}
+async function refreshSubagents() {
+	try { subagents = (await rpc("get_subagents")).subagents; } catch { subagents = []; }
+	renderSide();
+}
+function onEvent(event) {
+	switch (event.type) {
+		case "state":
+			state = event.state; renderState(); break;
+		case "message_start":
+			if (event.message.role === "user") userMessage(event.message.content);
+			else live = assistantBlock(event.message.harness, event.message.model);
+			break;
+		case "message_update":
+			if (!live) break;
+			if (event.assistantMessageEvent.type === "text_delta") setAssistant(live, live.text + event.assistantMessageEvent.delta, live.thought);
+			else setAssistant(live, live.text, live.thought + event.assistantMessageEvent.delta);
+			break;
+		case "message_end":
+			if (event.message.role === "assistant") live = null;
+			break;
+		case "tool_execution_start":
+			tools.set(event.toolCallId, toolBlock(event.toolName, "pending"));
+			if (event.args !== null && event.args !== undefined) setTool(tools.get(event.toolCallId), { title: event.toolName, status: "pending", input: event.args });
+			break;
+		case "tool_execution_update":
+		case "tool_execution_end": {
+			const block = tools.get(event.toolCallId);
+			if (!block) break;
+			const result = event.type === "tool_execution_end" ? event.result : event.partialResult;
+			setTool(block, { title: event.toolName, status: event.type === "tool_execution_end" ? (event.isError ? "failed" : "completed") : event.status, input: event.args, output: result.content.map((c) => c.text).join("\n"), diffs: result.diffs });
+			break;
+		}
+		case "plan_update":
+			card("Plan", event.entries.map((e) => (e.status === "completed" ? "✓ " : e.status === "in_progress" ? "▸ " : "○ ") + e.content).join("\n")); break;
+		case "turn_end":
+			if (event.stopReason === "cancelled") note("stopped"); break;
+		case "notice":
+			note(event.text, event.level === "info" ? "" : event.level); break;
+		case "shell_end":
+			card("$ " + event.command, event.output.replace(/\s+$/, "") + (event.exitCode ? "\nexit " + event.exitCode : "")); break;
+		case "entry_appended":
+			renderItem(event.item); break;
+		case "queue_update":
+			queued = event.followUp; renderSide(); break;
+		case "permission_request":
+			asks.set(event.id, event); renderSide(); break;
+		case "permission_resolved":
+			asks.delete(event.id); renderSide(); break;
+		case "subagent":
+			refreshSubagents(); break;
+		case "compaction_end":
+			if (event.summary) reload(); break;
+		case "session_changed":
+			reload(); refreshChoices(); refreshSubagents(); break;
+		case "harness_changed":
+			note("now talking to " + event.harness); refreshChoices(); break;
+		case "model_changed":
+			refreshChoices(); break;
+	}
+}
+function connect() {
+	const source = new EventSource("/events");
+	source.onmessage = (message) => onEvent(JSON.parse(message.data));
+	source.onopen = async () => {
+		try {
+			await reload();
+			const pending = await rpc("get_pending");
+			asks = new Map(pending.permissions.map((p) => [p.id, p]));
+			queued = pending.queued;
+			await refreshSubagents();
+			await refreshChoices();
+			renderState();
+		} catch (error) { note(error.message, "error"); }
+	};
+	source.onerror = () => { $("dot").className = "offline"; $("dot").title = "reconnecting"; };
+}
+async function send() {
+	const input = $("input");
+	const text = input.value.trim();
+	if (!text) return;
+	input.value = ""; input.style.height = "auto";
+	try {
+		if (text.startsWith("!")) {
+			const excluded = text.startsWith("!!");
+			await rpc("bash", { command: text.slice(excluded ? 2 : 1).trim(), excludeFromContext: excluded });
+		} else if (text === "/compact" || text.startsWith("/compact ")) await rpc("compact", { customInstructions: text.slice(8).trim() || undefined });
+		else if (text === "/new") await rpc("new_session");
+		else await rpc("prompt", { message: text, streamingBehavior: "followUp" });
+	} catch (error) { note(error.message, "error"); }
+}
+$("composer").addEventListener("submit", (event) => { event.preventDefault(); send(); });
+$("input").addEventListener("keydown", (event) => {
+	if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); send(); }
+});
+$("input").addEventListener("input", (event) => { event.target.style.height = "auto"; event.target.style.height = Math.min(event.target.scrollHeight, 220) + "px"; });
+$("stop").onclick = () => rpc("abort").catch((e) => note(e.message, "error"));
+$("new").onclick = () => rpc("new_session").catch((e) => note(e.message, "error"));
+$("harness").onchange = (event) => rpc("set_harness", { harness: event.target.value }).catch((e) => note(e.message, "error"));
+$("model").onchange = (event) => rpc("set_model", { modelId: event.target.value }).catch((e) => note(e.message, "error"));
+$("thinking").onchange = (event) => rpc("set_thinking_level", { level: event.target.value }).catch((e) => note(e.message, "error"));
+$("permissions").onchange = (event) => rpc("set_permissions", { policy: event.target.value }).catch((e) => note(e.message, "error"));
+connect();
+</script>
+</body>
+</html>
