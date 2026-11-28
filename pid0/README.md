@@ -103,6 +103,42 @@ How they run:
 - A subagent inherits what pid0 gives the main agent: pi's skills, the standing instructions your extensions add, extension tools, your MCP servers, the permission setting, and `/template` and `/skill:name` expansion in its prompt. Its harness's own tools and configuration are whatever that harness has.
 - Subagents do not get the subagent tools, so they cannot start their own.
 
+### Running it on a server: `pid0 serve`
+
+`pid0 serve` runs pid0 with no terminal, as one long-lived process that owns the session, the harness processes and the subagents. You connect to it from a browser or from a terminal, and it keeps working when you disconnect.
+
+```sh
+pid0 serve                         # http://127.0.0.1:7410, continuing this folder's latest session
+pid0 serve --host 100.x.y.z        # listen on another address, for example the machine's Tailscale address
+pid0 serve --port 8080 --harness codex --permissions allow
+pid0 attach                        # from a terminal on the server (for example over SSH)
+pid0 attach http://server:7410     # or from another machine
+```
+
+- **Web page** at `/`: the conversation as it streams, tool calls, a message box, Stop, pickers for harness, model, thinking level and permission handling, permission requests as buttons, queued messages, and the subagents with pause, resume and stop.
+- **`pid0 attach`**: a line-based client. Type a message to send it; `/help` lists the commands (`/stop`, `/harness`, `/model`, `/thinking`, `/permissions`, `/new`, `/compact`, `/status`, `/subagents`, `!cmd`). `/quit` leaves; the agent keeps running. It is not the full terminal UI.
+- **API**: `POST /rpc` takes one of the `--mode rpc` commands as JSON and returns its response; `GET /events` is a server-sent event stream of the session's events.
+- **Several clients** can be connected at once. All see the same stream and any of them can type or answer a permission request; the first answer wins.
+- **One session per server.** `pid0 serve` continues the folder's latest session unless you pass `--session`, `--session-id`, `--fork` or `--no-session`, so a restart picks the conversation up, and a subagent turn that was running is run again.
+- **There is no sign-in.** Anyone who can reach the address can run commands on the machine as the user pid0 runs as. It listens on `127.0.0.1` unless you pass `--host`; only use an address that a private network such as Tailscale protects, and never a public one.
+
+To keep it running, a systemd user service (`~/.config/systemd/user/pid0.service`), then `systemctl --user enable --now pid0` and `loginctl enable-linger $USER`:
+
+```ini
+[Unit]
+Description=pid0
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/work/myproject
+ExecStart=%h/agent-lab/pid0/bin/pid0.mjs serve --host 100.x.y.z
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
 ### Sessions
 
 `-c`, `-r`, `--session <path|id>`, `--session-id <id>`, `--fork <path|id>`, `--session-dir <dir>`, `--no-session` and `-n <name>` work as in pi. `PID0_DIR` moves `~/.pid0`; `PID0_SESSION_DIR` or `sessionDir` moves the sessions.
@@ -155,6 +191,7 @@ pid0 does not run a model loop of its own; the harness does. That decides what c
 - `src/harnesses.ts`: the four harnesses and how each is started; settings can add more.
 - `src/store.ts`: the pi-durable store: entries, documents, branches (forks), copies, listing, and a lock so two pid0s do not write one session.
 - `src/session.ts`: the engine all modes share. Before a prompt it resumes the harness's native session when the harness can (`session/resume`, else `session/load`), otherwise starts one and puts the part of the conversation that harness has not seen in front of the prompt (`src/narrate.ts`, about 60k characters, newest kept).
+- `src/modes/serve.ts`, `web.html`, `attach.ts`: the server, its web page and the terminal client.
 - `src/modes/`: `interactive.ts` (pi's components on `@earendil-works/pi-tui`), `print.ts` (text and JSON), `rpc.ts`.
 - `src/subagents.ts`, `src/subagent-task.ts`: subagents as pi-durable tasks and documents, and the tools that direct them. `src/mcp-host.ts` is the local MCP server that carries pid0's and extensions' tools to the harness.
 - `src/extensions.ts`: hosts pi's `ExtensionRunner` on pid0's session: actions, events, commands, flags, and the MCP server that carries extension tools to the harness.

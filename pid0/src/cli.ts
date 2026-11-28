@@ -239,6 +239,7 @@ async function main(argv: string[]): Promise<number> {
 	if (args.command === "harnesses") return commandHarnesses(settings);
 	if (args.command === "auth") return commandAuth(args.commandArgs, settings, cwd);
 	if (args.command === "mcp") return commandMcp(args.commandArgs, cwd);
+	if (args.command === "attach") return (await import("./modes/attach.ts")).runAttach(args.commandArgs[0]);
 	if (args.export) {
 		const store = await SessionStore.open(resolve(args.export.input), { readOnly: true });
 		const output = args.export.output ?? `pid0-session-${store.meta.id}.html`;
@@ -249,8 +250,9 @@ async function main(argv: string[]): Promise<number> {
 	if (args.listModels) return listModels(args, settings, root, cwd);
 	if (args.harness) resolveHarness(args.harness, settings);
 
-	const mode = args.mode === "rpc" ? "rpc" : args.mode === "json" ? "json" : args.print || !process.stdin.isTTY || !process.stdout.isTTY ? "print" : "interactive";
-	const piped = mode !== "rpc" && mode !== "interactive" && !process.stdin.isTTY ? await readStdin() : "";
+	if (args.serve && !args.session && !args.sessionId && !args.fork && !args.noSession && !args.resume) args.continue = true;
+	const mode = args.serve ? "serve" : args.mode === "rpc" ? "rpc" : args.mode === "json" ? "json" : args.print || !process.stdin.isTTY || !process.stdout.isTTY ? "print" : "interactive";
+	const piped = mode !== "rpc" && mode !== "serve" && mode !== "interactive" && !process.stdin.isTTY ? await readStdin() : "";
 	const opened = await openStore(args, root, cwd, mode === "interactive");
 	if (!opened) return 0;
 	if (opened.cwd !== cwd) {
@@ -292,7 +294,7 @@ async function main(argv: string[]): Promise<number> {
 			...(args.thinking ? { thinking: args.thinking } : {}),
 			...(args.agentMode ? { mode: args.agentMode } : {}),
 			...(args.models ? { scopedModels: args.models } : {}),
-			permissions: args.permissions ?? (mode === "interactive" ? (settings.permissions ?? "ask") : mode === "rpc" ? (settings.permissions ?? "allow") : "allow"),
+			permissions: args.permissions ?? (mode === "interactive" || mode === "serve" ? (settings.permissions ?? "ask") : mode === "rpc" ? (settings.permissions ?? "allow") : "allow"),
 			...(systemPrompt ? { systemPrompt, systemPromptMode: args.systemPrompt ? ("override" as const) : ("append" as const) } : {}),
 			noMcp: args.noMcp,
 			persistPreferences: mode === "interactive",
@@ -320,16 +322,20 @@ async function main(argv: string[]): Promise<number> {
 			subagents?.exclude(own);
 		}
 		host = await ExtensionHost.load(session, resources, {
-			mode: mode === "interactive" ? "tui" : mode,
+			mode: mode === "interactive" ? "tui" : mode === "serve" ? "rpc" : mode,
 			flags,
 			shutdown: () => control.shutdown(),
 			reload: async () => {
 				await resources.reload();
 			},
 		});
-		if (mode === "rpc") {
+		if (mode === "serve") {
 			await host?.start();
-			code = await (await import("./modes/rpc.ts")).runRpc(session);
+			for (const prompt of prompts) void session.prompt(prompt.text, prompt.images ? { images: prompt.images } : {});
+			code = await (await import("./modes/serve.ts")).runServe(session, { ...args.serve!, ...(subagents ? { subagents } : {}) });
+		} else if (mode === "rpc") {
+			await host?.start();
+			code = await (await import("./modes/rpc.ts")).runRpc(session, subagents ? { subagents } : {});
 		} else if (mode === "interactive") {
 			code = await (await import("./modes/interactive.ts")).runInteractive(session, { prompts, verbose: args.verbose, resources, control, ...(host ? { host } : {}), ...(subagents ? { subagents } : {}), ...(args.useTheme ? { themeName: args.useTheme } : {}), ...(args.tuiMode ? { tuiMode: args.tuiMode } : {}) });
 		} else {
