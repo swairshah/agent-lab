@@ -158,7 +158,7 @@ export class Pid0Session {
 	expand: ((text: string) => string) | undefined;
 	intercept: ((text: string, images: ImageInput[]) => Promise<{ action: "continue" } | { action: "handled" } | { action: "transform"; text: string; images?: ImageInput[] }>) | undefined;
 	beforeTurn: ((text: string, images: ImageInput[]) => Promise<void>) | undefined;
-	extraMcpServers: (() => McpServer[]) | undefined;
+	readonly mcpProviders: (() => McpServer[])[] = [];
 	extraInstructions: string | undefined;
 	readonly #sentInstructions = new Map<string, string>();
 
@@ -357,7 +357,7 @@ export class Pid0Session {
 		const info = natives.agents[harness];
 		const options = {
 			cwd: this.cwd,
-			mcpServers: [...(this.#options.noMcp ? [] : toMcpServers(this.cwd)), ...(this.extraMcpServers?.() ?? [])],
+			mcpServers: [...(this.#options.noMcp ? [] : toMcpServers(this.cwd)), ...this.mcpProviders.flatMap((provide) => provide())],
 			...(this.#options.systemPrompt ? { systemPrompt: this.#options.systemPrompt, systemPromptMode: this.#options.systemPromptMode ?? "append" } : {}),
 		};
 		let state = info?.sessionId ? await agent.resumeSession(info.sessionId, options) : undefined;

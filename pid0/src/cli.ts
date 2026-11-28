@@ -307,7 +307,15 @@ async function main(argv: string[]): Promise<number> {
 	const control: { shutdown: () => void } = { shutdown: () => {} };
 	let code = 0;
 	let host: Awaited<ReturnType<typeof ExtensionHost.load>>;
+	const { Subagents } = await import("./subagents.ts");
+	const { ToolServer } = await import("./mcp-host.ts");
+	const subagents = args.noSubagents ? undefined : new Subagents(session);
+	const tools = subagents ? new ToolServer("pid0", () => subagents.tools()) : undefined;
 	try {
+		if (tools) {
+			await tools.start();
+			session.mcpProviders.push(() => (tools.mcp ? [tools.mcp] : []));
+		}
 		host = await ExtensionHost.load(session, resources, {
 			mode: mode === "interactive" ? "tui" : mode,
 			flags,
@@ -320,14 +328,17 @@ async function main(argv: string[]): Promise<number> {
 			await host?.start();
 			code = await (await import("./modes/rpc.ts")).runRpc(session);
 		} else if (mode === "interactive") {
-			code = await (await import("./modes/interactive.ts")).runInteractive(session, { prompts, verbose: args.verbose, resources, control, ...(host ? { host } : {}), ...(args.useTheme ? { themeName: args.useTheme } : {}), ...(args.tuiMode ? { tuiMode: args.tuiMode } : {}) });
+			code = await (await import("./modes/interactive.ts")).runInteractive(session, { prompts, verbose: args.verbose, resources, control, ...(host ? { host } : {}), ...(subagents ? { subagents } : {}), ...(args.useTheme ? { themeName: args.useTheme } : {}), ...(args.tuiMode ? { tuiMode: args.tuiMode } : {}) });
 		} else {
 			await host?.start();
 			code = await (await import("./modes/print.ts")).runPrint(session, prompts, mode === "json" ? "json" : "text");
 		}
 	} finally {
 		await host?.dispose().catch(() => {});
+		await subagents?.suspend().catch(() => {});
 		await session.dispose();
+		await subagents?.dispose().catch(() => {});
+		tools?.close();
 	}
 	return code;
 }

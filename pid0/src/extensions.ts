@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
-import type { McpServer } from "@agentclientprotocol/sdk/unstable";
 import { ExtensionRunner, ModelRegistry, ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
-import { VERSION } from "./config.ts";
+import { type HostedTool, ToolServer } from "./mcp-host.ts";
 import type { Resources } from "./resources.ts";
 import type { ImageInput, Pid0Event, Pid0Session } from "./session.ts";
 import type { Item } from "./store.ts";
@@ -35,9 +32,7 @@ export class ExtensionHost {
 	readonly #options: HostOptions;
 	#line: Promise<unknown> = Promise.resolve();
 	#turn = 0;
-	#server: Server | undefined;
-	#mcp: McpServer | undefined;
-	#token = randomUUID();
+	readonly #server = new ToolServer("pi-extensions", () => this.#tools());
 	#abort: AbortController | undefined;
 
 	private constructor(session: Pid0Session, resources: Resources, runner: Runner, mirror: SessionManager, options: HostOptions) {
@@ -71,8 +66,8 @@ export class ExtensionHost {
 		session.intercept = (text, images) => host.#input(text, images);
 		session.beforeTurn = (text, images) => host.#beforeTurn(text, images);
 		if (runner.getAllRegisteredTools().length > 0) {
-			await host.#startMcp();
-			session.extraMcpServers = () => (host.#mcp ? [host.#mcp] : []);
+			await host.#server.start();
+			session.mcpProviders.push(() => (host.#server.mcp ? [host.#server.mcp] : []));
 		}
 		return host;
 	}
@@ -314,84 +309,31 @@ export class ExtensionHost {
 		return true;
 	}
 
-	async #startMcp(): Promise<void> {
-		const server = createServer((request, response) => {
-			if (request.headers.authorization !== `Bearer ${this.#token}`) {
-				response.writeHead(401).end();
-				return;
-			}
-			if (request.method !== "POST") {
-				response.writeHead(405, { Allow: "POST" }).end();
-				return;
-			}
-			let body = "";
-			request.on("data", (chunk) => (body += chunk));
-			request.on("end", () => {
-				void (async () => {
-					let payload: unknown;
-					try {
-						payload = JSON.parse(body);
-					} catch {
-						response.writeHead(400).end();
-						return;
-					}
-					const batch = Array.isArray(payload) ? payload : [payload];
-					const replies = (await Promise.all(batch.map((message) => this.#rpc(message as Record<string, unknown>)))).filter((r) => r !== undefined);
-					if (replies.length === 0) {
-						response.writeHead(202).end();
-						return;
-					}
-					response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(Array.isArray(payload) ? replies : replies[0]));
-				})();
-			});
-		});
-		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-		server.unref();
-		this.#server = server;
-		const port = (server.address() as AddressInfo).port;
-		this.#mcp = { type: "http", name: "pi-extensions", url: `http://127.0.0.1:${port}/mcp`, headers: [{ name: "Authorization", value: `Bearer ${this.#token}` }] } as McpServer;
-	}
-
-	async #rpc(message: Record<string, unknown>): Promise<unknown> {
-		const id = message.id;
-		const reply = (result: unknown) => (id === undefined ? undefined : { jsonrpc: "2.0", id, result });
-		const params = (message.params ?? {}) as Record<string, unknown>;
-		switch (message.method) {
-			case "initialize":
-				return reply({ protocolVersion: typeof params.protocolVersion === "string" ? params.protocolVersion : "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "pid0-pi-extensions", version: VERSION } });
-			case "ping":
-				return reply({});
-			case "tools/list":
-				return reply({ tools: this.runner.getAllRegisteredTools().map((t) => ({ name: t.definition.name, description: t.definition.description, inputSchema: t.definition.parameters ?? { type: "object", properties: {} } })) });
-			case "tools/call": {
-				const tool = this.runner.getToolDefinition(String(params.name));
-				if (!tool) return reply({ content: [{ type: "text", text: `unknown tool ${String(params.name)}` }], isError: true });
+	#tools(): HostedTool[] {
+		return this.runner.getAllRegisteredTools().map((t) => ({
+			name: t.definition.name,
+			description: t.definition.description,
+			inputSchema: t.definition.parameters,
+			call: async (args) => {
 				const callId = `ext_${randomUUID()}`;
-				try {
-					const result = await tool.execute(callId, (params.arguments ?? {}) as never, this.#abort?.signal, undefined, this.runner.createToolContext(callId, this.#abort?.signal));
-					const content = (result.content ?? []).map((c: { type: string; text?: string; data?: string; mimeType?: string }) => (c.type === "image" ? { type: "image", data: c.data, mimeType: c.mimeType } : { type: "text", text: c.text ?? "" }));
-					return reply({ content, isError: false });
-				} catch (error) {
-					return reply({ content: [{ type: "text", text: (error as Error).message }], isError: true });
-				}
-			}
-			default:
-				return id === undefined ? undefined : { jsonrpc: "2.0", id, error: { code: -32601, message: `Method not found: ${String(message.method)}` } };
-		}
+				const result = await t.definition.execute(callId, args as never, this.#abort?.signal, undefined, this.runner.createToolContext(callId, this.#abort?.signal));
+				return { content: (result.content ?? []).map((c: { type: string; text?: string; data?: string; mimeType?: string }) => (c.type === "image" ? { type: "image", data: c.data, mimeType: c.mimeType } : { type: "text", text: c.text ?? "" })) };
+			},
+		}));
 	}
 
 	get mcpUrl(): string | undefined {
-		return (this.#mcp as { url?: string } | undefined)?.url;
+		return this.#server.url;
 	}
 
 	get mcpToken(): string {
-		return this.#token;
+		return this.#server.token;
 	}
 
 	async dispose(): Promise<void> {
 		await this.#line;
 		await this.#emit({ type: "session_shutdown", reason: "quit" });
 		this.runner.shutdown();
-		this.#server?.close();
+		this.#server.close();
 	}
 }

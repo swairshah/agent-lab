@@ -79,6 +79,29 @@ pid0 loads pi extensions with pi's own loader and runner: the ones in `~/.pi/age
 
 What cannot work, because the harness runs the model loop and its own tools: blocking or rewriting the harness's tool calls (`tool_call`, `tool_result`), changing its context (`context`), provider hooks and `registerProvider`, custom tool renderers, custom editor components and autocomplete providers. Extensions that only add a provider or auth for pi load but have nothing to do here. After `/reload`, extensions are reloaded only when pid0 restarts.
 
+### Subagents
+
+The agent you are talking to can start other agents and direct them. pid0 gives it these tools (over an MCP server pid0 hosts on localhost, so the harness must take HTTP MCP servers; Claude Code and Codex do):
+
+| Tool | What it does |
+|---|---|
+| `subagent_dispatch` | start a subagent with a prompt; optional `harness` (default: the current one), `model` (default: that harness's default), `thinking`, `name`. Returns at once |
+| `subagent_status` | status, recent activity, queued messages and last answer, for one or all |
+| `subagent_wait` | block until a subagent finishes its current work (or a timeout), and return its answer |
+| `subagent_send` | another message: `queue` (after its current work) or `steer` (stop what it is doing and act on this next) |
+| `subagent_interrupt`, `subagent_pause`, `subagent_resume`, `subagent_stop` | stop the current turn; hold it and its queue; continue; end it for good |
+| `subagent_harnesses` | which harnesses are installed |
+
+Just ask: "have Codex review this in a subagent while you keep going". `/subagents` lists them, and `/subagents stop|pause|resume|interrupt <name>` directs one yourself. `--no-subagents` leaves the tools out.
+
+How they run:
+
+- Each subagent is its own harness process with its own conversation in the same session file. It does not see the main conversation; the dispatching agent writes its prompt.
+- Each turn of a subagent is a pi-durable task (`pid0.subagent.turn`), and its status and message queue are a pi-durable document (`pid0.subagent`). The commit that ends a turn starts the next queued message in the same transaction. A turn that was running when pid0 quit is run again when the session is next opened: its message is sent again, into the subagent's resumed native session where the harness can resume one.
+- When a subagent finishes and nobody is waiting on it with `subagent_wait`, its answer is added to the main conversation as a note, which the main agent sees with its next prompt. It does not wake the main agent by itself.
+- Permission requests from a subagent are answered like the main agent's, labelled with the subagent's name.
+- Subagents do not get the subagent tools, so they cannot start their own.
+
 ### Sessions
 
 `-c`, `-r`, `--session <path|id>`, `--session-id <id>`, `--fork <path|id>`, `--session-dir <dir>`, `--no-session` and `-n <name>` work as in pi. `PID0_DIR` moves `~/.pid0`; `PID0_SESSION_DIR` or `sessionDir` moves the sessions.
@@ -132,6 +155,7 @@ pid0 does not run a model loop of its own; the harness does. That decides what c
 - `src/store.ts`: the pi-durable store: entries, documents, branches (forks), copies, listing, and a lock so two pid0s do not write one session.
 - `src/session.ts`: the engine all modes share. Before a prompt it resumes the harness's native session when the harness can (`session/resume`, else `session/load`), otherwise starts one and puts the part of the conversation that harness has not seen in front of the prompt (`src/narrate.ts`, about 60k characters, newest kept).
 - `src/modes/`: `interactive.ts` (pi's components on `@earendil-works/pi-tui`), `print.ts` (text and JSON), `rpc.ts`.
+- `src/subagents.ts`, `src/subagent-task.ts`: subagents as pi-durable tasks and documents, and the tools that direct them. `src/mcp-host.ts` is the local MCP server that carries pid0's and extensions' tools to the harness.
 - `src/extensions.ts`: hosts pi's `ExtensionRunner` on pid0's session: actions, events, commands, flags, and the MCP server that carries extension tools to the harness.
 - `src/resources.ts`, `src/pi.ts`: pi's settings, prompt templates, skills, themes and keybindings, loaded through `@earendil-works/pi-coding-agent` 1.5.0. Some of pi's modules (theme, keybindings, chat viewport) are not part of its public exports and are imported by file path, which is why the pi packages are pinned to 1.5.0.
 
