@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { DefaultResourceLoader, getAgentDir, type PromptTemplate, SettingsManager, type Skill, stripFrontmatter } from "@earendil-works/pi-coding-agent";
+import { DefaultResourceLoader, formatSkillsForPrompt, getAgentDir, type PromptTemplate, SettingsManager, type Skill, stripFrontmatter } from "@earendil-works/pi-coding-agent";
 
 type LoadedExtensions = ReturnType<DefaultResourceLoader["getExtensions"]>;
 import { prompts, themes } from "./pi.ts";
@@ -70,6 +70,11 @@ export class Resources {
 		themes.setRegisteredThemes(loadedThemes.themes);
 		this.diagnostics = [...loadedPrompts.diagnostics, ...loadedSkills.diagnostics, ...loadedThemes.diagnostics].map((d) => `${d.type}: ${d.message}${d.path ? ` (${d.path})` : ""}`);
 		for (const error of this.extensions.errors) this.diagnostics.push(`extension ${error.path}: ${error.error}`);
+	}
+
+	skillsPrompt(): string | undefined {
+		const text = this.skills.length ? formatSkillsForPrompt(this.skills, "indirect").trim() : "";
+		return text || undefined;
 	}
 
 	get skillCommands(): boolean {

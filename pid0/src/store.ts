@@ -6,6 +6,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { type Conversation, createRegistry, defineDoc, type EntryRecord, Harness, MemoryStorage } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { cwdSlug } from "./config.ts";
+import { SubagentIndex, subagentRuntime } from "./subagent-task.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -165,7 +166,12 @@ export class SessionStore {
 	meta: SessionMeta;
 	readonly readOnly: boolean;
 
-	private constructor(file: string | undefined, harness: Harness, conv: Conversation, meta: SessionMeta, readOnly: boolean) {
+	readonly subagents: ReturnType<typeof subagentRuntime>;
+	readonly isView: boolean;
+
+	private constructor(file: string | undefined, harness: Harness, conv: Conversation, meta: SessionMeta, readOnly: boolean, subagents: ReturnType<typeof subagentRuntime>, isView = false) {
+		this.subagents = subagents;
+		this.isView = isView;
 		this.file = file;
 		this.harness = harness;
 		this.conv = conv;
@@ -204,18 +210,26 @@ export class SessionStore {
 		}
 		try {
 			const storage = file ? await openNodeSqliteStorage(file) : new MemoryStorage();
-			const harness = await Harness.open(storage, { models: createModels(), registry: createRegistry(), readOnly }, context);
+			const subagents = subagentRuntime();
+			const registry = createRegistry();
+			registry.install(subagents.extension);
+			const harness = await Harness.open(storage, { models: createModels(), registry, readOnly }, context);
 			const meta = { ...((await harness.snapshot(Meta, context)) ?? { id: "", cwd: "", created: 0, modified: 0, messages: 0 }) } as SessionMeta;
 			const root = readOnly ? ((await harness.conversation(1 as never, context)) ?? (await harness.root(context))) : await harness.root(context);
 			const active = meta.active === undefined ? undefined : await harness.conversation(meta.active as never, context);
-			return new SessionStore(file, harness, active ?? root, meta, readOnly);
+			return new SessionStore(file, harness, active ?? root, meta, readOnly, subagents);
 		} catch (error) {
 			if (file && !readOnly) rmSync(lockPath(file), { force: true });
 			throw error;
 		}
 	}
 
+	view(conv: Conversation): SessionStore {
+		return new SessionStore(undefined, this.harness, conv, { ...this.meta, messages: 0 }, false, this.subagents, true);
+	}
+
 	async close(): Promise<void> {
+		if (this.isView) return;
 		const empty = this.file !== undefined && !this.readOnly && this.meta.messages === 0 && (await this.lastEntry()) === 0 && (await this.branches()).length <= 1;
 		await this.harness.close(context);
 		if (this.file && !this.readOnly) {
@@ -244,6 +258,7 @@ export class SessionStore {
 		const model = modelMessages(kind, data);
 		const id = await this.conv.commit(async (tx) => {
 			const entry = await tx.appendEntry(this.conv.id, { kind: `pid0.${kind}`, data: data as never, ...(model ? { model: model as never } : {}) });
+			if (this.isView) return entry.id as unknown as number;
 			const doc = await tx.doc(Meta);
 			doc.modified = data.at;
 			if (kind === "user") {
@@ -327,8 +342,10 @@ export class SessionStore {
 			return out;
 		}, context);
 		const out: Branch[] = [];
+		const subagents = new Set(Object.values(((await this.harness.snapshot(SubagentIndex, context))?.agents ?? {}) as Record<string, number>));
 		for (const record of records) {
 			const id = record.id as unknown as number;
+			if (subagents.has(id)) continue;
 			const conv = await this.harness.conversation(record.id, context);
 			const tip = conv ? ((await conv.entries({ order: "descending" }, 1, undefined, context)).items[0]?.id as unknown as number | undefined) : undefined;
 			out.push({

@@ -259,13 +259,15 @@ test("double escape opens the tree; going back to a message can summarize the br
 test("pi extensions load: commands, flags, shortcuts, widgets, status, input events, messages and tools", async () => {
 	const ui = await open({ extensions: [join(here, "fixtures", "sample-extension.ts")], flags: [["loud", true]] });
 	await ui.until(() => ui.screen().includes("sample widget line"), "the extension's widget");
+	assert.equal(ui.terminal.title, "pid0 - somewhere");
 	await ui.type("/hello bob");
 	await ui.until(() => ui.screen().includes("hello bob (loud=true)"), "the extension command");
 	await ui.until(() => ui.screen().includes("turns:0"), "the extension status in the footer");
 
 	await ui.type("ping");
 	await ui.until(() => ui.screen().includes("echo: pong please"), "the input event to transform the prompt");
-	assert.match(ui.screen(), /mcp 1\)/);
+	assert.match(ui.screen().replace(/\s+/g, " "), /mcp 1, rules Always answer in rhyme\.\)/);
+	assert.ok(!ui.screen().includes("failed in before_agent_start"));
 	await ui.until(() => ui.screen().includes("turns:1"), "the agent_end handler");
 	await ui.type("swallow");
 	await new Promise((r) => setTimeout(r, 200));
@@ -273,6 +275,7 @@ test("pi extensions load: commands, flags, shortcuts, widgets, status, input eve
 
 	await ui.type("/ask something");
 	await ui.until(() => ui.screen().includes("echo: from extension: something"), "a prompt sent by the extension");
+	assert.doesNotMatch(ui.screen().replace(/\s+/g, " ").split("echo: from extension").at(-1)!.split(")")[0]!, /rules/);
 	await ui.type("/note milk");
 	await ui.until(() => ui.screen().includes("remember milk"), "the extension's message");
 	ui.terminal.input("\x19");

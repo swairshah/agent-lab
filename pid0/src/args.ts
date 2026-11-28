@@ -40,6 +40,7 @@ export type Args = {
 	tuiMode?: "regular" | "fullscreen";
 	verbose: boolean;
 	noMcp: boolean;
+	noSubagents: boolean;
 	help: boolean;
 	version: boolean;
 	files: string[];
@@ -64,7 +65,7 @@ const HARNESS_OWNED: Record<string, { takesValue: boolean; what: string }> = {
 };
 
 export function parseArgs(argv: string[]): Args {
-	const args: Args = { commandArgs: [], print: false, continue: false, resume: false, noSession: false, appendSystemPrompt: [], extensions: [], noExtensions: false, extensionFlags: [], skills: [], noSkills: false, promptTemplates: [], noPromptTemplates: false, themes: [], noThemes: false, verbose: false, noMcp: false, help: false, version: false, files: [], messages: [] };
+	const args: Args = { commandArgs: [], print: false, continue: false, resume: false, noSession: false, appendSystemPrompt: [], extensions: [], noExtensions: false, extensionFlags: [], skills: [], noSkills: false, promptTemplates: [], noPromptTemplates: false, themes: [], noThemes: false, verbose: false, noMcp: false, noSubagents: false, help: false, version: false, files: [], messages: [] };
 	if (argv[0] === "harnesses" || argv[0] === "list" || argv[0] === "auth" || argv[0] === "mcp") {
 		args.command = argv[0] === "list" ? "harnesses" : argv[0];
 		args.commandArgs = argv.slice(1);
@@ -207,6 +208,9 @@ export function parseArgs(argv: string[]): Args {
 			case "--verbose":
 				args.verbose = true;
 				break;
+			case "--no-subagents":
+				args.noSubagents = true;
+				break;
 			case "--no-mcp":
 				args.noMcp = true;
 				break;
@@ -282,6 +286,7 @@ Prompts and process
   --prompt-template <path>     load a prompt template file or directory (repeatable); -np disables discovery
   --theme <path>               load a theme file or directory (repeatable); --no-themes disables discovery
   --use-theme <name>           the theme for this run
+  --no-subagents               do not give the agent the tools to launch and direct subagents
   --no-mcp                     do not hand pid0's MCP servers to the harness
   --tui-mode regular|fullscreen
   --verbose                    show the harness's own log lines

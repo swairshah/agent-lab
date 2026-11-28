@@ -60,6 +60,7 @@ import {
 import { loadMcpServers, updateSettings, VERSION } from "../config.ts";
 import { exportSession, importSession } from "../export.ts";
 import type { ExtensionHost } from "../extensions.ts";
+import type { Subagents } from "../subagents.ts";
 import { harnessStatus } from "../harnesses.ts";
 import { type AppKeybindings, clipboardImage, keybindingsModule, ScopedModelsSelectorComponent, theme, themes, ui, viewport } from "../pi.ts";
 import { Resources } from "../resources.ts";
@@ -67,7 +68,7 @@ import type { ImageInput, Pid0Event, Pid0Session } from "../session.ts";
 import { type Item, listSessions, type SessionInfo, SessionStore, type ToolData } from "../store.ts";
 import type { Prompt } from "./print.ts";
 
-export type InteractiveOptions = { prompts: Prompt[]; verbose: boolean; tuiMode?: "regular" | "fullscreen"; terminal?: Terminal; resources?: Resources; themeName?: string; host?: ExtensionHost; control?: { shutdown: () => void } };
+export type InteractiveOptions = { prompts: Prompt[]; verbose: boolean; tuiMode?: "regular" | "fullscreen"; terminal?: Terminal; resources?: Resources; themeName?: string; host?: ExtensionHost; subagents?: Subagents; control?: { shutdown: () => void } };
 
 const COMMANDS: SlashCommand[] = [
 	{ name: "settings", description: "Open settings menu" },
@@ -91,6 +92,7 @@ const COMMANDS: SlashCommand[] = [
 	{ name: "tree", description: "Navigate session tree (switch branches)" },
 	{ name: "login", description: "Sign in to the harness", argumentHint: "[method]" },
 	{ name: "logout", description: "Sign out of the harness" },
+	{ name: "subagents", description: "List subagents, or direct one: /subagents [stop|pause|resume|interrupt <name>]", argumentHint: "[action name]" },
 	{ name: "mcp", description: "List the MCP servers handed to the harness" },
 	{ name: "new", description: "Start a new session" },
 	{ name: "compact", description: "Manually compact the session context", argumentHint: "[instructions]" },
@@ -476,6 +478,16 @@ export class InteractiveApp {
 			};
 		}
 		if (options.control) options.control.shutdown = () => this.stop();
+		options.subagents?.subscribe((event) => {
+			void options.subagents!.list().then((all) => {
+				const working = all.filter((a) => a.status === "working").length;
+				const live = all.filter((a) => a.status !== "stopped").length;
+				if (live === 0) this.#footer.statuses.delete("subagents");
+				else this.#footer.statuses.set("subagents", theme.fg("dim", `subagents: ${working} working, ${live - working} waiting`));
+				this.tui.requestRender();
+			});
+			if (event.note === "started" || event.status === "failed" || event.note === "stopped") this.status(`Subagent ${event.name}: ${event.note === "started" ? "started" : event.status}`);
+		});
 		this.#refreshCommands();
 		this.#refreshBorder();
 		themes.onThemeChange(() => {
@@ -494,10 +506,15 @@ export class InteractiveApp {
 		return new InteractiveApp(session, resources, options);
 	}
 
+	#setTitle(title: string): void {
+		const named = title.replace(/^(?:pi|π)(?=\s*[-–—:|·]|\s*$)/i, "pid0");
+		this.tui.terminal.setTitle(named.replace(/^pid0\s*[-–—:|·]\s*pid0$/i, "pid0"));
+	}
+
 	#title(): void {
 		const name = this.session.store.meta.name;
 		const folder = this.session.cwd.split(/[\\/]/).filter(Boolean).pop() ?? this.session.cwd;
-		this.tui.terminal.setTitle(name ? `pid0 - ${name} - ${folder}` : `pid0 - ${folder}`);
+		this.#setTitle(name ? `pid0 - ${name} - ${folder}` : `pid0 - ${folder}`);
 	}
 
 	#program(state: "idle" | "working" | "blocked" | "done" | "error", extra: { kind?: "permission" | "question"; message?: string } = {}): void {
@@ -1076,7 +1093,7 @@ export class InteractiveApp {
 				} else app.#buildHeader();
 				app.tui.requestRender();
 			},
-			setTitle: (title: string) => app.tui.terminal.setTitle(title),
+			setTitle: (title: string) => app.#setTitle(title),
 			custom: <T,>(factory: (tui: TUI, t: typeof theme, keys: AppKeybindings, done: (result: T) => void) => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>, options?: { overlay?: boolean; overlayOptions?: unknown }) =>
 				new Promise<T>((resolve, reject) => {
 					let close: () => void = () => {};
@@ -1424,6 +1441,22 @@ export class InteractiveApp {
 				this.status(`Signed out of ${session.label()}`);
 				return;
 			}
+			case "subagents": {
+				const subagents = this.#options.subagents;
+				if (!subagents) throw new Error("subagents are off for this run (--no-subagents)");
+				const [action, name] = arg.split(/\s+/);
+				if (action && name) {
+					if (action === "stop") await subagents.stop(name);
+					else if (action === "pause") await subagents.pause(name);
+					else if (action === "resume") await subagents.resume(name);
+					else if (action === "interrupt") await subagents.interrupt(name);
+					else throw new Error("usage: /subagents [stop|pause|resume|interrupt <name>]");
+				}
+				const all = await subagents.list();
+				this.chat.addChild(new Spacer(1));
+				this.chat.addChild(new Text(all.length ? all.map((info) => subagents.report(info)).join("\n\n") : theme.fg("dim", "No subagents. The agent starts them with its subagent tools; ask it to delegate a task."), 1, 0));
+				return;
+			}
 			case "mcp": {
 				const servers = Object.entries(loadMcpServers(session.cwd));
 				this.markdown(servers.length ? `**MCP servers handed to every harness**\n\n${servers.map(([n, s]) => `- \`${n}\`: ${"command" in s ? [s.command, ...(s.args ?? [])].join(" ") : s.url}`).join("\n")}\n\nChange them with \`pid0 mcp add|remove\`.` : "No MCP servers. Add one from a shell: `pid0 mcp add <name> -- <command> [args...]`.");
@@ -1431,6 +1464,7 @@ export class InteractiveApp {
 			}
 			case "reload": {
 				await this.resources.reload();
+				this.session.baseInstructions = this.resources.skillsPrompt();
 				this.#keys.reload();
 				themes.setTheme(this.#options.themeName ?? this.resources.settings.getTheme() ?? "dark", false);
 				this.#applySettings();

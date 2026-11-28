@@ -158,7 +158,10 @@ export class Pid0Session {
 	expand: ((text: string) => string) | undefined;
 	intercept: ((text: string, images: ImageInput[]) => Promise<{ action: "continue" } | { action: "handled" } | { action: "transform"; text: string; images?: ImageInput[] }>) | undefined;
 	beforeTurn: ((text: string, images: ImageInput[]) => Promise<void>) | undefined;
-	extraMcpServers: (() => McpServer[]) | undefined;
+	readonly mcpProviders: (() => McpServer[])[] = [];
+	extraInstructions: string | undefined;
+	baseInstructions: string | undefined;
+	readonly #sentInstructions = new Map<string, string>();
 
 	readonly #options: SessionOptions;
 	readonly #agents = new Map<string, AcpAgent>();
@@ -355,7 +358,7 @@ export class Pid0Session {
 		const info = natives.agents[harness];
 		const options = {
 			cwd: this.cwd,
-			mcpServers: [...(this.#options.noMcp ? [] : toMcpServers(this.cwd)), ...(this.extraMcpServers?.() ?? [])],
+			mcpServers: [...(this.#options.noMcp ? [] : toMcpServers(this.cwd)), ...this.mcpProviders.flatMap((provide) => provide())],
 			...(this.#options.systemPrompt ? { systemPrompt: this.#options.systemPrompt, systemPromptMode: this.#options.systemPromptMode ?? "append" } : {}),
 		};
 		let state = info?.sessionId ? await agent.resumeSession(info.sessionId, options) : undefined;
@@ -614,6 +617,11 @@ export class Pid0Session {
 		const unseen = (await this.store.contextItems()).filter((item) => item.id > seen);
 		const told = narrate(unseen, (h) => this.label(h), seen === 0, this.settings.handoff ?? "anonymous");
 		if (told) blocks.push({ type: "text", text: told });
+		const extra = [this.baseInstructions, this.extraInstructions].filter(Boolean).join("\n\n") || undefined;
+		if (extra && this.#sentInstructions.get(primedKey) !== extra) {
+			this.#sentInstructions.set(primedKey, extra);
+			blocks.push({ type: "text", text: `<instructions>\nThe user's setup adds these standing instructions. Follow them for the rest of this conversation; they replace any earlier version of this block.\n\n${extra}\n</instructions>` });
+		}
 		if (!this.#primed.has(primedKey)) {
 			this.#primed.add(primedKey);
 			if (this.#options.systemPrompt && !agent.supportsSystemPrompt) blocks.push({ type: "text", text: `<instructions>\n${this.#options.systemPrompt}\n</instructions>` });
@@ -899,6 +907,10 @@ export class Pid0Session {
 				: await this.store.append("note", { customType: data.customType, content: data.content ?? "", display: data.display ?? true, ...(data.details !== undefined ? { details: data.details } : {}), at });
 		const item = (await this.store.items()).find((i) => i.id === id);
 		if (item) this.#emit({ type: "entry_appended", item });
+	}
+
+	get noMcp(): boolean {
+		return Boolean(this.#options.noMcp);
 	}
 
 	get contextUsage(): { used: number; size: number } | undefined {

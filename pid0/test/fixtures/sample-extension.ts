@@ -35,10 +35,14 @@ export default function (pi: ExtensionAPI) {
 	});
 	pi.on("session_start", async (_event, ctx) => {
 		ctx.ui.setWidget("sample", ["sample widget line"]);
+		ctx.ui.setTitle("Pi - somewhere");
 	});
 	pi.on("agent_end", async (_event, ctx) => {
 		turns++;
 		ctx.ui.setStatus("sample", `turns:${turns}`);
+	});
+	pi.on("before_agent_start", async (event) => {
+		return { systemPrompt: `${event.systemPrompt.replace(/x/g, "x")}\n\nAlways answer in rhyme.` };
 	});
 	pi.on("input", async (event) => {
 		if (event.text === "ping") return { action: "transform", text: "pong please" };

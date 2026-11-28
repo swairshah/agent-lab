@@ -118,8 +118,9 @@ test("subcommands: harnesses, mcp, list-models, auth check", async () => {
 
 	assert.equal((await run(["mcp", "add", "demo", "--env", "A=1", "--", "echo", "hi"])).code, 0);
 	assert.match((await run(["mcp", "list"])).out, /demo\s+echo hi/);
-	assert.match((await run(["--no-session", "-p", "x"])).out, /mcp 1\)/);
-	assert.match((await run(["--no-session", "--no-mcp", "-p", "x"])).out, /mcp 0\)/);
+	assert.match((await run(["--no-session", "-p", "x"])).out, /mcp 2\)/);
+	assert.match((await run(["--no-session", "--no-mcp", "-p", "x"])).out, /mcp 1\)/);
+	assert.match((await run(["--no-session", "--no-mcp", "--no-subagents", "-p", "x"])).out, /mcp 0\)/);
 	await run(["mcp", "remove", "demo"]);
 	assert.match((await run(["mcp", "list"])).out, /no MCP servers/);
 
@@ -150,7 +151,7 @@ test("extensions work outside the terminal UI: -e, an extension flag, an extensi
 	const extension = join(here, "fixtures", "sample-extension.ts");
 	const transformed = await run(["--no-session", "-e", extension, "--loud", "-p", "ping"]);
 	assert.equal(transformed.code, 0, transformed.err);
-	assert.match(transformed.out, /echo: pong please .*mcp 1\)/);
+	assert.match(transformed.out, /echo: pong please .*mcp 2, rules Always answer in rhyme\.\)/);
 	const asked = await run(["--no-session", "-e", extension, "-p", "/ask over cli"]);
 	assert.match(asked.out, /echo: from extension: over cli/);
 	const unknown = await run(["--no-session", "-e", extension, "--bogus", "-p", "x"]);

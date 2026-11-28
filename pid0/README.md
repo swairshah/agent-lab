@@ -58,7 +58,7 @@ Each harness signs in the way its own CLI does. pid0 points the Claude Code and 
 
 The UI reads pi's own folder (`~/.pi/agent`, or `PID0_PI_DIR`): `settings.json` for the settings `/settings` shows, `keybindings.json`, `themes/`, `prompts/` and `skills/`. So pid0 looks and behaves like your pi, and a setting changed in either shows in both. pid0's own choices (harnesses, default models, permissions, MCP servers, sessions) stay in `~/.pid0`.
 
-pi's commands: `/settings`, `/model`, `/scoped-models`, `/thinking`, `/export`, `/import`, `/share`, `/copy`, `/name`, `/session`, `/changelog`, `/hotkeys`, `/fork`, `/clone`, `/tree`, `/login`, `/logout`, `/new`, `/compact`, `/resume`, `/reload`, `/debug`, `/quit`. pid0 adds `/harness`, `/mode` (the harness's own modes, such as plan), `/permissions` and `/mcp`. Prompt templates are `/name`, skills `/skill:name`, and anything else starting with `/` goes to the harness, whose own commands appear in the `/` menu. `!cmd` runs a shell command; `!!cmd` keeps it from the agent.
+pi's commands: `/settings`, `/model`, `/scoped-models`, `/thinking`, `/export`, `/import`, `/share`, `/copy`, `/name`, `/session`, `/changelog`, `/hotkeys`, `/fork`, `/clone`, `/tree`, `/login`, `/logout`, `/new`, `/compact`, `/resume`, `/reload`, `/debug`, `/quit`. pid0 adds `/harness`, `/mode` (the harness's own modes, such as plan), `/permissions` and `/mcp`. pi's skills are listed to the agent, as pi does, so it can load one when a task matches; you can also call one with `/skill:name`. Prompt templates are `/name`, and anything else starting with `/` goes to the harness, whose own commands appear in the `/` menu. `!cmd` runs a shell command; `!!cmd` keeps it from the agent.
 
 Keys are pi's and follow `keybindings.json`; `/hotkeys` lists them. A message sent while the agent works is queued as a follow-up. Double Esc on an empty editor opens `/tree` or `/fork`, as the setting says.
 
@@ -73,11 +73,35 @@ pid0 loads pi extensions with pi's own loader and runner: the ones in `~/.pi/age
 | Commands (`pi.registerCommand`) | in the `/` menu; also from `-p "/name args"` and RPC |
 | Shortcuts, flags (`--name` on the command line) | as in pi |
 | UI: `select`, `confirm`, `input`, `editor`, `notify`, `setStatus`, `setWidget`, `setHeader`, `setFooter`, `setTitle`, `custom` (inline or overlay), editor text, theme | pid0's terminal UI implements pi's extension UI context |
-| Events: `session_start`, `input` (transform or handle), `before_agent_start` (injected messages), `agent_start`/`end`, `turn_start`, `message_start`/`end`, `tool_execution_start`/`end`, `model_select`, `session_compact`, `session_shutdown` | emitted from the harness's ACP stream |
+| Events: `session_start`, `input` (transform or handle), `before_agent_start` (injected messages; text an extension adds to the system prompt is given to the harness as standing instructions, since the harness's own system prompt cannot be read or replaced), `agent_start`/`end`, `turn_start`, `message_start`/`end`, `tool_execution_start`/`end`, `model_select`, `session_compact`, `session_shutdown` | emitted from the harness's ACP stream |
 | `sendUserMessage`, `sendMessage`, `appendEntry`, session name, `setModel`, thinking level, `compact`, `newSession`, `fork`, `navigateTree`, `switchSession` | mapped onto pid0's session; messages and entries are stored in pi-durable |
 | Tools (`pi.registerTool`) | pid0 hosts them as an MCP server on localhost and hands it to the harness, which calls them as `pi-extensions` tools. Needs a harness that takes HTTP MCP servers (Claude Code and Codex do; pi-acp ignores MCP servers) |
 
-What cannot work, because the harness runs the model loop and its own tools: blocking or rewriting the harness's tool calls (`tool_call`, `tool_result`), changing its context or system prompt (`context`, the `systemPrompt` of `before_agent_start`), provider hooks and `registerProvider`, custom tool renderers, custom editor components and autocomplete providers. Extensions that only add a provider or auth for pi load but have nothing to do here. After `/reload`, extensions are reloaded only when pid0 restarts.
+What cannot work, because the harness runs the model loop and its own tools: blocking or rewriting the harness's tool calls (`tool_call`, `tool_result`), changing its context (`context`), provider hooks and `registerProvider`, custom tool renderers, custom editor components and autocomplete providers. Extensions that only add a provider or auth for pi load but have nothing to do here. After `/reload`, extensions are reloaded only when pid0 restarts.
+
+### Subagents
+
+The agent you are talking to can start other agents and direct them. pid0 gives it these tools (over an MCP server pid0 hosts on localhost, so the harness must take HTTP MCP servers; Claude Code and Codex do):
+
+| Tool | What it does |
+|---|---|
+| `subagent_dispatch` | start a subagent with a prompt; optional `harness` (default: the current one), `model` (default: that harness's default), `thinking`, `name`. Returns at once |
+| `subagent_status` | status, recent activity, queued messages and last answer, for one or all |
+| `subagent_wait` | block until a subagent finishes its current work (or a timeout), and return its answer |
+| `subagent_send` | another message: `queue` (after its current work) or `steer` (stop what it is doing and act on this next) |
+| `subagent_interrupt`, `subagent_pause`, `subagent_resume`, `subagent_stop` | stop the current turn; hold it and its queue; continue; end it for good |
+| `subagent_harnesses` | which harnesses are installed |
+
+Just ask: "have Codex review this in a subagent while you keep going". `/subagents` lists them, and `/subagents stop|pause|resume|interrupt <name>` directs one yourself. `--no-subagents` leaves the tools out.
+
+How they run:
+
+- Each subagent is its own harness process with its own conversation in the same session file. It does not see the main conversation; the dispatching agent writes its prompt.
+- Each turn of a subagent is a pi-durable task (`pid0.subagent.turn`), and its status and message queue are a pi-durable document (`pid0.subagent`). The commit that ends a turn starts the next queued message in the same transaction. A turn that was running when pid0 quit is run again when the session is next opened: its message is sent again, into the subagent's resumed native session where the harness can resume one.
+- When a subagent finishes and nobody is waiting on it with `subagent_wait`, its answer is added to the main conversation as a note, which the main agent sees with its next prompt. It does not wake the main agent by itself.
+- Permission requests from a subagent are answered like the main agent's, labelled with the subagent's name.
+- A subagent inherits what pid0 gives the main agent: pi's skills, the standing instructions your extensions add, extension tools, your MCP servers, the permission setting, and `/template` and `/skill:name` expansion in its prompt. Its harness's own tools and configuration are whatever that harness has.
+- Subagents do not get the subagent tools, so they cannot start their own.
 
 ### Sessions
 
@@ -132,6 +156,7 @@ pid0 does not run a model loop of its own; the harness does. That decides what c
 - `src/store.ts`: the pi-durable store: entries, documents, branches (forks), copies, listing, and a lock so two pid0s do not write one session.
 - `src/session.ts`: the engine all modes share. Before a prompt it resumes the harness's native session when the harness can (`session/resume`, else `session/load`), otherwise starts one and puts the part of the conversation that harness has not seen in front of the prompt (`src/narrate.ts`, about 60k characters, newest kept).
 - `src/modes/`: `interactive.ts` (pi's components on `@earendil-works/pi-tui`), `print.ts` (text and JSON), `rpc.ts`.
+- `src/subagents.ts`, `src/subagent-task.ts`: subagents as pi-durable tasks and documents, and the tools that direct them. `src/mcp-host.ts` is the local MCP server that carries pid0's and extensions' tools to the harness.
 - `src/extensions.ts`: hosts pi's `ExtensionRunner` on pid0's session: actions, events, commands, flags, and the MCP server that carries extension tools to the harness.
 - `src/resources.ts`, `src/pi.ts`: pi's settings, prompt templates, skills, themes and keybindings, loaded through `@earendil-works/pi-coding-agent` 1.5.0. Some of pi's modules (theme, keybindings, chat viewport) are not part of its public exports and are imported by file path, which is why the pi packages are pinned to 1.5.0.
 
